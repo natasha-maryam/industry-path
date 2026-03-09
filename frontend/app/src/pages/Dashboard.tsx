@@ -23,6 +23,7 @@ import {
   deleteProject,
   deployProject,
   generateLogic,
+  getLogic,
   getGraph,
   getMonitoring,
   getReplay,
@@ -92,6 +93,7 @@ export default function Dashboard() {
   const [selectedUploadFiles, setSelectedUploadFiles] = useState<string[]>([]);
   const [isParsing, setIsParsing] = useState<boolean>(false);
   const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [showCreateProjectModal, setShowCreateProjectModal] = useState<boolean>(false);
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
   const [projectForm, setProjectForm] = useState<{ name: string; description: string; status: "draft" | "active" | "archived" }>({
@@ -143,6 +145,8 @@ export default function Dashboard() {
       setGraphNodes([]);
       setGraphEdges([]);
       setSelectedNode("");
+      setGeneratedLogic("");
+      setShowLogic(false);
       return;
     }
 
@@ -158,6 +162,31 @@ export default function Dashboard() {
     };
 
     void loadGraph();
+  }, [selectedProjectId]);
+
+  useEffect(() => {
+    if (!selectedProjectId) {
+      return;
+    }
+
+    const loadLatestLogic = async (): Promise<void> => {
+      try {
+        const artifact = await getLogic(selectedProjectId);
+        const code = (artifact.code || artifact.st_preview || "").trim();
+        if (code.length > 0) {
+          setGeneratedLogic(code);
+          setShowLogic(true);
+        } else {
+          setGeneratedLogic("");
+          setShowLogic(false);
+        }
+      } catch {
+        setGeneratedLogic("");
+        setShowLogic(false);
+      }
+    };
+
+    void loadLatestLogic();
   }, [selectedProjectId]);
 
   const handleToolbarAction = async (action: ToolbarAction): Promise<void> => {
@@ -203,15 +232,21 @@ export default function Dashboard() {
       }
 
       if (action === "generate") {
-        const artifact = await generateLogic(selectedProjectId);
-        setGeneratedLogic(artifact.code);
+        setIsGenerating(true);
         setShowLogic(true);
         setActiveBottomView("logic");
-        setStatusText("Control logic generated and stored in project workspace.");
-        toast.success("Control logic generated", {
-          className: "industrial-toast",
-          icon: <FileCog size={14} className="toast-icon" />,
-        });
+        setStatusText("Generating control logic...");
+        try {
+          const artifact = await generateLogic(selectedProjectId);
+          setGeneratedLogic(artifact.code || artifact.st_preview || "");
+          setStatusText("Control logic generated and stored in project workspace.");
+          toast.success("Control logic generated", {
+            className: "industrial-toast",
+            icon: <FileCog size={14} className="toast-icon" />,
+          });
+        } finally {
+          setIsGenerating(false);
+        }
       }
 
       if (action === "simulate") {
@@ -370,15 +405,26 @@ export default function Dashboard() {
 
       <CommandBar
         activeAction={activeAction}
-        loadingAction={isParsing ? "parse" : isUploading ? "upload" : null}
+        loadingAction={isParsing ? "parse" : isUploading ? "upload" : isGenerating ? "generate" : null}
         replayMode={replayMode}
         showLogic={showLogic}
         onAction={(action) => {
           void handleToolbarAction(action);
         }}
         onToggleLogic={() => {
-          setShowLogic((value) => !value);
+          const nextShowLogic = !showLogic;
+          setShowLogic(nextShowLogic);
           setActiveBottomView("logic");
+          if (nextShowLogic && !generatedLogic.trim() && selectedProjectId) {
+            void getLogic(selectedProjectId)
+              .then((artifact) => {
+                const code = artifact.code || artifact.st_preview || "";
+                setGeneratedLogic(code);
+              })
+              .catch(() => {
+                setStatusText("No stored logic found for selected project yet.");
+              });
+          }
         }}
       />
 
@@ -594,7 +640,26 @@ export default function Dashboard() {
         simulationMetrics={simulationMetrics}
         monitoringSummary={monitoringSummary ?? undefined}
         showLogic={showLogic}
-        onViewChange={setActiveBottomView}
+        isGenerating={isGenerating}
+        onViewChange={(view) => {
+          setActiveBottomView(view);
+          if (view === "logic") {
+            setShowLogic(true);
+            if (!generatedLogic.trim() && selectedProjectId) {
+              void getLogic(selectedProjectId)
+                .then((artifact) => {
+                  const code = artifact.code || artifact.st_preview || "";
+                  if (code.trim()) {
+                    setGeneratedLogic(code);
+                    setShowLogic(true);
+                  }
+                })
+                .catch(() => {
+                  setStatusText("No stored logic found for selected project yet.");
+                });
+            }
+          }
+        }}
       />
     </div>
   );

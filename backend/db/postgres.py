@@ -215,6 +215,174 @@ class PostgresClient:
         );
         """
 
+        create_logic_runs_sql = """
+        CREATE TABLE IF NOT EXISTS logic_runs (
+          id UUID PRIMARY KEY,
+          project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+          project_version INTEGER DEFAULT 1,
+          rules_count INTEGER DEFAULT 0,
+          warnings_count INTEGER DEFAULT 0,
+          status VARCHAR NOT NULL,
+          st_preview TEXT DEFAULT '',
+          generator_version VARCHAR DEFAULT 'deterministic-v1',
+          warnings JSONB DEFAULT '[]'::jsonb,
+          created_at TIMESTAMP
+        );
+        """
+
+        create_logic_warnings_sql = """
+        CREATE TABLE IF NOT EXISTS logic_warnings (
+          id UUID PRIMARY KEY,
+          project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+          logic_run_id UUID REFERENCES logic_runs(id) ON DELETE CASCADE,
+          warning_type VARCHAR NOT NULL,
+          message TEXT NOT NULL,
+          source_sentence TEXT NULL,
+          created_at TIMESTAMP
+        );
+        """
+
+        create_control_rules_sql = """
+        CREATE TABLE IF NOT EXISTS control_rules (
+          id UUID PRIMARY KEY,
+          project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+          logic_run_id UUID NULL REFERENCES logic_runs(id) ON DELETE SET NULL,
+          rule_group VARCHAR DEFAULT 'general',
+          rule_type VARCHAR NOT NULL,
+          source_tag VARCHAR NULL,
+          source_type VARCHAR NULL,
+          condition_kind VARCHAR NULL,
+          operator VARCHAR NULL,
+          threshold VARCHAR NULL,
+          threshold_name VARCHAR NULL,
+          action VARCHAR NOT NULL,
+          target_tag VARCHAR NULL,
+          target_type VARCHAR NULL,
+          secondary_target_tag VARCHAR NULL,
+          mode VARCHAR NULL,
+          priority INTEGER DEFAULT 50,
+          confidence NUMERIC,
+          source_sentence TEXT NOT NULL,
+          source_page INTEGER NULL,
+          section_heading VARCHAR NULL,
+          explanation TEXT NULL,
+          resolution_strategy VARCHAR DEFAULT 'exact_tag',
+          is_symbolic BOOLEAN DEFAULT FALSE,
+          renderable BOOLEAN DEFAULT TRUE,
+          unresolved_tokens JSONB DEFAULT '[]'::jsonb,
+          comments JSONB DEFAULT '[]'::jsonb,
+          display_text TEXT NOT NULL,
+          st_preview TEXT NOT NULL,
+          source_references JSONB DEFAULT '[]'::jsonb,
+          created_at TIMESTAMP
+        );
+        """
+
+        alter_control_rules_logic_run_id_sql = """
+        ALTER TABLE control_rules
+        ADD COLUMN IF NOT EXISTS logic_run_id UUID NULL REFERENCES logic_runs(id) ON DELETE SET NULL;
+        """
+
+        alter_control_rules_source_type_sql = """
+        ALTER TABLE control_rules
+        ADD COLUMN IF NOT EXISTS source_type VARCHAR NULL;
+        """
+
+        alter_control_rules_target_type_sql = """
+        ALTER TABLE control_rules
+        ADD COLUMN IF NOT EXISTS target_type VARCHAR NULL;
+        """
+
+        alter_control_rules_display_text_sql = """
+        ALTER TABLE control_rules
+        ADD COLUMN IF NOT EXISTS display_text TEXT;
+        """
+
+        alter_control_rules_st_preview_sql = """
+        ALTER TABLE control_rules
+        ADD COLUMN IF NOT EXISTS st_preview TEXT;
+        """
+
+        alter_control_rules_source_references_sql = """
+        ALTER TABLE control_rules
+        ADD COLUMN IF NOT EXISTS source_references JSONB DEFAULT '[]'::jsonb;
+        """
+
+        alter_control_rules_rule_group_sql = """
+        ALTER TABLE control_rules
+        ADD COLUMN IF NOT EXISTS rule_group VARCHAR DEFAULT 'general';
+        """
+
+        alter_control_rules_condition_kind_sql = """
+        ALTER TABLE control_rules
+        ADD COLUMN IF NOT EXISTS condition_kind VARCHAR NULL;
+        """
+
+        alter_control_rules_threshold_name_sql = """
+        ALTER TABLE control_rules
+        ADD COLUMN IF NOT EXISTS threshold_name VARCHAR NULL;
+        """
+
+        alter_control_rules_secondary_target_tag_sql = """
+        ALTER TABLE control_rules
+        ADD COLUMN IF NOT EXISTS secondary_target_tag VARCHAR NULL;
+        """
+
+        alter_control_rules_priority_sql = """
+        ALTER TABLE control_rules
+        ADD COLUMN IF NOT EXISTS priority INTEGER DEFAULT 50;
+        """
+
+        alter_control_rules_renderable_sql = """
+        ALTER TABLE control_rules
+        ADD COLUMN IF NOT EXISTS renderable BOOLEAN DEFAULT TRUE;
+        """
+
+        alter_control_rules_unresolved_tokens_sql = """
+        ALTER TABLE control_rules
+        ADD COLUMN IF NOT EXISTS unresolved_tokens JSONB DEFAULT '[]'::jsonb;
+        """
+
+        alter_control_rules_comments_sql = """
+        ALTER TABLE control_rules
+        ADD COLUMN IF NOT EXISTS comments JSONB DEFAULT '[]'::jsonb;
+        """
+
+        alter_control_rules_is_symbolic_sql = """
+        ALTER TABLE control_rules
+        ADD COLUMN IF NOT EXISTS is_symbolic BOOLEAN DEFAULT FALSE;
+        """
+
+        alter_control_rules_resolution_strategy_sql = """
+        ALTER TABLE control_rules
+        ADD COLUMN IF NOT EXISTS resolution_strategy VARCHAR DEFAULT 'exact_tag';
+        """
+
+        alter_logic_runs_warnings_sql = """
+        ALTER TABLE logic_runs
+        ADD COLUMN IF NOT EXISTS warnings JSONB DEFAULT '[]'::jsonb;
+        """
+
+        alter_logic_runs_project_version_sql = """
+        ALTER TABLE logic_runs
+        ADD COLUMN IF NOT EXISTS project_version INTEGER DEFAULT 1;
+        """
+
+        alter_logic_runs_warnings_count_sql = """
+        ALTER TABLE logic_runs
+        ADD COLUMN IF NOT EXISTS warnings_count INTEGER DEFAULT 0;
+        """
+
+        alter_logic_runs_st_preview_sql = """
+        ALTER TABLE logic_runs
+        ADD COLUMN IF NOT EXISTS st_preview TEXT DEFAULT '';
+        """
+
+        alter_logic_runs_generator_version_sql = """
+        ALTER TABLE logic_runs
+        ADD COLUMN IF NOT EXISTS generator_version VARCHAR DEFAULT 'deterministic-v1';
+        """
+
         with self.connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(create_projects_sql)
@@ -233,6 +401,30 @@ class PostgresClient:
                 cursor.execute(create_control_loop_definitions_sql)
                 cursor.execute(create_alarm_definitions_sql)
                 cursor.execute(create_interlock_definitions_sql)
+                cursor.execute(create_logic_runs_sql)
+                cursor.execute(create_logic_warnings_sql)
+                cursor.execute(create_control_rules_sql)
+                cursor.execute(alter_control_rules_logic_run_id_sql)
+                cursor.execute(alter_control_rules_source_type_sql)
+                cursor.execute(alter_control_rules_target_type_sql)
+                cursor.execute(alter_control_rules_display_text_sql)
+                cursor.execute(alter_control_rules_st_preview_sql)
+                cursor.execute(alter_control_rules_source_references_sql)
+                cursor.execute(alter_control_rules_rule_group_sql)
+                cursor.execute(alter_control_rules_condition_kind_sql)
+                cursor.execute(alter_control_rules_threshold_name_sql)
+                cursor.execute(alter_control_rules_secondary_target_tag_sql)
+                cursor.execute(alter_control_rules_priority_sql)
+                cursor.execute(alter_control_rules_renderable_sql)
+                cursor.execute(alter_control_rules_unresolved_tokens_sql)
+                cursor.execute(alter_control_rules_comments_sql)
+                cursor.execute(alter_control_rules_is_symbolic_sql)
+                cursor.execute(alter_control_rules_resolution_strategy_sql)
+                cursor.execute(alter_logic_runs_warnings_sql)
+                cursor.execute(alter_logic_runs_project_version_sql)
+                cursor.execute(alter_logic_runs_warnings_count_sql)
+                cursor.execute(alter_logic_runs_st_preview_sql)
+                cursor.execute(alter_logic_runs_generator_version_sql)
 
     def fetch_all(self, sql: str, params: tuple | None = None) -> list[dict]:
         with self.connection() as conn:

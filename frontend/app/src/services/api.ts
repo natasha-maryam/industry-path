@@ -41,10 +41,59 @@ export type TraceResponse = {
   path: string[];
 };
 
+export type ControlRule = {
+  id: string;
+  rule_group?: string;
+  rule_type: string;
+  display_text: string;
+  source_tag: string | null;
+  source_type?: string | null;
+  condition_kind?: string | null;
+  operator: string | null;
+  threshold: string | null;
+  threshold_name?: string | null;
+  action: string;
+  target_tag: string | null;
+  target_type?: string | null;
+  secondary_target_tag?: string | null;
+  mode?: string | null;
+  priority?: number;
+  confidence: number;
+  renderable?: boolean;
+  unresolved_tokens?: string[];
+  comments?: string[];
+  source_page: number | null;
+  section_heading: string | null;
+  st_preview: string;
+};
+
+export type RejectedRuleCandidate = {
+  candidate_id: string;
+  rule_type: string;
+  source_sentence: string;
+  section_heading: string | null;
+  source_page: number | null;
+  reason: string;
+};
+
 export type LogicArtifact = {
   project_id: string;
   file_name: string;
   code: string;
+  st_preview: string;
+  run_id: string;
+  project_version?: number | null;
+  generator_version?: string | null;
+  rules_count: number;
+  warnings_count?: number;
+  rules: ControlRule[];
+  structured_rules: ControlRule[];
+  final_rendered_rules?: ControlRule[];
+  symbolic_rendered_rules?: ControlRule[];
+  groups: Record<string, ControlRule[]>;
+  rejected_candidates: RejectedRuleCandidate[];
+  rejected_rules?: RejectedRuleCandidate[];
+  warnings: string[];
 };
 
 const api = axios.create({
@@ -109,6 +158,21 @@ export async function getTrace(projectId: string, nodeId: string): Promise<Trace
 
 export async function generateLogic(projectId: string, strategy = "default"): Promise<LogicArtifact> {
   const response = await api.post<LogicArtifact>(`/projects/${projectId}/logic/generate`, { strategy });
+  return response.data;
+}
+
+export async function getLogic(projectId: string): Promise<LogicArtifact> {
+  const response = await api.get<LogicArtifact>(`/projects/${projectId}/logic`);
+  return response.data;
+}
+
+export async function getLogicRule(projectId: string, ruleId: string): Promise<ControlRule> {
+  const response = await api.get<ControlRule>(`/projects/${projectId}/logic/rules/${ruleId}`);
+  return response.data;
+}
+
+export async function getLogicRun(projectId: string, runId: string): Promise<LogicArtifact> {
+  const response = await api.get<LogicArtifact>(`/projects/${projectId}/logic/runs/${runId}`);
   return response.data;
 }
 

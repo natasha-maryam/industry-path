@@ -6,6 +6,7 @@ type BottomPanelsProps = {
   simulationMetrics?: Record<string, unknown>;
   monitoringSummary?: Record<string, unknown>;
   showLogic: boolean;
+  isGenerating?: boolean;
   onViewChange: (view: BottomView) => void;
 };
 
@@ -15,6 +16,7 @@ export default function BottomPanels({
   simulationMetrics,
   monitoringSummary,
   showLogic,
+  isGenerating = false,
   onViewChange,
 }: BottomPanelsProps) {
   const toMetricLabel = (key: string): string =>
@@ -65,7 +67,9 @@ export default function BottomPanels({
         ) : null}
 
         {activeView === "logic" ? (
-          showLogic ? (
+          isGenerating ? (
+            <div className="monitor-frame">Generating control logic, please wait...</div>
+          ) : showLogic ? (
             <pre className="logic-box">{generatedLogic}</pre>
           ) : (
             <div className="monitor-frame">Click "Generate Control Logic" or "View Logic" to show generated PLC code.</div>
