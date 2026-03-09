@@ -38,3 +38,7 @@ dist/
 
 # Docker local data
 docker-data/
+
+# Vite cache
+frontend/app/.vite/
+frontend/app/vite/
