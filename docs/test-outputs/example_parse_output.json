@@ -1,0 +1,517 @@
+{
+  "nodes": [
+    {
+      "id": "LIT-2001",
+      "label": "LIT-2001",
+      "node_type": "level_transmitter",
+      "status": "parsed",
+      "description": "Detected 1 time(s) across uploaded documents",
+      "source_documents": [
+        "narrative_sample.txt"
+      ],
+      "signals": [],
+      "alarms": [],
+      "interlocks": [],
+      "mode": "process_area_general",
+      "linked_logic": []
+    },
+    {
+      "id": "PMP-2601",
+      "label": "PMP-2601",
+      "node_type": "pump",
+      "status": "parsed",
+      "description": "Detected 1 time(s) across uploaded documents",
+      "source_documents": [
+        "narrative_sample.txt"
+      ],
+      "signals": [],
+      "alarms": [],
+      "interlocks": [],
+      "mode": "influent_pump_station",
+      "linked_logic": []
+    },
+    {
+      "id": "PMP-2602",
+      "label": "PMP-2602",
+      "node_type": "pump",
+      "status": "parsed",
+      "description": "Detected 1 time(s) across uploaded documents",
+      "source_documents": [
+        "narrative_sample.txt"
+      ],
+      "signals": [],
+      "alarms": [],
+      "interlocks": [],
+      "mode": "influent_pump_station",
+      "linked_logic": []
+    },
+    {
+      "id": "FCV-2301",
+      "label": "FCV-2301",
+      "node_type": "control_valve",
+      "status": "parsed",
+      "description": "Detected 1 time(s) across uploaded documents",
+      "source_documents": [
+        "narrative_sample.txt"
+      ],
+      "signals": [],
+      "alarms": [],
+      "interlocks": [],
+      "mode": "aeration_basin",
+      "linked_logic": []
+    },
+    {
+      "id": "AIT-2301",
+      "label": "AIT-2301",
+      "node_type": "analyzer",
+      "status": "parsed",
+      "description": "Detected 1 time(s) across uploaded documents",
+      "source_documents": [
+        "narrative_sample.txt"
+      ],
+      "signals": [],
+      "alarms": [],
+      "interlocks": [],
+      "mode": "aeration_basin",
+      "linked_logic": []
+    },
+    {
+      "id": "BL-4001",
+      "label": "BL-4001",
+      "node_type": "blower",
+      "status": "parsed",
+      "description": "Detected 1 time(s) across uploaded documents",
+      "source_documents": [
+        "narrative_sample.txt"
+      ],
+      "signals": [],
+      "alarms": [],
+      "interlocks": [],
+      "mode": "aeration_basin",
+      "linked_logic": []
+    },
+    {
+      "id": "BL-4002",
+      "label": "BL-4002",
+      "node_type": "blower",
+      "status": "parsed",
+      "description": "Detected 1 time(s) across uploaded documents",
+      "source_documents": [
+        "narrative_sample.txt"
+      ],
+      "signals": [],
+      "alarms": [],
+      "interlocks": [],
+      "mode": "aeration_basin",
+      "linked_logic": []
+    },
+    {
+      "id": "LSHH-2001",
+      "label": "LSHH-2001",
+      "node_type": "level_switch",
+      "status": "parsed",
+      "description": "Detected 1 time(s) across uploaded documents",
+      "source_documents": [
+        "narrative_sample.txt"
+      ],
+      "signals": [],
+      "alarms": [],
+      "interlocks": [],
+      "mode": "process_area_general",
+      "linked_logic": []
+    }
+  ],
+  "edges": [
+    {
+      "id": "LIT-2001__CONTROLS__PMP-2601",
+      "source": "LIT-2001",
+      "target": "PMP-2601",
+      "edge_type": "CONTROLS",
+      "confidence": 0.92,
+      "explanation": "Narrative control loop suggests LIT-2001 influences PMP-2601."
+    },
+    {
+      "id": "LIT-2001__CONTROLS__PMP-2602",
+      "source": "LIT-2001",
+      "target": "PMP-2602",
+      "edge_type": "CONTROLS",
+      "confidence": 0.92,
+      "explanation": "Narrative control loop suggests LIT-2001 influences PMP-2602."
+    },
+    {
+      "id": "AIT-2301__CONTROLS__FCV-2301",
+      "source": "AIT-2301",
+      "target": "FCV-2301",
+      "edge_type": "CONTROLS",
+      "confidence": 0.92,
+      "explanation": "Narrative control loop suggests AIT-2301 influences FCV-2301."
+    },
+    {
+      "id": "LSHH-2001__ALARMS_ON__LSHH-2001",
+      "source": "LSHH-2001",
+      "target": "LSHH-2001",
+      "edge_type": "ALARMS_ON",
+      "confidence": 0.82,
+      "explanation": "Alarm text references LSHH-2001."
+    },
+    {
+      "id": "BL-4001__SUPPORTS__FCV-2301",
+      "source": "BL-4001",
+      "target": "FCV-2301",
+      "edge_type": "SUPPORTS",
+      "confidence": 0.71,
+      "explanation": "Blower supports nearby aeration/air-header control equipment."
+    },
+    {
+      "id": "BL-4001__SUPPORTS__AIT-2301",
+      "source": "BL-4001",
+      "target": "AIT-2301",
+      "edge_type": "SUPPORTS",
+      "confidence": 0.71,
+      "explanation": "Blower supports nearby aeration/air-header control equipment."
+    },
+    {
+      "id": "BL-4002__SUPPORTS__FCV-2301",
+      "source": "BL-4002",
+      "target": "FCV-2301",
+      "edge_type": "SUPPORTS",
+      "confidence": 0.71,
+      "explanation": "Blower supports nearby aeration/air-header control equipment."
+    },
+    {
+      "id": "BL-4002__SUPPORTS__AIT-2301",
+      "source": "BL-4002",
+      "target": "AIT-2301",
+      "edge_type": "SUPPORTS",
+      "confidence": 0.71,
+      "explanation": "Blower supports nearby aeration/air-header control equipment."
+    }
+  ],
+  "warnings": [],
+  "low_confidence_suggestions": [
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "LIT-2001",
+      "target_entity": "PMP-2601",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "LIT-2001",
+      "target_entity": "PMP-2602",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "LIT-2001",
+      "target_entity": "LSHH-2001",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "PMP-2601",
+      "target_entity": "PMP-2602",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "FCV-2301",
+      "target_entity": "LIT-2001",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "FCV-2301",
+      "target_entity": "PMP-2601",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "FCV-2301",
+      "target_entity": "PMP-2602",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "FCV-2301",
+      "target_entity": "LSHH-2001",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "AIT-2301",
+      "target_entity": "PMP-2601",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "AIT-2301",
+      "target_entity": "PMP-2602",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "AIT-2301",
+      "target_entity": "FCV-2301",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "AIT-2301",
+      "target_entity": "BL-4001",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "AIT-2301",
+      "target_entity": "BL-4002",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "AIT-2301",
+      "target_entity": "LSHH-2001",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "BL-4001",
+      "target_entity": "LIT-2001",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "BL-4001",
+      "target_entity": "PMP-2601",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "BL-4001",
+      "target_entity": "PMP-2602",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "BL-4001",
+      "target_entity": "FCV-2301",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "BL-4001",
+      "target_entity": "BL-4002",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "BL-4001",
+      "target_entity": "LSHH-2001",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "BL-4002",
+      "target_entity": "LIT-2001",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "BL-4002",
+      "target_entity": "PMP-2601",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "BL-4002",
+      "target_entity": "PMP-2602",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "BL-4002",
+      "target_entity": "FCV-2301",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "BL-4002",
+      "target_entity": "LSHH-2001",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "LSHH-2001",
+      "target_entity": "PMP-2601",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    },
+    {
+      "relationship_type": "ASSOCIATED_WITH",
+      "source_entity": "LSHH-2001",
+      "target_entity": "PMP-2602",
+      "confidence_score": 0.42,
+      "confidence_level": "LOW",
+      "inference_source": "locality",
+      "explanation": "Same P&ID page; kept as suggestion only (not promoted).",
+      "source_references": [
+        "pages:[1]"
+      ]
+    }
+  ]
+}

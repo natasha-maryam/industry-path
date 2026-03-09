@@ -1,0 +1,40 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.python-version
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# Node
+frontend/app/node_modules/
+frontend/app/dist/
+npm-debug.log*
+
+# OS / Editor
+.DS_Store
+.vscode/settings.json
+
+# Storage / uploads
+storage/projects/
+storage/uploads/
+storage/tmp/
+
+# Logs
+*.log
+
+# Testing / cache
+.pytest_cache/
+.mypy_cache/
+
+# Build
+build/
+dist/
+
+# Docker local data
+docker-data/

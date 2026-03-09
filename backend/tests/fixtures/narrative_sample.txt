@@ -1,0 +1,5 @@
+Influent pump lead/lag control keeps wet well in range. LIT-2001 controls PMP-2601 and PMP-2602 staging.
+Dissolved oxygen analyzer AIT-2301 controls FCV-2301 for aeration air.
+BL-4001 and BL-4002 maintain air header pressure.
+High level alarm LSHH-2001 trips transfer pump.
+AUTO and MANUAL modes are available for operators.

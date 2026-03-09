@@ -1,0 +1,54 @@
+version: "3.9"
+
+services:
+
+  postgres:
+    image: postgres:15
+    container_name: crosslayerx-postgres
+    environment:
+      POSTGRES_USER: crosslayer
+      POSTGRES_PASSWORD: crosslayer
+      POSTGRES_DB: crosslayerx
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  neo4j:
+    image: neo4j:5
+    container_name: crosslayerx-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/password
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+
+  influxdb:
+    image: influxdb:2
+    container_name: crosslayerx-influxdb
+    ports:
+      - "8086:8086"
+    volumes:
+      - influx_data:/var/lib/influxdb2
+
+  grafana:
+    image: grafana/grafana
+    container_name: crosslayerx-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+  prometheus:
+    image: prom/prometheus
+    container_name: crosslayerx-prometheus
+    ports:
+      - "9090:9090"
+
+volumes:
+  postgres_data:
+  neo4j_data:
+  influx_data:
+  grafana_data:

@@ -1,0 +1,43 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap");
+
+:root {
+  --bg: #f1f3f5;
+  --text: #232a31;
+  --muted: #67717c;
+  --panel: #e9edf1;
+  --panel-strong: #e1e6eb;
+  --stroke: #c7d0d9;
+  --primary: #c83b3b;
+  --primary-strong: #ab3131;
+  --ok: #2e7d50;
+  --warn: #b87d32;
+  --fault: #b93b3b;
+  --pump: #3e6f96;
+  --tank: #6d7580;
+  --sensor: #b59654;
+  --valve: #a66f45;
+
+  font-family: "Inter", sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+body {
+  background: #eceff2;
+}
