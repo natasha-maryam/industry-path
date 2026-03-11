@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LogicModel",
+  "type": "object",
+  "required": ["project_id", "loops", "equipment", "alarms", "interlocks", "startup_sequence", "shutdown_sequence"],
+  "properties": {
+    "project_id": {"type": "string"},
+    "loops": {"type": "array", "items": {"type": "object"}},
+    "equipment": {"type": "array", "items": {"type": "object"}},
+    "alarms": {"type": "array", "items": {"type": "object"}},
+    "interlocks": {"type": "array", "items": {"type": "object"}},
+    "startup_sequence": {"type": "array", "items": {"type": "object"}},
+    "shutdown_sequence": {"type": "array", "items": {"type": "object"}}
+  }
+}

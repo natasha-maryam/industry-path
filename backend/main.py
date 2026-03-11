@@ -7,6 +7,7 @@ from api.routes.health import router as health_router
 from api.routes.logic import router as logic_router
 from api.routes.monitoring import router as monitoring_router
 from api.routes.parse import router as parse_router
+from api.routes.pipeline import router as pipeline_router
 from api.routes.projects import router as projects_router
 from api.routes.replay import router as replay_router
 from api.routes.simulation import router as simulation_router
@@ -49,3 +50,4 @@ app.include_router(replay_router, prefix="/api")
 app.include_router(monitoring_router, prefix="/api")
 app.include_router(logic_router, prefix="/api")
 app.include_router(deploy_router, prefix="/api")
+app.include_router(pipeline_router, prefix="/api")

@@ -92,8 +92,13 @@ class GraphBuildService:
         ]
 
         edges: list[dict] = []
+        edge_keys: set[tuple[str, str, str]] = set()
         for relationship in relationships:
             edge_class, line_style = self._classify_edge(relationship, entity_by_id)
+            key = (relationship.source_entity, relationship.target_entity, relationship.relationship_type)
+            if key in edge_keys:
+                continue
+            edge_keys.add(key)
             edges.append(
                 GraphEdge(
                     id=f"{relationship.source_entity}__{relationship.relationship_type}__{relationship.target_entity}",
@@ -108,6 +113,32 @@ class GraphBuildService:
                     source_references=relationship.source_references,
                 ).model_dump()
             )
+
+        # Deterministic augmentation: connect sensors to actuators in same process unit when no explicit signal edge exists.
+        sensors = [item for item in entities if item.canonical_type in self.sensor_types and item.process_unit]
+        actuators = [item for item in entities if item.canonical_type in {"pump", "valve", "control_valve", "blower", "chemical_system_device"} and item.process_unit]
+        for sensor in sensors:
+            for actuator in actuators:
+                if sensor.process_unit != actuator.process_unit:
+                    continue
+                key = (sensor.id, actuator.id, "SIGNAL_TO")
+                if key in edge_keys:
+                    continue
+                edge_keys.add(key)
+                edges.append(
+                    GraphEdge(
+                        id=f"{sensor.id}__SIGNAL_TO__{actuator.id}",
+                        source=sensor.id,
+                        target=actuator.id,
+                        edge_type="SIGNAL_TO",
+                        edge_class="monitoring",
+                        line_style="dashed",
+                        confidence=0.62,
+                        explanation="Deterministic process-unit signal edge synthesis.",
+                        inference_source="validation",
+                        source_references=["graph_build_service:unit_signal_synthesis"],
+                    ).model_dump()
+                )
 
         self.logger.info("Graph build output: nodes=%s edges=%s", len(nodes), len(edges))
         return nodes, edges

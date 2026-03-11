@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ControlLoop",
+  "type": "object",
+  "required": ["loop_tag", "sensor_tag", "actuator_tag", "strategy", "confidence"],
+  "properties": {
+    "loop_tag": {"type": "string"},
+    "sensor_tag": {"type": "string"},
+    "actuator_tag": {"type": "string"},
+    "strategy": {"type": "string"},
+    "confidence": {"type": "number"}
+  }
+}

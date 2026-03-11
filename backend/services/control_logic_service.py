@@ -9,14 +9,32 @@ from uuid import uuid4
 from psycopg2.extras import Json
 
 from db.postgres import postgres_client
-from models.logic import ControlRule, LogicGenerationResult, RejectedRuleCandidate
+from models.logic import (
+    ControlRule,
+    GeneratedSTFile,
+    LogicGenerationResult,
+    RejectedRuleCandidate,
+    STGenerationResult,
+)
+from models.generation import GenerationReport, GeneratedLogicFile, IOMappingEntry, ValidationIssue as GenerationValidationIssue
+from models.pipeline import EngineeringEntity
+from services.control_loop_engine import control_loop_engine
 from services.control_rule_candidate_service import control_rule_candidate_service
 from services.control_rule_extraction_service import ExtractedRuleDraft, control_rule_extraction_service
 from services.control_rule_normalization_service import control_rule_normalization_service
 from services.graph_service import graph_service
+from services.engineering_validator import engineering_validator
+from services.io_mapping_engine import io_mapping_engine
+from services.logic_completion_engine import logic_completion_engine
+from services.document_confirmation_engine import document_confirmation_engine
 from services.narrative_segmentation_service import narrative_segmentation_service
 from services.project_service import project_service
+from services.runtime_deployer import runtime_deployer
+from services.st_generator import st_generator
 from services.st_renderer_service import st_renderer_service
+from services.st_validator import st_validator
+from services.version_manager import version_manager
+from services.virtual_commissioning import virtual_commissioning_service
 
 
 class ControlLogicService:
@@ -1343,17 +1361,118 @@ class ControlLogicService:
         )
         return [ControlRule.model_validate(dict(row)) for row in rows]
 
+    def _load_latest_entities(self, project_id: str) -> list[EngineeringEntity]:
+        rows = postgres_client.fetch_all(
+            """
+            SELECT em.payload AS payload
+            FROM extracted_metadata em
+            JOIN (
+                SELECT id
+                FROM parse_batches
+                WHERE project_id = %s
+                ORDER BY started_at DESC
+                LIMIT 1
+            ) latest ON latest.id = em.parse_batch_id
+            WHERE em.project_id = %s
+              AND em.category = 'engineering_entity'
+            ORDER BY em.created_at ASC
+            """,
+            (project_id, project_id),
+        )
+        entities = [EngineeringEntity.model_validate(row.get("payload") or {}) for row in rows if row.get("payload")]
+        if entities:
+            return entities
+
+        graph = graph_service.get_graph(project_id)
+        fallback: list[EngineeringEntity] = []
+        for node in graph.nodes:
+            fallback.append(
+                EngineeringEntity(
+                    id=node.id,
+                    tag=node.id,
+                    canonical_type=node.node_type,
+                    display_name=node.label,
+                    aliases=[node.id, node.label],
+                    process_unit=node.process_unit,
+                    confidence=node.confidence,
+                    is_synthetic=node.is_synthetic,
+                    explanation=node.explanation,
+                    source_references=node.source_references,
+                )
+            )
+        return fallback
+
+    def _loops_to_rules(self, project_id: str, loops: list) -> list[ControlRule]:
+        rules: list[ControlRule] = []
+        for index, loop in enumerate(loops, start=1):
+            output_tag = loop.output_tag or f"{loop.actuator_tag}_CMD"
+            rule = ControlRule(
+                id=str(uuid4()),
+                project_id=project_id,
+                rule_group="general",
+                rule_type="pid_loop" if loop.control_strategy.upper() == "PID" else "start_stop",
+                source_tag=loop.sensor_tag,
+                source_type="analyzer" if loop.control_strategy.upper() == "PID" else "level_transmitter",
+                condition_kind="analyzer" if loop.control_strategy.upper() == "PID" else "boolean_state",
+                operator=">=",
+                threshold=loop.setpoint_tag or "SP",
+                threshold_name=loop.setpoint_tag or "SP",
+                action="MODULATE" if loop.control_strategy.upper() == "PID" else "START",
+                target_tag=loop.actuator_tag,
+                target_type="control_valve" if loop.control_strategy.upper() == "PID" else "pump",
+                secondary_target_tag=None,
+                mode="AUTO",
+                priority=10 + index,
+                confidence=loop.confidence,
+                source_sentence=f"Discovered control loop {loop.loop_tag}",
+                source_page=None,
+                section_heading="control_loops",
+                explanation=f"Loop strategy={loop.control_strategy} source={loop.sensor_tag} target={loop.actuator_tag}",
+                resolution_strategy="graph_inference",
+                is_symbolic=False,
+                renderable=True,
+                unresolved_tokens=[],
+                comments=[],
+                display_text=f"{loop.loop_tag}: {loop.sensor_tag} -> {loop.actuator_tag}",
+                st_preview=(
+                    f"IF {loop.sensor_tag} >= {loop.setpoint_tag or 'SP'} THEN\n"
+                    f"    {output_tag} := {loop.sensor_tag};\n"
+                    "END_IF;"
+                ),
+                source_references=["control_loop_engine"],
+            )
+            rules.append(rule)
+        return rules
+
+    @staticmethod
+    def _build_st_preview_bundle(st_generation) -> str:
+        file_map = {item.relative_path: item.content for item in st_generation.files}
+        preferred = ["main.st", "utilities/utilities.st"]
+        dynamic = sorted(path for path in file_map if path not in preferred)
+        order = [item for item in preferred if item in file_map] + dynamic
+        parts: list[str] = []
+        for relative in order:
+            content = (file_map.get(relative) or "").strip()
+            if not content:
+                continue
+            parts.append(f"(* ===== FILE: {relative} ===== *)")
+            parts.append(content)
+            parts.append("")
+
+        return "\n".join(parts).strip() + "\n"
+
     def generate(self, project_id: str, strategy: str = "deterministic") -> LogicGenerationResult:
         project_service.ensure_project(project_id)
         run_id = str(uuid4())
-        warnings: list[str] = []
+        entities = self._load_latest_entities(project_id)
+        validation_report = engineering_validator.validate(project_id, entities)
 
-        narrative_files = self._load_narrative_files(project_id)
-        if not narrative_files:
-            empty_code = "PROGRAM Main\n(* No control narrative files available for rule generation. *)\nEND_PROGRAM\n"
+        warnings = [item.message for item in validation_report.warnings]
+        if validation_report.errors:
+            warnings.extend([item.message for item in validation_report.errors])
             project_version = self._next_project_version(project_id)
-            message = "No control_narrative files found for project."
-            self._store_empty_run(project_id, run_id, project_version, message, empty_code)
+            empty_code = "PROGRAM Main\n(* Engineering validation failed. ST generation aborted. *)\nEND_PROGRAM\n"
+            self._store_empty_run(project_id, run_id, project_version, "Engineering validation failed.", empty_code)
             return LogicGenerationResult(
                 project_id=project_id,
                 file_name="main.st",
@@ -1363,7 +1482,7 @@ class ControlLogicService:
                 project_version=project_version,
                 generator_version=self.generator_version,
                 rules_count=0,
-                warnings_count=1,
+                warnings_count=len(warnings),
                 rules=[],
                 structured_rules=[],
                 final_rendered_rules=[],
@@ -1371,90 +1490,138 @@ class ControlLogicService:
                 groups={},
                 rejected_candidates=[],
                 rejected_rules=[],
-                warnings=[message],
+                warnings=warnings,
+                engineering_validation=validation_report,
             )
 
-        sentences = narrative_segmentation_service.segment(project_id, narrative_files, self._resolve_file_path)
-        candidates = control_rule_candidate_service.detect(project_id, sentences)
-        entity_index = self._load_entity_index(project_id)
-
-        drafts, extract_warnings = control_rule_extraction_service.extract(candidates, entity_index)
-        warnings.extend(extract_warnings)
-
-        promoted_warning_drafts, remaining_warnings = self._promote_warning_rules(entity_index, warnings)
-        warnings = remaining_warnings
-        if promoted_warning_drafts:
-            drafts.extend(promoted_warning_drafts)
-
-        rules = control_rule_normalization_service.normalize(project_id, drafts)
-
-        template_drafts = self._section_templates(entity_index, [item.text for item in sentences])
-        if template_drafts:
-            rules.extend(control_rule_normalization_service.normalize(project_id, template_drafts))
-
-        rules, graph_warnings = self._enrich_with_graph_context(project_id, rules, entity_index)
-        warnings.extend(graph_warnings)
-
-        dedup: dict[tuple[str, str, str | None, str | None, str, str | None], ControlRule] = {}
-        for rule in rules:
-            key = (
-                rule.rule_group,
-                rule.rule_type,
-                rule.source_tag,
-                rule.threshold_name or rule.threshold,
-                rule.action,
-                rule.target_tag,
+        loops = control_loop_engine.discover(project_id)
+        completed_model = logic_completion_engine.complete(project_id, entities, loops, validation_report)
+        confirmed_model, document_confirmation = document_confirmation_engine.confirm(project_id, entities, completed_model)
+        st_generation = st_generator.generate(project_id, confirmed_model)
+        st_validation = st_validator.validate(project_id, st_generation, model=confirmed_model)
+        if not st_validation.valid:
+            warnings.extend([item.message for item in st_validation.issues])
+            project_version = self._next_project_version(project_id)
+            empty_code = "PROGRAM Main\n(* ST validation failed. Check validation issues. *)\nEND_PROGRAM\n"
+            self._store_empty_run(project_id, run_id, project_version, "ST validation failed.", empty_code)
+            return LogicGenerationResult(
+                project_id=project_id,
+                file_name="main.st",
+                code=empty_code,
+                st_preview=empty_code,
+                run_id=run_id,
+                project_version=project_version,
+                generator_version=self.generator_version,
+                rules_count=0,
+                warnings_count=len(warnings),
+                rules=[],
+                structured_rules=[],
+                final_rendered_rules=[],
+                symbolic_rendered_rules=[],
+                groups={},
+                rejected_candidates=[],
+                rejected_rules=[],
+                warnings=warnings,
+                engineering_validation=validation_report,
+                control_loops=loops,
+                completed_logic_model=confirmed_model,
+                st_validation=st_validation,
+                document_confirmation=document_confirmation,
+                confirmation_status=document_confirmation.confirmation_status,
             )
-            prev = dedup.get(key)
-            if prev is None or rule.confidence > prev.confidence:
-                dedup[key] = rule
-        rules = sorted(dedup.values(), key=self._rule_sort_key)
-        for rule in rules:
-            rule.is_symbolic = self._is_symbolic_rule(rule)
 
-        accepted: list[ControlRule] = []
-        rejected: list[RejectedRuleCandidate] = []
-        for rule in rules:
-            if rule.confidence < 0.58 and rule.is_symbolic:
-                warnings.append(f"Suppressed low-confidence symbolic rule: {rule.source_sentence}")
-                rejected.append(
-                    RejectedRuleCandidate(
-                        candidate_id=rule.id,
-                        rule_type=rule.rule_type,
-                        source_sentence=rule.source_sentence,
-                        section_heading=rule.section_heading,
-                        source_page=rule.source_page,
-                        reason="low-confidence symbolic rule",
-                    )
-                )
-                continue
-            reason = self._reject(rule)
-            if reason:
-                rejected.append(
-                    RejectedRuleCandidate(
-                        candidate_id=rule.id,
-                        rule_type=rule.rule_type,
-                        source_sentence=rule.source_sentence,
-                        section_heading=rule.section_heading,
-                        source_page=rule.source_page,
-                        reason=reason,
-                    )
-                )
-                continue
-            accepted.append(rule)
+        st_preview = self._build_st_preview_bundle(st_generation)
+        rules = self._loops_to_rules(project_id, loops)
+        groups = {"general": rules}
 
-        section_todos, global_warning_leftovers = self._bucket_warnings_by_group(warnings)
-        st_preview, groups = st_renderer_service.render(accepted, strategy, global_warning_leftovers, section_todos)
+        graph = graph_service.get_graph(project_id)
+        io_mapping = io_mapping_engine.build(project_id, graph, confirmed_model)
+        runtime_validation = runtime_deployer.validate_openplc_readiness(project_id, st_generation, io_mapping)
+        st_validation = st_validator.validate(
+            project_id,
+            st_generation,
+            model=confirmed_model,
+            runtime_validation=runtime_validation,
+        )
+        if not st_validation.valid:
+            warnings.extend([item.message for item in st_validation.issues])
+            project_version = self._next_project_version(project_id)
+            empty_code = "PROGRAM Main\n(* ST validation failed. Check validation issues. *)\nEND_PROGRAM\n"
+            self._store_empty_run(project_id, run_id, project_version, "ST validation failed after runtime readiness checks.", empty_code)
+            return LogicGenerationResult(
+                project_id=project_id,
+                file_name="main.st",
+                code=empty_code,
+                st_preview=empty_code,
+                run_id=run_id,
+                project_version=project_version,
+                generator_version=self.generator_version,
+                rules_count=0,
+                warnings_count=len(warnings),
+                rules=[],
+                structured_rules=[],
+                final_rendered_rules=[],
+                symbolic_rendered_rules=[],
+                groups={},
+                rejected_candidates=[],
+                rejected_rules=[],
+                warnings=warnings,
+                engineering_validation=validation_report,
+                control_loops=loops,
+                completed_logic_model=confirmed_model,
+                st_validation=st_validation,
+                io_mapping=io_mapping,
+                runtime_validation=runtime_validation,
+                document_confirmation=document_confirmation,
+                confirmation_status=document_confirmation.confirmation_status,
+            )
+        simulation_validation = virtual_commissioning_service.run(project_id)
+        version_snapshot = version_manager.snapshot(project_id, [item.relative_path for item in st_generation.files])
+
+        generation_report = GenerationReport(
+            project_id=project_id,
+            generated_files=[
+                GeneratedLogicFile(
+                    relative_path=item.relative_path,
+                    absolute_path=str(project_service.workspace_paths(project_id).control_logic / item.relative_path),
+                    bytes_written=len(item.content.encode("utf-8")),
+                )
+                for item in st_generation.files
+            ],
+            issues=[
+                GenerationValidationIssue(
+                    code=issue.rule,
+                    message=issue.message,
+                    severity=issue.severity,
+                    related_tags=issue.involved_tags,
+                )
+                for issue in st_validation.issues
+            ],
+            io_mapping=[
+                IOMappingEntry(signal_tag=channel.signal_tag, io_type=channel.io_type, channel=channel.plc_channel)
+                for channel in io_mapping.channels
+            ],
+            summary={
+                "generated_files": len(st_generation.files),
+                "validation_issues": len(st_validation.issues),
+                "io_channels": len(io_mapping.channels),
+                "evidence_equipment_items": len(document_confirmation.equipment_logic),
+                "evidence_loop_items": len(document_confirmation.control_loops),
+                "evidence_interlock_items": len(document_confirmation.interlocks),
+                "evidence_sequence_items": len(document_confirmation.sequences),
+                "evidence_alarm_items": len(document_confirmation.alarms),
+            },
+        )
+
         project_version = self._next_project_version(project_id)
-        self._store_rules(project_id, run_id, project_version, accepted, warnings, rejected, st_preview)
-        final_rendered_rules, symbolic_rendered_rules = self._split_rendered_rules(accepted)
+        self._store_rules(project_id, run_id, project_version, rules, warnings, [], st_preview)
+        final_rendered_rules, symbolic_rendered_rules = self._split_rendered_rules(rules)
 
         self.logger.info(
-            "Control logic generation: project=%s candidates=%s accepted=%s rejected=%s",
+            "Control logic generation pipeline: project=%s loops=%s rules=%s",
             project_id,
-            len(candidates),
-            len(accepted),
-            len(rejected),
+            len(loops),
+            len(rules),
         )
 
         return LogicGenerationResult(
@@ -1465,16 +1632,27 @@ class ControlLogicService:
             run_id=run_id,
             project_version=project_version,
             generator_version=self.generator_version,
-            rules_count=len(accepted),
+            rules_count=len(rules),
             warnings_count=len(warnings),
-            rules=accepted,
-            structured_rules=accepted,
+            rules=rules,
+            structured_rules=rules,
             final_rendered_rules=final_rendered_rules,
             symbolic_rendered_rules=symbolic_rendered_rules,
             groups=groups,
-            rejected_candidates=rejected,
-            rejected_rules=rejected,
+            rejected_candidates=[],
+            rejected_rules=[],
             warnings=warnings,
+            engineering_validation=validation_report,
+            control_loops=loops,
+            completed_logic_model=confirmed_model,
+            st_validation=st_validation,
+            io_mapping=io_mapping,
+            runtime_validation=runtime_validation,
+            simulation_validation=simulation_validation,
+            version_snapshot=version_snapshot,
+            document_confirmation=document_confirmation,
+            confirmation_status=document_confirmation.confirmation_status,
+            generation_report=generation_report.model_dump(),
         )
 
     def list_rules(self, project_id: str) -> LogicGenerationResult:
@@ -1648,6 +1826,66 @@ class ControlLogicService:
 
     def get_latest(self, project_id: str) -> LogicGenerationResult:
         return self.list_rules(project_id)
+
+    def validate_engineering_model(self, project_id: str):
+        project_service.ensure_project(project_id)
+        entities = self._load_latest_entities(project_id)
+        return engineering_validator.validate(project_id, entities)
+
+    def detect_control_loops(self, project_id: str):
+        project_service.ensure_project(project_id)
+        return control_loop_engine.discover(project_id)
+
+    def validate_latest_st(self, project_id: str):
+        project_service.ensure_project(project_id)
+        result = self.get_latest(project_id)
+        generation = STGenerationResult(
+            project_id=project_id,
+            output_root=str(project_service.workspace_paths(project_id).control_logic),
+            files=[GeneratedSTFile(relative_path="main.st", content=result.code or "")],
+        )
+        return st_validator.validate(project_id, generation)
+
+    def generate_io_mapping(self, project_id: str):
+        project_service.ensure_project(project_id)
+        report = self.validate_engineering_model(project_id)
+        loops = self.detect_control_loops(project_id)
+        entities = self._load_latest_entities(project_id)
+        model = logic_completion_engine.complete(project_id, entities, loops, report)
+        graph = graph_service.get_graph(project_id)
+        return io_mapping_engine.build(project_id, graph, model)
+
+    def runtime_validate(self, project_id: str):
+        project_service.ensure_project(project_id)
+        latest = self.get_latest(project_id)
+        mapping = self.generate_io_mapping(project_id)
+        generation = STGenerationResult(
+            project_id=project_id,
+            output_root=str(project_service.workspace_paths(project_id).control_logic),
+            files=[GeneratedSTFile(relative_path="main.st", content=latest.code or "")],
+        )
+        return runtime_deployer.validate_openplc_readiness(project_id, generation, mapping)
+
+    def run_virtual_commissioning(self, project_id: str):
+        project_service.ensure_project(project_id)
+        return virtual_commissioning_service.run(project_id)
+
+    def create_version_snapshot(self, project_id: str):
+        project_service.ensure_project(project_id)
+        paths = project_service.workspace_paths(project_id).control_logic
+        artifacts = []
+        for relative in (
+            "main.st",
+            "equipment/equipment_routines.st",
+            "control_loops/control_loops.st",
+            "sequences/sequence_logic.st",
+            "interlocks/interlocks.st",
+            "alarms/alarms.st",
+            "utilities/utilities.st",
+        ):
+            if (paths / relative).exists():
+                artifacts.append(relative)
+        return version_manager.snapshot(project_id, artifacts)
 
 
 control_logic_service = ControlLogicService()
