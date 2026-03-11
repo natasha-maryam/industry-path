@@ -1,0 +1,14 @@
+FUNCTION CLX_ClampReal : REAL
+VAR_INPUT
+    Value : REAL;
+    MinValue : REAL;
+    MaxValue : REAL;
+END_VAR
+IF Value < MinValue THEN
+    CLX_ClampReal := MinValue;
+ELSIF Value > MaxValue THEN
+    CLX_ClampReal := MaxValue;
+ELSE
+    CLX_ClampReal := Value;
+END_IF;
+END_FUNCTION

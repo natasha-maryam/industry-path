@@ -1,0 +1,13 @@
+{
+  "project_id": "demo-project",
+  "nodes": [
+    {"id": "LIT-1001", "node_type": "level_transmitter", "process_unit": "EQ-BASIN-1"},
+    {"id": "P-1001", "node_type": "pump", "process_unit": "EQ-BASIN-1"},
+    {"id": "AIT-2301", "node_type": "analyzer", "process_unit": "AERATION-BASIN-AREA"},
+    {"id": "FCV-2301", "node_type": "control_valve", "process_unit": "AERATION-BASIN-AREA"}
+  ],
+  "edges": [
+    {"source": "LIT-1001", "target": "P-1001", "edge_type": "SIGNAL_TO", "confidence": 0.82},
+    {"source": "AIT-2301", "target": "FCV-2301", "edge_type": "CONTROLS", "confidence": 0.91}
+  ]
+}
