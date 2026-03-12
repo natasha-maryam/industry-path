@@ -1,7 +1,7 @@
 .dashboard {
   height: 100vh;
   display: grid;
-  grid-template-rows: 64px 34px 1fr 220px;
+  grid-template-rows: 48px 30px 1fr 220px;
   background: var(--bg);
 }
 
@@ -144,7 +144,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.7rem;
-  padding: 0.58rem 0.8rem;
+  padding: 0.32rem 0.65rem;
   border-bottom: 1px solid var(--stroke);
   background: #f4f6f8;
 }
@@ -154,7 +154,7 @@
   letter-spacing: 0.03em;
   color: var(--text);
   min-width: 180px;
-  font-size: 0.96rem;
+  font-size: 0.88rem;
 }
 
 .command-actions {
@@ -168,10 +168,10 @@
   background: #f7f9fb;
   color: var(--text);
   border-radius: 5px;
-  font-size: 0.74rem;
+  font-size: 0.7rem;
   font-weight: 600;
   line-height: 1;
-  padding: 0.44rem 0.66rem;
+  padding: 0.34rem 0.56rem;
   transition: all 150ms ease;
   cursor: pointer;
 }
@@ -224,7 +224,17 @@
 .main-shell {
   min-height: 0;
   display: grid;
-  grid-template-columns: 280px 1fr 340px;
+  --left-panel-width: 220px;
+  --right-panel-width: 38px;
+  grid-template-columns: var(--left-panel-width) 1fr var(--right-panel-width);
+}
+
+.main-shell.left-collapsed {
+  --left-panel-width: 44px;
+}
+
+.main-shell.right-expanded {
+  --right-panel-width: 300px;
 }
 
 .left-panel,
@@ -232,6 +242,7 @@
   min-height: 0;
   overflow: auto;
   background: var(--panel);
+  position: relative;
 }
 
 .left-panel {
@@ -240,6 +251,43 @@
 
 .right-panel {
   border-left: 1px solid var(--stroke);
+}
+
+.left-panel.collapsed,
+.right-panel.collapsed {
+  overflow: hidden;
+}
+
+.side-panel-toggle {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.35rem;
+  z-index: 12;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--stroke);
+  background: #f7f9fb;
+  color: var(--text);
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.left-panel.collapsed .side-panel-toggle {
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+}
+
+.side-panel-toggle.right {
+  left: 0.35rem;
+  right: auto;
+}
+
+.right-panel.expanded .side-panel-toggle.right {
+  left: auto;
+  right: 0.35rem;
 }
 
 .panel-title {
@@ -260,7 +308,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0 0.72rem;
+  padding: 0 0.5rem 0 0.38rem;
   margin-bottom: 0.2rem;
 }
 
@@ -272,6 +320,10 @@
   gap: 0.32rem;
   cursor: pointer;
   padding: 0.12rem 0;
+}
+
+.tree-parent-btn.subheading {
+  margin-left: 0.42rem;
 }
 
 .tree-arrow-icon {
@@ -394,11 +446,11 @@
 }
 
 .tree-parent {
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   color: var(--muted);
   padding: 0.2rem 0;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  text-transform: none;
+  letter-spacing: 0.02em;
   font-weight: 600;
 }
 
@@ -761,6 +813,12 @@
   .main-shell {
     grid-template-columns: 1fr;
     grid-template-rows: 280px 520px 320px;
+  }
+
+  .main-shell.left-collapsed,
+  .main-shell.right-expanded {
+    --left-panel-width: auto;
+    --right-panel-width: auto;
   }
 
   .left-panel {

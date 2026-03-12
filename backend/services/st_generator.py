@@ -13,6 +13,7 @@ class STGenerator:
     """Deterministic vendor-agnostic ST generation with per-routine output files."""
 
     REQUIRED_MODULE_ORDER = ["interlocks", "sequences", "equipment", "loops", "alarms"]
+    EXECUTION_LAYER_ORDER = ["system", "interlocks", "sequences", "equipment", "loops", "alarms"]
 
     def __init__(self) -> None:
         self.logger = logging.getLogger(__name__)
@@ -708,6 +709,10 @@ class STGenerator:
 
     @staticmethod
     def _sequence_command_value(sequence_name: str, step, command_symbol: str) -> str:
+        if command_symbol == "PROCESS_STOPPED":
+            return "TRUE"
+        if command_symbol == "PROCESS_RUNNING":
+            return "TRUE"
         if sequence_name != "shutdown":
             return "TRUE"
         description = (step.description or "").lower()
@@ -811,6 +816,188 @@ class STGenerator:
         lines.append("END_PROGRAM")
         return "\n".join(lines).strip() + "\n"
 
+    @staticmethod
+    def _reserved_tokens() -> set[str]:
+        return {
+            "IF",
+            "THEN",
+            "ELSE",
+            "ELSIF",
+            "END_IF",
+            "CASE",
+            "OF",
+            "END_CASE",
+            "TRUE",
+            "FALSE",
+            "AND",
+            "OR",
+            "NOT",
+            "FUNCTION_BLOCK",
+            "FUNCTION",
+            "TYPE",
+            "END_TYPE",
+            "VAR",
+            "VAR_GLOBAL",
+            "VAR_INPUT",
+            "VAR_OUTPUT",
+            "VAR_EXTERNAL",
+            "VAR_IN_OUT",
+            "VAR_TEMP",
+            "END_VAR",
+            "REAL",
+            "BOOL",
+            "INT",
+            "END_FUNCTION_BLOCK",
+            "END_FUNCTION",
+            "PROGRAM",
+            "END_PROGRAM",
+            "CLX_CLAMPREAL",
+            "FB_R_TRIG",
+            "PLANT_STATE",
+            "PLANT_STOPPED",
+            "PLANT_STARTING",
+            "PLANT_RUNNING",
+            "PLANT_STOPPING",
+            "PLANT_FAULT",
+        }
+
+    def _normalize_symbol_integrity(
+        self,
+        relative_path: str,
+        content: str,
+        symbol_types: dict[str, str],
+    ) -> str:
+        lines = content.splitlines()
+        sections: list[dict] = []
+        declared: dict[str, dict] = {}
+        reserved = self._reserved_tokens()
+
+        in_var = False
+        current_section: dict | None = None
+        for idx, line in enumerate(lines):
+            stripped = line.strip().upper()
+            if stripped in {"VAR", "VAR_GLOBAL", "VAR_INPUT", "VAR_OUTPUT", "VAR_EXTERNAL", "VAR_IN_OUT", "VAR_TEMP"}:
+                in_var = True
+                current_section = {"type": stripped, "start": idx, "end": None}
+                sections.append(current_section)
+                continue
+            if in_var and stripped == "END_VAR":
+                in_var = False
+                if current_section is not None:
+                    current_section["end"] = idx
+                current_section = None
+                continue
+            if in_var:
+                match = re.match(r"\s*([A-Z_][A-Z0-9_]*)\s*:\s*([A-Z_][A-Z0-9_]*)", line, flags=re.IGNORECASE)
+                if match:
+                    name = match.group(1).upper()
+                    declared[name] = {"line": idx, "type": match.group(2).upper(), "section": current_section["type"] if current_section else "VAR"}
+
+        executable_lines = []
+        in_var = False
+        for line in lines:
+            stripped = line.strip().upper()
+            if stripped in {"VAR", "VAR_GLOBAL", "VAR_INPUT", "VAR_OUTPUT", "VAR_EXTERNAL", "VAR_IN_OUT", "VAR_TEMP"}:
+                in_var = True
+                continue
+            if in_var and stripped == "END_VAR":
+                in_var = False
+                continue
+            if not in_var:
+                executable_lines.append(line)
+
+        used = set(re.findall(r"\b[A-Z_][A-Z0-9_]*\b", "\n".join(executable_lines).upper()))
+        used = {token for token in used if token not in reserved and not token.startswith("FB_") and not token.startswith("INST_")}
+
+        missing = sorted(token for token in used if token not in declared)
+        if missing and sections:
+            target = next((section for section in sections if section["type"] == "VAR_EXTERNAL"), None)
+            if target is None:
+                target = sections[0]
+            insert_idx = target["end"]
+            for symbol in missing:
+                declared_type = symbol_types.get(symbol, st_codegen_utils.infer_st_type(symbol))
+                lines.insert(insert_idx, f"    {symbol} : {declared_type};")
+                insert_idx += 1
+                for section in sections:
+                    if section["end"] is not None and section["end"] >= target["end"]:
+                        section["end"] += 1
+
+        required_keep = {
+            "CURRENT_PLANT_STATE",
+            "NEXT_PLANT_STATE",
+            "PLANT_START_CMD",
+            "PLANT_STOP_CMD",
+            "PLANT_FAULT_ACTIVE",
+            "PROCESS_RUNNING",
+            "PROCESS_STOPPED",
+            "STARTUP_CMD",
+            "SHUTDOWN_CMD",
+        }
+        remove_indices: set[int] = set()
+        for name, meta in declared.items():
+            if name not in used and name not in required_keep and meta["section"] in {"VAR", "VAR_EXTERNAL", "VAR_GLOBAL"}:
+                remove_indices.add(meta["line"])
+        if remove_indices:
+            lines = [line for idx, line in enumerate(lines) if idx not in remove_indices]
+
+        return "\n".join(lines).strip() + "\n"
+
+    def _ensure_shutdown_completion_flag(self, content: str) -> str:
+        if "PROCESS_STOPPED := TRUE;" in content.upper():
+            return content
+        marker = "END_CASE;"
+        if marker in content:
+            return content.replace(marker, "        PROCESS_STOPPED := TRUE;\n" + marker)
+        return content
+
+    def _run_deterministic_integrity_pass(
+        self,
+        model: CompletedLogicModel,
+        generated_contents: dict[str, str],
+        symbol_types: dict[str, str],
+    ) -> None:
+        if "system/system_state_manager.st" in generated_contents:
+            state_content = generated_contents["system/system_state_manager.st"].upper()
+            if "NEXT_PLANT_STATE := CURRENT_PLANT_STATE;" not in state_content:
+                raise ValueError("Deterministic integrity failed: state manager missing default NEXT state initialization")
+            if "STARTEDGE(CLK := PLANT_START_CMD);" not in state_content or "STOPEDGE(CLK := PLANT_STOP_CMD);" not in state_content:
+                raise ValueError("Deterministic integrity failed: state manager missing edge trigger initialization")
+
+        shutdown_path = "sequences/shutdown_sequence.st"
+        if shutdown_path in generated_contents:
+            generated_contents[shutdown_path] = self._ensure_shutdown_completion_flag(generated_contents[shutdown_path])
+
+        for path, content in list(generated_contents.items()):
+            generated_contents[path] = self._normalize_symbol_integrity(path, content, symbol_types)
+
+        for path, content in generated_contents.items():
+            upper = content.upper()
+            if path.startswith("sequences/startup") and "IF CURRENT_PLANT_STATE <> PLANT_STARTING THEN" not in upper:
+                raise ValueError("Deterministic integrity failed: startup sequence missing plant-state guard")
+            if path.startswith("sequences/shutdown") and "IF CURRENT_PLANT_STATE <> PLANT_STOPPING THEN" not in upper:
+                raise ValueError("Deterministic integrity failed: shutdown sequence missing plant-state guard")
+            if path.startswith("sequences/") and ("STARTEDGE" in upper or "STOPEDGE" in upper):
+                if "FB_R_TRIG" not in upper:
+                    raise ValueError(f"Deterministic integrity failed: {path} missing FB_R_TRIG declaration")
+            if path.startswith("control_loops/") and "CLX_CLAMPREAL(" not in upper:
+                raise ValueError(f"Deterministic integrity failed: {path} missing PID output clamp")
+            if path.startswith("equipment/") and "PLANT_COMMANDS_ENABLED" not in upper:
+                raise ValueError(f"Deterministic integrity failed: {path} missing plant command gating")
+
+        main_upper = generated_contents.get("main.st", "").upper()
+        order_markers = [
+            "(* SYSTEM SUPERVISORS FIRST *)",
+            "(* INTERLOCKS FIRST *)",
+            "(* SEQUENCES SECOND *)",
+            "(* EQUIPMENT THIRD *)",
+            "(* LOOPS FOURTH *)",
+            "(* ALARMS LAST *)",
+        ]
+        positions = [main_upper.find(marker) for marker in order_markers]
+        if any(position == -1 for position in positions) or positions != sorted(positions):
+            raise ValueError("Deterministic integrity failed: execution layer order is not fixed")
+
     @classmethod
     def _validate_module_order(cls, module_order: list[str]) -> None:
         if module_order != cls.REQUIRED_MODULE_ORDER:
@@ -885,6 +1072,7 @@ class STGenerator:
                 "",
                 "StartEdge(CLK := PLANT_START_CMD);",
                 "StopEdge(CLK := PLANT_STOP_CMD);",
+                "NEXT_PLANT_STATE := CURRENT_PLANT_STATE;",
                 "",
                 "CASE CURRENT_PLANT_STATE OF",
                 "    PLANT_STOPPED:",
@@ -996,46 +1184,7 @@ class STGenerator:
                     executable_lines.append(line)
 
             used = set(re.findall(r"\b[A-Z_][A-Z0-9_]*\b", "\n".join(executable_lines)))
-            reserved = {
-                "IF",
-                "THEN",
-                "ELSE",
-                "ELSIF",
-                "END_IF",
-                "CASE",
-                "OF",
-                "END_CASE",
-                "TRUE",
-                "FALSE",
-                "AND",
-                "OR",
-                "NOT",
-                "FUNCTION_BLOCK",
-                "FUNCTION",
-                "TYPE",
-                "END_TYPE",
-                "VAR",
-                "VAR_GLOBAL",
-                "VAR_INPUT",
-                "VAR_OUTPUT",
-                "VAR_EXTERNAL",
-                "END_VAR",
-                "REAL",
-                "BOOL",
-                "INT",
-                "END_FUNCTION_BLOCK",
-                "END_FUNCTION",
-                "PROGRAM",
-                "END_PROGRAM",
-                "CLX_CLAMPREAL",
-                "FB_R_TRIG",
-                "PLANT_STATE",
-                "PLANT_STOPPED",
-                "PLANT_STARTING",
-                "PLANT_RUNNING",
-                "PLANT_STOPPING",
-                "PLANT_FAULT",
-            }
+            reserved = self._reserved_tokens()
             candidates = {
                 token
                 for token in used
@@ -1085,6 +1234,10 @@ class STGenerator:
             errors.append("missing system/system_state_manager.st")
         if "system/system_fault_manager.st" not in generated_contents:
             errors.append("missing system/system_fault_manager.st")
+
+        fault_content = generated_contents.get("system/system_fault_manager.st", "").upper()
+        if fault_content and "PLANT_FAULT_ACTIVE := FALSE;" not in fault_content:
+            errors.append("system/system_fault_manager.st: missing per-scan fault reset")
 
         if errors:
             raise ValueError("Production completeness layer failed: " + " | ".join(errors))
@@ -1172,6 +1325,8 @@ class STGenerator:
         generated_contents["utilities/r_trig.st"] = r_trig_st
         generated_contents["system/system_state_manager.st"] = self._logic_expansion_pass(self._render_system_state_manager())
         generated_contents["system/system_fault_manager.st"] = self._logic_expansion_pass(self._render_system_fault_manager(model))
+
+        self._run_deterministic_integrity_pass(model, generated_contents, symbol_types)
 
         self._run_production_completeness_layer(model, generated_contents)
 

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
   Cog,
   Cpu,
   FileCog,
@@ -94,6 +96,8 @@ export default function Dashboard() {
   const [isParsing, setIsParsing] = useState<boolean>(false);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
+  const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState<boolean>(false);
+  const [isRightPanelExpanded, setIsRightPanelExpanded] = useState<boolean>(false);
   const [showCreateProjectModal, setShowCreateProjectModal] = useState<boolean>(false);
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
   const [projectForm, setProjectForm] = useState<{ name: string; description: string; status: "draft" | "active" | "archived" }>({
@@ -588,23 +592,34 @@ export default function Dashboard() {
         }}
       />
 
-      <div className="main-shell">
-        <aside className="left-panel">
-          <ProjectNavigator
-            projects={projects}
-            graphNodes={graphNodes}
-            selectedProjectId={selectedProjectId}
-            onCreateProject={() => {
-              setShowCreateProjectModal(true);
-            }}
-            onRequestDeleteProject={(projectId) => {
-              const target = projects.find((project) => project.id === projectId) ?? null;
-              setProjectToDelete(target);
-            }}
-            onSelectProject={setSelectedProjectId}
-            selectedNode={selectedNode}
-            onSelectNode={setSelectedNode}
-          />
+      <div className={`main-shell ${isLeftPanelCollapsed ? "left-collapsed" : ""} ${isRightPanelExpanded ? "right-expanded" : ""}`}>
+        <aside className={`left-panel ${isLeftPanelCollapsed ? "collapsed" : ""}`}>
+          <button
+            className="side-panel-toggle"
+            type="button"
+            aria-label={isLeftPanelCollapsed ? "Expand left panel" : "Collapse left panel"}
+            onClick={() => setIsLeftPanelCollapsed((value) => !value)}
+          >
+            {isLeftPanelCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+          </button>
+
+          {!isLeftPanelCollapsed ? (
+            <ProjectNavigator
+              projects={projects}
+              graphNodes={graphNodes}
+              selectedProjectId={selectedProjectId}
+              onCreateProject={() => {
+                setShowCreateProjectModal(true);
+              }}
+              onRequestDeleteProject={(projectId) => {
+                const target = projects.find((project) => project.id === projectId) ?? null;
+                setProjectToDelete(target);
+              }}
+              onSelectProject={setSelectedProjectId}
+              selectedNode={selectedNode}
+              onSelectNode={setSelectedNode}
+            />
+          ) : null}
         </aside>
 
         <section className="graph-shell">
@@ -623,14 +638,25 @@ export default function Dashboard() {
           />
         </section>
 
-        <aside className="right-panel">
-          <DetailsPanel
-            activeTab={activeTab}
-            replayPoint={replayPoint}
-            selectedEquipment={selectedEquipment}
-            tracePath={tracePath}
-            onTabChange={setActiveTab}
-          />
+        <aside className={`right-panel ${isRightPanelExpanded ? "expanded" : "collapsed"}`}>
+          <button
+            className="side-panel-toggle right"
+            type="button"
+            aria-label={isRightPanelExpanded ? "Collapse right panel" : "Expand right panel"}
+            onClick={() => setIsRightPanelExpanded((value) => !value)}
+          >
+            {isRightPanelExpanded ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+          </button>
+
+          {isRightPanelExpanded ? (
+            <DetailsPanel
+              activeTab={activeTab}
+              replayPoint={replayPoint}
+              selectedEquipment={selectedEquipment}
+              tracePath={tracePath}
+              onTabChange={setActiveTab}
+            />
+          ) : null}
         </aside>
       </div>
 

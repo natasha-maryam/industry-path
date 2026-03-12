@@ -49,6 +49,14 @@ export default function ProjectNavigator({
   const [equipmentExpanded, setEquipmentExpanded] = useState(true);
   const [groupExpanded, setGroupExpanded] = useState<Record<string, boolean>>({});
 
+  const toHumanHeading = (value: string): string =>
+    value
+      .replace(/[_-]+/g, " ")
+      .trim()
+      .replace(/\s+/g, " ")
+      .toLowerCase()
+      .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
   const parsedGroups = useMemo(() => {
     const byType = new Map<string, string[]>();
     for (const node of graphNodes) {
@@ -74,7 +82,7 @@ export default function ProjectNavigator({
         continue;
       }
       if (nodes.length > 0) {
-        groups.push({ group: key.toUpperCase(), nodes });
+        groups.push({ group: toHumanHeading(key), nodes });
       }
     }
 
@@ -156,7 +164,7 @@ export default function ProjectNavigator({
 
       <ul className="tree-group">
         <li>
-          <button className="tree-parent-btn" onClick={() => setEquipmentExpanded((value) => !value)} type="button">
+          <button className="tree-parent-btn subheading" onClick={() => setEquipmentExpanded((value) => !value)} type="button">
             <span className="tree-arrow-icon">{equipmentExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</span>
             <span className="tree-group-icon-wrap">
               <Boxes size={13} />
@@ -174,7 +182,7 @@ export default function ProjectNavigator({
         {equipmentExpanded
           ? parsedGroups.map((section) => (
           <li key={section.group}>
-            <button className="tree-parent-btn" onClick={() => toggleGroup(section.group)} type="button">
+            <button className="tree-parent-btn subheading" onClick={() => toggleGroup(section.group)} type="button">
               <span className="tree-arrow-icon">
                 {groupExpanded[section.group] ?? true ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
               </span>
