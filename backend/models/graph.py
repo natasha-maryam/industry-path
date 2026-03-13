@@ -23,6 +23,17 @@ class GraphNode(BaseModel):
     is_synthetic: bool = False
     explanation: str | None = None
     source_references: list[str] = Field(default_factory=list)
+    equipment_type: str | None = None
+    signal_type: str | None = None
+    instrument_role: str | None = None
+    control_role: str | None = None
+    power_rating: str | None = None
+    connected_to: list[str] = Field(default_factory=list)
+    controls: list[str] = Field(default_factory=list)
+    measures: list[str] = Field(default_factory=list)
+    control_path: list[str] = Field(default_factory=list)
+    metadata: dict[str, object] = Field(default_factory=dict)
+    metadata_confidence: dict[str, float] = Field(default_factory=dict)
 
 
 class GraphEdge(BaseModel):
@@ -36,6 +47,9 @@ class GraphEdge(BaseModel):
     explanation: str | None = None
     inference_source: str | None = None
     source_references: list[str] = Field(default_factory=list)
+    edge_label: str | None = None
+    semantic_kind: str | None = None
+    process_flow_direction: str | None = None
 
 
 class PlantGraph(BaseModel):

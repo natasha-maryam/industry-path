@@ -10,6 +10,7 @@ from psycopg2.extras import Json
 from db.postgres import postgres_client
 from models.pipeline import DetectedTag, EngineeringEntity
 from services.document_ingestion_service import document_ingestion_service
+from services.engineering_inference import engineering_inference_service
 from services.entity_classification_service import entity_classification_service
 from services.graph_build_service import graph_build_service
 from services.graph_layout_hint_service import graph_layout_hint_service
@@ -17,6 +18,7 @@ from services.graph_validation_service import graph_validation_service
 from services.graph_service import graph_service
 from services.narrative_extraction_service import narrative_extraction_service
 from services.narrative_rule_extraction_service import narrative_rule_extraction_service
+from services.pid_parser import pid_parser_service
 from services.pid_extraction_service import pid_extraction_service
 from services.process_unit_assignment_service import process_unit_assignment_service
 from services.process_unit_detection_service import process_unit_detection_service
@@ -480,18 +482,41 @@ class ParseService:
             self._update_parse_job_stage(
                 parse_job_id,
                 status="running",
-                current_stage="narrative_rules",
-                stage_message="Extracting control loops, alarms, and interlocks",
-                progress_percent=68,
+                current_stage="parse_pid",
+                stage_message="Parsing P&ID geometry, symbols, and labels",
+                progress_percent=70,
             )
-            rule_bundle = narrative_rule_extraction_service.extract_rules(narrative_chunks)
+            pid_parser_relationships, pid_parser_metadata, pid_parser_warnings = pid_parser_service.parse(
+                pid_files=ingested["pid_files"],
+                resolve_file_path=self._resolve_file_path,
+            )
+            warnings.extend(pid_parser_warnings)
 
             self._update_parse_job_stage(
                 parse_job_id,
                 status="running",
-                current_stage="relationship_inference",
-                stage_message="Inferring engineering relationships",
-                progress_percent=78,
+                current_stage="extract_entities",
+                stage_message="Extracting engineering entities and metadata",
+                progress_percent=75,
+            )
+            rule_bundle = narrative_rule_extraction_service.extract_rules(narrative_chunks)
+
+            engineering_relationships, engineering_metadata, engineering_warnings = engineering_inference_service.infer(
+                entities=entities,
+                pid_chunks=pid_chunks,
+                narrative_chunks=narrative_chunks,
+                pid_parser_relationships=pid_parser_relationships,
+                pid_parser_metadata=pid_parser_metadata,
+                rule_bundle=rule_bundle,
+            )
+            warnings.extend(engineering_warnings)
+
+            self._update_parse_job_stage(
+                parse_job_id,
+                status="running",
+                current_stage="infer_relationships",
+                stage_message="Inferring engineering relationships and control paths",
+                progress_percent=82,
             )
             relationships, low_conf_relationships, rel_warnings = relationship_inference_service.infer(
                 entities=entities,
@@ -505,12 +530,12 @@ class ParseService:
                 status="running",
                 current_stage="relationship_refinement",
                 stage_message="Refining engineering edge semantics and directionality",
-                progress_percent=84,
+                progress_percent=88,
             )
             relationships = relationship_refinement_service.refine(
                 entities=entities,
                 process_units=process_units,
-                base_relationships=[*relationships, *part_of_relationships],
+                base_relationships=[*relationships, *engineering_relationships, *part_of_relationships],
                 rule_bundle=rule_bundle,
             )
 
@@ -528,9 +553,9 @@ class ParseService:
                 status="running",
                 current_stage="graph_build",
                 stage_message="Building and persisting plant graph",
-                progress_percent=90,
+                progress_percent=94,
             )
-            nodes, edges = graph_build_service.build(entities, relationships)
+            nodes, edges = graph_build_service.build(entities, relationships, deep_metadata=engineering_metadata)
             graph_service.store_graph(project_id, nodes, edges)
 
             self._store_batch_artifacts(
@@ -652,6 +677,13 @@ class ParseService:
             "warnings": warnings,
             "unified_model": unified_model,
             "summary": "Deterministic engineering parse completed: staged extraction, normalization, rule inference, and graph build.",
+            "pipeline_stages": [
+                "documents",
+                "ocr_extraction",
+                "engineering_entity_extraction",
+                "relationship_inference",
+                "plant_graph",
+            ],
         }
 
 

@@ -50,6 +50,16 @@ type Equipment = {
   motor?: string;
   signals: string[];
   logic: string;
+  processUnit?: string;
+  controlRole?: string;
+  signalType?: string;
+  instrumentRole?: string;
+  powerRating?: string;
+  connections: string[];
+  controls: string[];
+  measures: string[];
+  controlPath: string[];
+  metadataConfidence: Record<string, number>;
 };
 
 const EMPTY_EQUIPMENT: Equipment = {
@@ -59,6 +69,16 @@ const EMPTY_EQUIPMENT: Equipment = {
   motor: "N/A",
   signals: [],
   logic: "N/A",
+  processUnit: "N/A",
+  controlRole: "N/A",
+  signalType: "N/A",
+  instrumentRole: "N/A",
+  powerRating: "N/A",
+  connections: [],
+  controls: [],
+  measures: [],
+  controlPath: [],
+  metadataConfidence: {},
 };
 
 const toEquipmentType = (nodeType: string): EquipmentType => {
@@ -118,8 +138,18 @@ export default function Dashboard() {
       type: toEquipmentType(node.node_type),
       status: node.status || "unknown",
       motor: "N/A",
-      signals: [],
+      signals: node.signals ?? [],
       logic: "N/A",
+      processUnit: node.process_unit ?? "N/A",
+      controlRole: node.control_role ?? "N/A",
+      signalType: node.signal_type ?? "N/A",
+      instrumentRole: node.instrument_role ?? "N/A",
+      powerRating: node.power_rating ?? "N/A",
+      connections: node.connected_to ?? [],
+      controls: node.controls ?? [],
+      measures: node.measures ?? [],
+      controlPath: node.control_path ?? [],
+      metadataConfidence: node.metadata_confidence ?? {},
     };
   }, [graphNodes, selectedNode]);
 
