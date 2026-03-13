@@ -18,6 +18,18 @@ export type GraphNode = {
   cluster_id?: string | null;
   cluster_order?: number | null;
   node_rank?: number | null;
+  equipment_type?: string | null;
+  signal_type?: string | null;
+  instrument_role?: string | null;
+  control_role?: string | null;
+  power_rating?: string | null;
+  connected_to?: string[];
+  controls?: string[];
+  measures?: string[];
+  control_path?: string[];
+  signals?: string[];
+  metadata?: Record<string, unknown>;
+  metadata_confidence?: Record<string, number>;
 };
 
 export type GraphEdge = {
@@ -26,7 +38,10 @@ export type GraphEdge = {
   target: string;
   edge_type: string;
   edge_class?: "process" | "monitoring";
-  line_style?: "solid" | "dashed";
+  line_style?: "solid" | "dashed" | "dotted";
+  edge_label?: string | null;
+  semantic_kind?: string | null;
+  process_flow_direction?: string | null;
 };
 
 export type PlantGraph = {

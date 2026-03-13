@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import ELK from "elkjs/lib/elk.bundled.js";
 import ReactFlow, {
   Background,
   Controls,
@@ -8,25 +9,40 @@ import ReactFlow, {
   type Node,
   type NodeMouseHandler,
 } from "reactflow";
+import { Tooltip } from "react-tooltip";
 import "reactflow/dist/style.css";
+import "react-tooltip/dist/react-tooltip.css";
 
 type GraphWorkspaceProps = {
   graphNodes: Array<{
     id: string;
     label: string;
     node_type: string;
+    status: string;
     process_unit?: string | null;
     cluster_id?: string | null;
     cluster_order?: number | null;
     node_rank?: number | null;
+    control_role?: string | null;
+    signal_type?: string | null;
+    instrument_role?: string | null;
+    power_rating?: string | null;
+    connected_to?: string[];
+    controls?: string[];
+    measures?: string[];
+    control_path?: string[];
+    metadata?: Record<string, unknown>;
+    metadata_confidence?: Record<string, number>;
   }>;
   graphEdges: Array<{
     id: string;
     source: string;
     target: string;
     edge_type: string;
+    edge_label?: string | null;
+    semantic_kind?: string | null;
     edge_class?: "process" | "monitoring";
-    line_style?: "solid" | "dashed";
+    line_style?: "solid" | "dashed" | "dotted";
   }>;
   replayMode: boolean;
   replayPoint: number;
@@ -37,14 +53,22 @@ type GraphWorkspaceProps = {
   onTraceNode: (nodeId: string) => void;
 };
 
-type PlantKind = "pump" | "tank" | "sensor" | "valve";
+type PlantKind = "pump" | "tank" | "sensor" | "valve" | "controller";
 
 type PlantNode = {
   id: string;
   label: string;
+  nodeType: string;
+  processUnit?: string | null;
+  controlRole?: string | null;
+  signalType?: string | null;
+  instrumentRole?: string | null;
+  powerRating?: string | null;
+  connectedTo: string[];
+  controls: string[];
+  measures: string[];
+  controlPath: string[];
   kind: PlantKind;
-  x: number;
-  y: number;
 };
 
 const KIND_COLOR: Record<PlantKind, string> = {
@@ -52,10 +76,14 @@ const KIND_COLOR: Record<PlantKind, string> = {
   tank: "var(--tank)",
   sensor: "var(--sensor)",
   valve: "var(--valve)",
+  controller: "var(--controller)",
 };
 
 const toPlantKind = (nodeType: string): PlantKind => {
   const normalized = nodeType.toLowerCase();
+  if (normalized.includes("controller")) {
+    return "controller";
+  }
   if (normalized === "pump") {
     return "pump";
   }
@@ -68,18 +96,6 @@ const toPlantKind = (nodeType: string): PlantKind => {
   return "sensor";
 };
 
-const SENSOR_TYPES = new Set([
-  "analyzer",
-  "flow_transmitter",
-  "level_transmitter",
-  "pressure_transmitter",
-  "differential_pressure_transmitter",
-  "level_switch",
-  "sensor",
-]);
-
-const isSensorNode = (nodeType: string): boolean => SENSOR_TYPES.has(nodeType.toLowerCase());
-
 const inferEdgeClass = (edge: { edge_class?: string; line_style?: string; edge_type: string }): "process" | "monitoring" => {
   if (edge.edge_class === "monitoring" || edge.line_style === "dashed") {
     return "monitoring";
@@ -88,6 +104,13 @@ const inferEdgeClass = (edge: { edge_class?: string; line_style?: string; edge_t
     return "monitoring";
   }
   return "process";
+};
+
+const humanizeEdgeLabel = (edge: { edge_label?: string | null; edge_type: string }): string => {
+  if (edge.edge_label && edge.edge_label.trim()) {
+    return edge.edge_label;
+  }
+  return edge.edge_type.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase());
 };
 
 const makeReplayColor = (id: string, replayPoint: number): string => {
@@ -112,80 +135,89 @@ export default function GraphWorkspace({
   onReplayPointChange,
   onTraceNode,
 }: GraphWorkspaceProps) {
+  const elk = useMemo(() => new ELK(), []);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null);
+  const [layoutPositions, setLayoutPositions] = useState<Record<string, { x: number; y: number }>>({});
 
   const traceSet = useMemo(() => new Set(tracePath), [tracePath]);
 
   const sourceNodes: PlantNode[] = useMemo(() => {
-    const processNodes = graphNodes.filter((node) => !isSensorNode(node.node_type));
-    const sensorNodes = graphNodes.filter((node) => isSensorNode(node.node_type));
-    const positions = new Map<string, { x: number; y: number }>();
-
-    const clusters = new Map<string, typeof processNodes>();
-    for (const node of processNodes) {
-      const key = node.cluster_id ?? node.process_unit ?? "cluster_unassigned";
-      const existing = clusters.get(key) ?? [];
-      existing.push(node);
-      clusters.set(key, existing);
-    }
-
-    const orderedClusters = Array.from(clusters.entries()).sort((a, b) => {
-      const minA = Math.min(...a[1].map((node) => node.cluster_order ?? 999));
-      const minB = Math.min(...b[1].map((node) => node.cluster_order ?? 999));
-      return minA - minB;
-    });
-
-    orderedClusters.forEach(([_, nodes], clusterIndex) => {
-      const orderedNodes = [...nodes].sort((a, b) => {
-        const rankA = a.node_rank ?? 999;
-        const rankB = b.node_rank ?? 999;
-        if (rankA !== rankB) {
-          return rankA - rankB;
-        }
-        return a.label.localeCompare(b.label);
-      });
-
-      orderedNodes.forEach((node, nodeIndex) => {
-        positions.set(node.id, {
-          x: 140 + clusterIndex * 260,
-          y: 90 + nodeIndex * 140,
-        });
-      });
-    });
-
-    const monitoringEdges = graphEdges.filter((edge) => inferEdgeClass(edge) === "monitoring");
-    const offsetByTarget = new Map<string, number>();
-
-    sensorNodes.forEach((sensor, index) => {
-      const targetId = monitoringEdges.find((edge) => edge.source === sensor.id)?.target;
-      const targetPos = targetId ? positions.get(targetId) : undefined;
-
-      if (targetId && targetPos) {
-        const offset = offsetByTarget.get(targetId) ?? 0;
-        positions.set(sensor.id, {
-          x: targetPos.x + 190,
-          y: targetPos.y + offset,
-        });
-        offsetByTarget.set(targetId, offset + 46);
-      } else {
-        positions.set(sensor.id, {
-          x: 980,
-          y: 90 + index * 95,
-        });
-      }
-    });
-
     return graphNodes.map((node) => {
-      const pos = positions.get(node.id) ?? { x: 120, y: 120 };
       return {
         id: node.id,
         label: node.label,
+        nodeType: node.node_type,
+        processUnit: node.process_unit,
+        controlRole: node.control_role,
+        signalType: node.signal_type,
+        instrumentRole: node.instrument_role,
+        powerRating: node.power_rating,
+        connectedTo: node.connected_to ?? [],
+        controls: node.controls ?? [],
+        measures: node.measures ?? [],
+        controlPath: node.control_path ?? [],
         kind: toPlantKind(node.node_type),
-        x: pos.x,
-        y: pos.y,
       };
     });
-  }, [graphEdges, graphNodes]);
+  }, [graphNodes]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const runLayout = async () => {
+      if (!sourceNodes.length) {
+        if (!cancelled) {
+          setLayoutPositions({});
+        }
+        return;
+      }
+
+      const nodeIds = new Set(sourceNodes.map((node) => node.id));
+      const layoutGraph = {
+        id: "plant-root",
+        layoutOptions: {
+          "elk.algorithm": "layered",
+          "elk.direction": "RIGHT",
+          "elk.spacing.nodeNode": "80",
+          "elk.spacing.edgeNode": "40",
+        },
+        children: sourceNodes.map((node) => ({ id: node.id, width: 144, height: 44 })),
+        edges: graphEdges
+          .filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target))
+          .map((edge) => ({ id: edge.id, sources: [edge.source], targets: [edge.target] })),
+      };
+
+      try {
+        const result = await elk.layout(layoutGraph);
+        const next: Record<string, { x: number; y: number }> = {};
+        for (const child of result.children ?? []) {
+          if (!child.id) {
+            continue;
+          }
+          next[child.id] = { x: child.x ?? 0, y: child.y ?? 0 };
+        }
+        if (!cancelled) {
+          setLayoutPositions(next);
+        }
+      } catch {
+        const fallback: Record<string, { x: number; y: number }> = {};
+        sourceNodes.forEach((node, index) => {
+          fallback[node.id] = {
+            x: 120 + (index % 5) * 220,
+            y: 90 + Math.floor(index / 5) * 120,
+          };
+        });
+        if (!cancelled) {
+          setLayoutPositions(fallback);
+        }
+      }
+    };
+
+    void runLayout();
+    return () => {
+      cancelled = true;
+    };
+  }, [elk, graphEdges, sourceNodes]);
 
   const nodes = useMemo<Node[]>(() => {
     return sourceNodes.map((item) => {
@@ -195,12 +227,29 @@ export default function GraphWorkspace({
       const baseColor = replayMode ? makeReplayColor(item.id, replayPoint) : "#f8fafc";
       const opacity = hasTrace && !isTraceNode ? 0.28 : 1;
       const selectedBorder = selectedNode === item.id ? "0 0 0 1px #2f3942 inset" : "none";
+      const position = layoutPositions[item.id] ?? { x: 120, y: 120 };
+
+      const tooltip = [
+        `Tag: ${item.label}`,
+        `Type: ${item.nodeType}`,
+        `Process Unit: ${item.processUnit ?? "N/A"}`,
+        `Role: ${item.controlRole ?? "N/A"}`,
+        `Signal: ${item.signalType ?? "N/A"}`,
+        `Instrument: ${item.instrumentRole ?? "N/A"}`,
+        `Power: ${item.powerRating ?? "N/A"}`,
+        `Controls: ${item.controls.length ? item.controls.join(", ") : "N/A"}`,
+        `Measures: ${item.measures.length ? item.measures.join(", ") : "N/A"}`,
+        `Control Path: ${item.controlPath.length ? item.controlPath.join(" | ") : "N/A"}`,
+        `Connected To: ${item.connectedTo.length ? item.connectedTo.join(", ") : "N/A"}`,
+      ].join("\n");
 
       return {
         id: item.id,
-        position: { x: item.x, y: item.y },
+        position,
         draggable: false,
-        data: { label: item.label },
+        data: {
+          label: <div data-tooltip-id="plant-node-tooltip" data-tooltip-content={tooltip}>{item.label}</div>,
+        },
         style: {
           border: `2px solid ${borderColor}`,
           borderRadius: 6,
@@ -209,26 +258,29 @@ export default function GraphWorkspace({
           fontWeight: 600,
           fontSize: 11,
           letterSpacing: "0.01em",
-          textTransform: "uppercase",
+          textTransform: "none",
           background: baseColor,
           boxShadow: selectedBorder,
           opacity,
         },
       };
     });
-  }, [replayMode, replayPoint, selectedNode, sourceNodes, traceSet]);
+  }, [layoutPositions, replayMode, replayPoint, selectedNode, sourceNodes, traceSet]);
 
   const edges = useMemo<Edge[]>(() => {
       const sourceEdges: Edge[] = graphEdges.map((edge) => {
       const edgeClass = inferEdgeClass(edge);
-      const dashed = edgeClass === "monitoring";
-      const stroke = dashed ? "#6d7682" : "#39424c";
+      const semantic = edge.semantic_kind ?? (edgeClass === "monitoring" ? "measurement_signal" : "process_flow");
+      const styleType = edge.line_style ?? (semantic === "control_signal" ? "dashed" : semantic === "measurement_signal" ? "dotted" : "solid");
+      const stroke = semantic === "control_signal" ? "#1E88E5" : semantic === "measurement_signal" ? "#43A047" : "#333333";
+      const strokeDasharray = styleType === "dashed" ? "6 4" : styleType === "dotted" ? "2 2" : undefined;
       return ({
       id: edge.id,
       source: edge.source,
       target: edge.target,
-      label: edge.edge_type,
-      style: dashed ? { strokeDasharray: "7 5", strokeWidth: 1.5, stroke } : { strokeWidth: 2, stroke },
+      label: humanizeEdgeLabel(edge),
+      labelStyle: { fontSize: 10, fontWeight: 600, fill: "#4f5964" },
+      style: strokeDasharray ? { strokeDasharray, strokeWidth: 1.6, stroke } : { strokeWidth: 2, stroke },
       markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
     });
     });
@@ -278,6 +330,7 @@ export default function GraphWorkspace({
           <Controls />
           <MiniMap />
         </ReactFlow>
+        <Tooltip id="plant-node-tooltip" place="top" className="plant-tooltip" />
 
         {contextMenu ? (
           <div className="node-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>

@@ -52,7 +52,18 @@ class Neo4jClient:
                     n.confidence = $confidence,
                     n.is_synthetic = $is_synthetic,
                     n.explanation = $explanation,
-                    n.source_references = $source_references
+                    n.source_references = $source_references,
+                    n.equipment_type = $equipment_type,
+                    n.signal_type = $signal_type,
+                    n.instrument_role = $instrument_role,
+                    n.control_role = $control_role,
+                    n.power_rating = $power_rating,
+                    n.connected_to = $connected_to,
+                    n.controls = $controls,
+                    n.measures = $measures,
+                    n.control_path = $control_path,
+                    n.metadata = $metadata,
+                    n.metadata_confidence = $metadata_confidence
                 """
                 session.run(
                     query,
@@ -78,6 +89,17 @@ class Neo4jClient:
                     is_synthetic=node.get("is_synthetic", False),
                     explanation=node.get("explanation"),
                     source_references=node.get("source_references", []),
+                    equipment_type=node.get("equipment_type"),
+                    signal_type=node.get("signal_type"),
+                    instrument_role=node.get("instrument_role"),
+                    control_role=node.get("control_role"),
+                    power_rating=node.get("power_rating"),
+                    connected_to=node.get("connected_to", []),
+                    controls=node.get("controls", []),
+                    measures=node.get("measures", []),
+                    control_path=node.get("control_path", []),
+                    metadata=node.get("metadata", {}),
+                    metadata_confidence=node.get("metadata_confidence", {}),
                 )
 
             for edge in edges:
@@ -93,7 +115,10 @@ class Neo4jClient:
                     r.confidence = $confidence,
                     r.explanation = $explanation,
                     r.inference_source = $inference_source,
-                    r.source_references = $source_references
+                    r.source_references = $source_references,
+                    r.edge_label = $edge_label,
+                    r.semantic_kind = $semantic_kind,
+                    r.process_flow_direction = $process_flow_direction
                 """
                 session.run(
                     query,
@@ -108,6 +133,9 @@ class Neo4jClient:
                     explanation=edge.get("explanation"),
                     inference_source=edge.get("inference_source"),
                     source_references=edge.get("source_references", []),
+                    edge_label=edge.get("edge_label"),
+                    semantic_kind=edge.get("semantic_kind"),
+                    process_flow_direction=edge.get("process_flow_direction"),
                 )
 
     def fetch_project_graph(self, project_id: str) -> tuple[list[dict], list[dict]]:
@@ -133,7 +161,18 @@ class Neo4jClient:
                coalesce(n.confidence, 0.8) AS confidence,
                coalesce(n.is_synthetic, false) AS is_synthetic,
                n.explanation AS explanation,
-               coalesce(n.source_references, []) AS source_references
+               coalesce(n.source_references, []) AS source_references,
+               n.equipment_type AS equipment_type,
+               n.signal_type AS signal_type,
+               n.instrument_role AS instrument_role,
+               n.control_role AS control_role,
+               n.power_rating AS power_rating,
+               coalesce(n.connected_to, []) AS connected_to,
+               coalesce(n.controls, []) AS controls,
+               coalesce(n.measures, []) AS measures,
+               coalesce(n.control_path, []) AS control_path,
+               coalesce(n.metadata, {}) AS metadata,
+               coalesce(n.metadata_confidence, {}) AS metadata_confidence
         """
         edge_query = """
         MATCH (a:Device {project_id: $project_id})-[r]->(b:Device {project_id: $project_id})
@@ -146,7 +185,10 @@ class Neo4jClient:
                 coalesce(r.confidence, 0.7) AS confidence,
                 r.explanation AS explanation,
                 r.inference_source AS inference_source,
-                coalesce(r.source_references, []) AS source_references
+                coalesce(r.source_references, []) AS source_references,
+                r.edge_label AS edge_label,
+                r.semantic_kind AS semantic_kind,
+                r.process_flow_direction AS process_flow_direction
         """
         with self.driver.session() as session:
             nodes = [dict(row) for row in session.run(node_query, project_id=project_id)]
