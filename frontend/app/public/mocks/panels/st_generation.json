@@ -1,0 +1,14 @@
+{
+  "project_id": "proj_001",
+  "run_id": "run_st_20260313_001",
+  "generated_at": "2026-03-13T10:02:11Z",
+  "generator_version": "v1.4.2",
+  "file_name": "main.st",
+  "language": "st",
+  "status": "success",
+  "rule_count": 42,
+  "warnings": [
+    "Fallback timer preset used for loop CL-201"
+  ],
+  "st_code": "PROGRAM MAIN\nVAR\n  Pump101_RunCmd : BOOL;\nEND_VAR\n"
+}

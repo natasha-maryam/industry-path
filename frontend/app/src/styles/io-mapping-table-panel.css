@@ -1,0 +1,221 @@
+.io-mapping-table-panel {
+  border: 1px solid var(--stroke);
+  border-radius: 6px;
+  background: #f4f7fa;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-height: 280px;
+}
+
+.io-mapping-toolbar {
+  border-bottom: 1px solid #c8d1da;
+  background: #edf2f6;
+  padding: 0.48rem 0.56rem;
+  display: grid;
+  grid-template-columns: 1.3fr repeat(2, minmax(150px, 0.8fr));
+  gap: 0.4rem;
+  align-items: end;
+}
+
+.io-mapping-warning {
+  border-bottom: 1px solid #e3d6b5;
+  background: #fff8e6;
+  color: #6f4a00;
+  padding: 0.3rem 0.56rem;
+  font-size: 0.62rem;
+}
+
+.io-mapping-search-wrap {
+  border: 1px solid #bcc8d4;
+  border-radius: 4px;
+  background: #f8fbfe;
+  padding: 0 0.35rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-height: 30px;
+}
+
+.io-mapping-search-wrap input {
+  border: 0;
+  background: transparent;
+  width: 100%;
+  font-size: 0.68rem;
+  color: #243648;
+  outline: none;
+}
+
+.io-mapping-toolbar label {
+  display: grid;
+  gap: 0.16rem;
+  font-size: 0.6rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: #516578;
+}
+
+.io-mapping-toolbar select {
+  border: 1px solid #bcc8d4;
+  background: #f8fbfe;
+  border-radius: 4px;
+  padding: 0.26rem 0.36rem;
+  font-size: 0.67rem;
+  color: #243648;
+}
+
+.io-mapping-table-wrap {
+  overflow: auto;
+}
+
+.io-mapping-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.67rem;
+}
+
+.io-mapping-table th,
+.io-mapping-table td {
+  border-bottom: 1px solid #d4dde6;
+  border-right: 1px solid #e1e7ee;
+  padding: 0.28rem 0.34rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.io-mapping-table th:last-child,
+.io-mapping-table td:last-child {
+  border-right: 0;
+}
+
+.io-mapping-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #eaf0f5;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 0.58rem;
+  color: #46596c;
+}
+
+.io-mapping-table tbody tr:nth-child(even) {
+  background: #f8fbfe;
+}
+
+.io-mapping-table .mono {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.63rem;
+}
+
+.io-mapping-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+}
+
+.io-badge {
+  border: 1px solid #bcc8d4;
+  border-radius: 999px;
+  padding: 0.04rem 0.3rem;
+  font-size: 0.54rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.io-badge.warning {
+  color: #8a4b00;
+  border-color: #d2a55e;
+  background: #fff4e5;
+}
+
+.io-badge.error {
+  color: #7c1d1d;
+  border-color: #d58282;
+  background: #fff0f0;
+}
+
+.io-badge.success {
+  color: #14532d;
+  border-color: #59b080;
+  background: #ecfff2;
+}
+
+.io-mapping-pagination {
+  border-top: 1px solid #c8d1da;
+  background: #edf2f6;
+  padding: 0.42rem 0.56rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+  font-size: 0.63rem;
+  color: #3a4d60;
+}
+
+.io-mapping-page-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.48rem;
+}
+
+.io-mapping-page-size label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.24rem;
+}
+
+.io-mapping-page-size select {
+  border: 1px solid #bcc8d4;
+  background: #f8fbfe;
+  border-radius: 4px;
+  padding: 0.16rem 0.3rem;
+  font-size: 0.62rem;
+}
+
+.io-mapping-page-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+}
+
+.io-mapping-page-controls button {
+  border: 1px solid var(--stroke);
+  background: #f7f9fb;
+  border-radius: 4px;
+  padding: 0.2rem 0.42rem;
+  font-size: 0.62rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.io-mapping-page-controls button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.io-mapping-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-height: 220px;
+  color: #5a6c7e;
+  font-size: 0.72rem;
+}
+
+.io-mapping-state.error {
+  color: #7c1d1d;
+  flex-direction: column;
+}
+
+.io-mapping-retry-btn {
+  border: 1px solid #c39a9a;
+  border-radius: 4px;
+  background: #fff4f4;
+  color: #7c1d1d;
+  padding: 0.16rem 0.42rem;
+  font-size: 0.64rem;
+  font-weight: 700;
+  cursor: pointer;
+}

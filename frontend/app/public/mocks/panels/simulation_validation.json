@@ -1,0 +1,29 @@
+{
+  "project_id": "proj_001",
+  "simulation_run_id": "sim_20260313_001",
+  "validated_at": "2026-03-13T10:07:02Z",
+  "overall_status": "warning",
+  "scenarios_passed": 3,
+  "scenarios_failed": 0,
+  "scenarios_warning": 1,
+  "scenarios": [
+    {
+      "scenario_id": "scn_001",
+      "scenario_name": "pump_startup_nominal",
+      "status": "success",
+      "cycle_time_ms": 35,
+      "duration_s": 120,
+      "alarms_triggered": 0,
+      "message": "Nominal startup achieved"
+    },
+    {
+      "scenario_id": "scn_002",
+      "scenario_name": "high_level_trip",
+      "status": "warning",
+      "cycle_time_ms": 49,
+      "duration_s": 90,
+      "alarms_triggered": 1,
+      "message": "Trip activated with delayed reset"
+    }
+  ]
+}

@@ -1,0 +1,251 @@
+.st-verification-panel {
+  border: 1px solid var(--stroke);
+  border-radius: 6px;
+  background: #f4f7fa;
+  color: var(--text);
+}
+
+.st-verification-header {
+  border-bottom: 1px solid #c8d1da;
+  background: #edf2f6;
+  padding: 0.52rem 0.62rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.st-verification-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.st-verification-issue-link {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.st-verification-issue-link:hover {
+  text-decoration: underline;
+}
+
+.st-verification-issue-link:disabled {
+  cursor: default;
+  text-decoration: none;
+}
+
+.st-verification-title-row h3 {
+  margin: 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.st-verification-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  border: 1px solid #b8c4d0;
+  border-radius: 999px;
+  padding: 0.08rem 0.4rem;
+  font-size: 0.62rem;
+  font-weight: 700;
+}
+
+.st-verification-status.idle {
+  color: #4b5563;
+  border-color: #b7c2cd;
+}
+
+.st-verification-status.running {
+  color: #0b4f88;
+  border-color: #5ba4d8;
+}
+
+.st-verification-status.success {
+  color: #14532d;
+  border-color: #59b080;
+}
+
+.st-verification-status.failed {
+  color: #7c1d1d;
+  border-color: #d58282;
+}
+
+.st-verification-status.warning {
+  color: #8a4b00;
+  border-color: #d2a55e;
+}
+
+.st-verification-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(130px, 1fr));
+  gap: 0.35rem;
+  font-size: 0.64rem;
+  color: #324150;
+}
+
+.st-verification-ast {
+  font-weight: 700;
+}
+
+.st-verification-ast.success {
+  color: #14532d;
+}
+
+.st-verification-ast.failed {
+  color: #7c1d1d;
+}
+
+.st-verification-ast.warning {
+  color: #8a4b00;
+}
+
+.st-verification-content {
+  padding: 0.56rem;
+}
+
+.st-verification-card {
+  border: 1px solid #c5cfda;
+  border-radius: 5px;
+  background: #f9fbfd;
+  padding: 0.45rem;
+}
+
+.st-verification-card h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.67rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.st-verification-file-list,
+.st-verification-error-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.st-verification-file-list {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.st-verification-file-toggle {
+  width: 100%;
+  border: 1px solid #c8d2dd;
+  border-radius: 4px;
+  background: #f3f8fc;
+  padding: 0.2rem 0.35rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22rem;
+  font-size: 0.64rem;
+  font-weight: 700;
+  color: #294156;
+  cursor: pointer;
+}
+
+.st-verification-count {
+  margin-left: auto;
+  border: 1px solid #bcc8d4;
+  border-radius: 999px;
+  padding: 0.02rem 0.24rem;
+  font-size: 0.56rem;
+  color: #4f6071;
+}
+
+.st-verification-error-list {
+  margin-top: 0.2rem;
+  margin-left: 0.5rem;
+  display: grid;
+  gap: 0.18rem;
+}
+
+.st-verification-error-list li {
+  border: 1px solid #d4dbe3;
+  border-radius: 4px;
+  background: #f8fbfe;
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.18rem 0.3rem;
+  font-size: 0.62rem;
+}
+
+.st-verification-severity {
+  border: 1px solid #b7c2cd;
+  border-radius: 999px;
+  padding: 0.02rem 0.3rem;
+  font-size: 0.56rem;
+  font-weight: 700;
+}
+
+.st-verification-severity.info {
+  color: #0b4f88;
+  border-color: #5ba4d8;
+}
+
+.st-verification-severity.warning {
+  color: #8a4b00;
+  border-color: #d2a55e;
+}
+
+.st-verification-severity.error {
+  color: #7c1d1d;
+  border-color: #d58282;
+}
+
+.st-verification-message {
+  color: #2e4255;
+}
+
+.st-verification-line,
+.st-verification-code {
+  color: #516578;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.58rem;
+}
+
+.st-verification-empty,
+.st-verification-failed-state {
+  font-size: 0.64rem;
+  color: #5b6f82;
+}
+
+.st-verification-state {
+  min-height: 170px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.38rem;
+}
+
+.st-verification-failed-state {
+  color: #7c1d1d;
+  flex-direction: column;
+}
+
+.st-verification-retry-btn {
+  border: 1px solid #c39a9a;
+  border-radius: 4px;
+  background: #fff4f4;
+  color: #7c1d1d;
+  padding: 0.16rem 0.42rem;
+  font-size: 0.64rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.st-verification-warning {
+  border-bottom: 1px solid #e3d6b5;
+  background: #fff8e6;
+  color: #6f4a00;
+  padding: 0.3rem 0.56rem;
+  font-size: 0.62rem;
+}

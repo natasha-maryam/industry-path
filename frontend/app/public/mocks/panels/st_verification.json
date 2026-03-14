@@ -1,0 +1,29 @@
+{
+  "project_id": "proj_001",
+  "run_id": "run_st_verify_20260313_001",
+  "verified_at": "2026-03-13T10:03:09Z",
+  "overall_status": "warning",
+  "checks_passed": 7,
+  "checks_failed": 0,
+  "checks_warning": 2,
+  "checks": [
+    {
+      "check_id": "chk_001",
+      "check_name": "syntax_parse",
+      "status": "success",
+      "severity": "info",
+      "message": "Structured Text parsed successfully",
+      "line_number": null,
+      "suggestion": null
+    },
+    {
+      "check_id": "chk_002",
+      "check_name": "undeclared_symbol",
+      "status": "warning",
+      "severity": "warning",
+      "message": "Symbol LT_301_HI is referenced before declaration",
+      "line_number": 118,
+      "suggestion": "Declare LT_301_HI in VAR block"
+    }
+  ]
+}

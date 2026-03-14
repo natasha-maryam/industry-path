@@ -1,0 +1,29 @@
+{
+  "project_id": "proj_001",
+  "run_id": "run_runtime_validate_20260313_001",
+  "validated_at": "2026-03-13T10:05:51Z",
+  "overall_status": "failed",
+  "checks_passed": 5,
+  "checks_failed": 1,
+  "checks_warning": 1,
+  "checks": [
+    {
+      "check_id": "rt_001",
+      "check_name": "watchdog_cycle",
+      "status": "success",
+      "expected_value": "<=50ms",
+      "actual_value": "42ms",
+      "tolerance": null,
+      "message": "Cycle time within limits"
+    },
+    {
+      "check_id": "rt_002",
+      "check_name": "interlock_pump_tank",
+      "status": "failed",
+      "expected_value": "Pump101 off when LT101 > 95%",
+      "actual_value": "Pump101 remained on for 2.1s",
+      "tolerance": "1.0s",
+      "message": "Interlock response exceeded tolerance"
+    }
+  ]
+}

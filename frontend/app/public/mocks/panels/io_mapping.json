@@ -1,0 +1,31 @@
+{
+  "project_id": "proj_001",
+  "run_id": "run_io_20260313_001",
+  "mapped_at": "2026-03-13T10:04:20Z",
+  "overall_status": "running",
+  "mapped_count": 26,
+  "unmapped_count": 3,
+  "coverage_percent": 89.66,
+  "mappings": [
+    {
+      "mapping_id": "map_001",
+      "source_tag": "P101_RUN_CMD",
+      "source_type": "do",
+      "plc_address": "%QX0.0",
+      "data_type": "bool",
+      "status": "success",
+      "confidence": 0.98,
+      "notes": null
+    },
+    {
+      "mapping_id": "map_002",
+      "source_tag": "FT201_PV",
+      "source_type": "ai",
+      "plc_address": "%IW4",
+      "data_type": "real",
+      "status": "warning",
+      "confidence": 0.74,
+      "notes": "Scaled range not confirmed"
+    }
+  ]
+}

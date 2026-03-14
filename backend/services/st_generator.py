@@ -513,7 +513,7 @@ class STGenerator:
         block_name = f"FB_EQ_{self._block_suffix(eq_tag)}"
         return self._render_function_block(block_name, symbol_types, external_symbols, body, local_vars)
 
-    def _render_loop_file(self, loop, symbol_types: dict[str, str]) -> str:
+    def _render_loop_file(self, loop, symbol_types: dict[str, str], *, write_output: bool = True) -> str:
         pv = self._symbol(loop.pv_tag or loop.sensor_tag)
         sp = self._symbol(loop.sp_tag or loop.setpoint_tag or st_codegen_utils.normalize_tag_with_suffix(loop.sensor_tag, "SP"))
         out = self._symbol(loop.output_tag_analog or loop.output_tag or st_codegen_utils.normalize_tag_with_suffix(loop.actuator_tag, "OUT"))
@@ -527,33 +527,33 @@ class STGenerator:
         out_min = loop.output_min if loop.output_min is not None else 0.0
         out_max = loop.output_max if loop.output_max is not None else 100.0
 
-        if loop.auto_owner != "loop_manager":
-            body.append(";")
-        else:
-            loop_name = self._block_suffix(loop.loop_tag)
-            local_vars = [
-                "    ERROR : REAL := 0.0;",
-                "    P_TERM : REAL := 0.0;",
-                "    I_TERM : REAL := 0.0;",
-                "    D_TERM : REAL := 0.0;",
-                "    PREV_ERROR : REAL := 0.0;",
-                "    INTEGRAL : REAL := 0.0;",
-                f"    KP_{loop_name} : REAL := 1.0;",
-                f"    KI_{loop_name} : REAL := 0.1;",
-                f"    KD_{loop_name} : REAL := 0.01;",
-                f"    DT_{loop_name} : REAL := 1.0;",
-                f"    LOOP_OUTPUT_UNCLAMPED_{loop_name} : REAL := 0.0;",
-            ]
-            body.append(f"IF {enable} AND {mode} THEN")
-            body.append(f"    ERROR := {sp} - {pv};")
-            body.append(f"    P_TERM := KP_{loop_name} * ERROR;")
-            body.append(f"    INTEGRAL := INTEGRAL + (ERROR * KI_{loop_name} * DT_{loop_name});")
-            body.append("    I_TERM := INTEGRAL;")
-            body.append(f"    D_TERM := KD_{loop_name} * (ERROR - PREV_ERROR) / DT_{loop_name};")
-            body.append(f"    LOOP_OUTPUT_UNCLAMPED_{loop_name} := P_TERM + I_TERM + D_TERM;")
-            body.append(f"    {out} := CLX_ClampReal(LOOP_OUTPUT_UNCLAMPED_{loop_name}, {out_min:.1f}, {out_max:.1f});")
-            body.append("    PREV_ERROR := ERROR;")
-            body.append("END_IF;")
+        loop_name = self._block_suffix(loop.loop_tag)
+        local_vars = [
+            "    ERROR : REAL := 0.0;",
+            "    P_TERM : REAL := 0.0;",
+            "    I_TERM : REAL := 0.0;",
+            "    D_TERM : REAL := 0.0;",
+            "    PREV_ERROR : REAL := 0.0;",
+            "    INTEGRAL : REAL := 0.0;",
+            f"    KP_{loop_name} : REAL := 1.0;",
+            f"    KI_{loop_name} : REAL := 0.1;",
+            f"    KD_{loop_name} : REAL := 0.01;",
+            f"    DT_{loop_name} : REAL := 1.0;",
+            f"    LOOP_OUTPUT_UNCLAMPED_{loop_name} : REAL := 0.0;",
+            f"    LOOP_OUTPUT_CLAMPED_{loop_name} : REAL := 0.0;",
+        ]
+        body.append(f"IF {enable} AND {mode} THEN")
+        body.append(f"    ERROR := {sp} - {pv};")
+        body.append(f"    P_TERM := KP_{loop_name} * ERROR;")
+        body.append(f"    INTEGRAL := INTEGRAL + (ERROR * KI_{loop_name} * DT_{loop_name});")
+        body.append("    I_TERM := INTEGRAL;")
+        body.append(f"    D_TERM := KD_{loop_name} * (ERROR - PREV_ERROR) / DT_{loop_name};")
+        body.append(f"    LOOP_OUTPUT_UNCLAMPED_{loop_name} := P_TERM + I_TERM + D_TERM;")
+        body.append(f"    LOOP_OUTPUT_CLAMPED_{loop_name} := CLX_ClampReal(LOOP_OUTPUT_UNCLAMPED_{loop_name}, {out_min:.1f}, {out_max:.1f});")
+        if write_output:
+            body.append(f"    {out} := LOOP_OUTPUT_CLAMPED_{loop_name};")
+        body.append("    PREV_ERROR := ERROR;")
+        body.append("END_IF;")
 
         block_name = f"FB_LOOP_{self._block_suffix(loop.loop_tag)}"
         return self._render_function_block(block_name, symbol_types, external_symbols, body, local_vars)
@@ -607,8 +607,20 @@ class STGenerator:
         external_symbols: set[str] = set()
         body: list[str] = []
         local_vars: list[str] = []
+        seen_alarm_keys: set[tuple[str, str, str, str, str]] = set()
 
         for alarm in group.alarm_rules:
+            dedupe_key = (
+                alarm.source_tag,
+                alarm.alarm_tag,
+                alarm.alarm_type,
+                alarm.comparator,
+                str(alarm.threshold_tag or ""),
+            )
+            if dedupe_key in seen_alarm_keys:
+                continue
+            seen_alarm_keys.add(dedupe_key)
+
             source = self._symbol(alarm.source_tag)
             alarm_tag = self._symbol(alarm.alarm_tag)
             source_signal = st_codegen_utils.infer_signal_type(alarm.source_tag, alarm.source_type)
@@ -1226,10 +1238,6 @@ class STGenerator:
                 if command_symbol not in sequence_content:
                     errors.append(f"sequence command origin missing for {command_symbol}")
 
-        non_pid = [loop.loop_tag for loop in model.loops if loop.control_strategy.upper() != "PID"]
-        if non_pid:
-            errors.append(f"non-PID loops found: {', '.join(non_pid)}")
-
         if "system/system_state_manager.st" not in generated_contents:
             errors.append("missing system/system_state_manager.st")
         if "system/system_fault_manager.st" not in generated_contents:
@@ -1269,8 +1277,17 @@ class STGenerator:
             generated_contents[relative] = content
             equipment_blocks.append(f"FB_EQ_{self._block_suffix(routine.equipment_tag)}")
 
+        output_writer_owner: dict[str, str] = {}
         for loop in sorted(model.loops, key=lambda item: item.loop_tag):
-            content = self._logic_expansion_pass(self._render_loop_file(loop, symbol_types))
+            out_symbol = self._symbol(loop.output_tag_analog or loop.output_tag or st_codegen_utils.normalize_tag_with_suffix(loop.actuator_tag, "OUT"))
+            write_output = False
+            if loop.auto_owner == "loop_manager":
+                current_owner = output_writer_owner.get(out_symbol)
+                if current_owner is None:
+                    output_writer_owner[out_symbol] = loop.loop_tag
+                    write_output = True
+
+            content = self._logic_expansion_pass(self._render_loop_file(loop, symbol_types, write_output=write_output))
             stem = self._file_stem(loop.loop_tag)
             relative = f"control_loops/{stem}.st"
             self._ensure_no_inline_boolean_expressions(relative, content)

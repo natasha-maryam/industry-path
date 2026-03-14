@@ -1,0 +1,42 @@
+{
+  "project_id": "proj_001",
+  "current_version": 12,
+  "total_snapshots": 3,
+  "snapshots": [
+    {
+      "snapshot_id": "snap_012",
+      "version_number": 12,
+      "created_at": "2026-03-13T10:08:44Z",
+      "created_by": "automation.bot",
+      "summary": "Updated IO mapping and regenerated ST for CL-201",
+      "status": "success",
+      "artifacts": [
+        {
+          "artifact_type": "logic",
+          "artifact_path": "storage/projects/proj_001/versions/12/main.st",
+          "checksum_sha256": "ac56fb2aaaf96cbf2f7f567d78f42b4f9f9fd9f6db27ce4f6f7e998b1323a38e"
+        },
+        {
+          "artifact_type": "io_mapping",
+          "artifact_path": "storage/projects/proj_001/versions/12/io_mapping.json",
+          "checksum_sha256": "5b66ac185f57af1b2f719f6955c4f09a8fc43e1f66e8806f2ac7f164f5e2d65b"
+        }
+      ]
+    },
+    {
+      "snapshot_id": "snap_011",
+      "version_number": 11,
+      "created_at": "2026-03-12T19:20:10Z",
+      "created_by": "engineer.alex",
+      "summary": "Adjusted control loop gains",
+      "status": "warning",
+      "artifacts": [
+        {
+          "artifact_type": "logic",
+          "artifact_path": "storage/projects/proj_001/versions/11/main.st",
+          "checksum_sha256": "e12f2056fbac4b3ac95f36968af3a717a73e976f17191f4d92f2d0fca2f4ec45"
+        }
+      ]
+    }
+  ]
+}

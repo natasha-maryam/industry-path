@@ -2,37 +2,39 @@ export type ToolbarAction =
   | "upload"
   | "parse"
   | "generate"
+  | "generate_st"
+  | "io_mapping"
+  | "verify_st"
+  | "versions"
+  | "export_logic"
   | "simulate"
-  | "deploy"
-  | "monitor"
-  | "replay";
+  | "deploy";
 
 type CommandBarProps = {
   activeAction: ToolbarAction;
-  replayMode: boolean;
-  showLogic: boolean;
   loadingAction?: ToolbarAction | null;
+  disabledActions?: Partial<Record<ToolbarAction, boolean>>;
   onAction: (action: ToolbarAction) => void;
-  onToggleLogic: () => void;
 };
 
 const ACTIONS: Array<{ id: ToolbarAction; label: string; primary?: boolean }> = [
   { id: "upload", label: "Upload Documents" },
   { id: "parse", label: "Parse System" },
   { id: "generate", label: "Generate Control Logic" },
-  { id: "simulate", label: "Run Simulation", primary: true },
+  { id: "generate_st", label: "Generate ST" },
+  { id: "verify_st", label: "Verify ST" },
+  { id: "io_mapping", label: "Generate IO Mapping" },
   { id: "deploy", label: "Deploy PLC" },
-  { id: "monitor", label: "Start Monitoring" },
-  { id: "replay", label: "Replay" },
+  { id: "simulate", label: "Run Simulation", primary: true },
+  { id: "versions", label: "Versions" },
+  { id: "export_logic", label: "Export Logic" },
 ];
 
 export default function CommandBar({
   activeAction,
-  replayMode,
-  showLogic,
   loadingAction,
+  disabledActions = {},
   onAction,
-  onToggleLogic,
 }: CommandBarProps) {
   return (
     <header className="command-bar">
@@ -40,24 +42,20 @@ export default function CommandBar({
 
       <div className="command-actions">
         {ACTIONS.map((action) => {
-          const isReplayActive = action.id === "replay" && replayMode;
-          const isActive = activeAction === action.id || isReplayActive;
+          const isActive = activeAction === action.id;
           const isLoading = loadingAction === action.id;
+          const isDisabled = Boolean(disabledActions[action.id]);
           const classes = ["command-btn", action.primary ? "primary" : "", isActive ? "active" : ""]
             .filter(Boolean)
             .join(" ");
 
           return (
-            <button key={action.id} className={classes} disabled={isLoading} onClick={() => onAction(action.id)} type="button">
+            <button key={action.id} className={classes} disabled={isLoading || isDisabled} onClick={() => onAction(action.id)} type="button">
               {isLoading ? <span className="btn-loader" aria-hidden="true" /> : null}
               {action.label}
             </button>
           );
         })}
-
-        <button className={`command-btn ${showLogic ? "active" : ""}`} onClick={onToggleLogic} type="button">
-          View Logic
-        </button>
       </div>
     </header>
   );
