@@ -1,7 +1,6 @@
 version: "3.9"
 
 services:
-
   postgres:
     image: postgres:15
     container_name: crosslayerx-postgres
@@ -13,6 +12,8 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - crosslayerx-net
 
   neo4j:
     image: neo4j:5
@@ -24,6 +25,8 @@ services:
       - "7687:7687"
     volumes:
       - neo4j_data:/data
+    networks:
+      - crosslayerx-net
 
   influxdb:
     image: influxdb:2
@@ -32,6 +35,8 @@ services:
       - "8086:8086"
     volumes:
       - influx_data:/var/lib/influxdb2
+    networks:
+      - crosslayerx-net
 
   grafana:
     image: grafana/grafana
@@ -40,15 +45,33 @@ services:
       - "3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
+    networks:
+      - crosslayerx-net
 
   prometheus:
     image: prom/prometheus
     container_name: crosslayerx-prometheus
     ports:
       - "9090:9090"
+    networks:
+      - crosslayerx-net
+
+  openplc:
+    image: tuttas/openplc_v3:latest
+    container_name: crosslayerx-openplc
+    ports:
+      - "8080:8080"
+      - "502:502"
+    networks:
+      - crosslayerx-net
 
 volumes:
   postgres_data:
   neo4j_data:
   influx_data:
   grafana_data:
+  openplc_data:
+
+networks:
+  crosslayerx-net:
+    name: crosslayerx-net

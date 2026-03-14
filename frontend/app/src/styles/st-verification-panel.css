@@ -159,6 +159,29 @@
   color: #4f6071;
 }
 
+.st-verification-file-status {
+  border: 1px solid #bcc8d4;
+  border-radius: 999px;
+  padding: 0.01rem 0.28rem;
+  font-size: 0.56rem;
+  text-transform: uppercase;
+}
+
+.st-verification-file-status.passed {
+  color: #14532d;
+  border-color: #59b080;
+}
+
+.st-verification-file-status.warnings {
+  color: #8a4b00;
+  border-color: #d2a55e;
+}
+
+.st-verification-file-status.failed {
+  color: #7c1d1d;
+  border-color: #d58282;
+}
+
 .st-verification-error-list {
   margin-top: 0.2rem;
   margin-left: 0.5rem;

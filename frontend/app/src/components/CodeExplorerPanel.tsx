@@ -12,6 +12,21 @@ export type GeneratedLogicFile = {
   content: string;
 };
 
+export type STDiagnosticMarker = {
+  line: number;
+  column: number;
+  severity: "error" | "warning";
+  code: string;
+  message: string;
+};
+
+export type STJumpLocation = {
+  file: string;
+  line: number;
+  column: number;
+  nonce?: number;
+};
+
 export type CodeExplorerPanelProps = {
   files?: GeneratedLogicFile[];
   bundledCode?: string;
@@ -22,6 +37,8 @@ export type CodeExplorerPanelProps = {
   onRetry?: () => void;
   requiredPreviousStep?: string;
   warningMessage?: string | null;
+  diagnosticsByFile?: Record<string, STDiagnosticMarker[]>;
+  jumpToLocation?: STJumpLocation | null;
   className?: string;
 };
 
@@ -110,11 +127,13 @@ export default function CodeExplorerPanel({
   onRetry,
   requiredPreviousStep = "ST Generation",
   warningMessage = null,
+  diagnosticsByFile = {},
+  jumpToLocation = null,
   className = "",
 }: CodeExplorerPanelProps) {
   const editorMountRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
-  const modelRef = useRef<monaco.editor.ITextModel | null>(null);
+  const modelByPathRef = useRef<Map<string, monaco.editor.ITextModel>>(new Map());
 
   const resolvedFiles = useMemo<GeneratedLogicFile[]>(() => {
     const sourceFiles = files && files.length > 0 ? files : parseBundledFiles(bundledCode);
@@ -170,15 +189,57 @@ export default function CodeExplorerPanel({
     return resolvedFiles.find((file) => file.path === selectedPath) ?? null;
   }, [resolvedFiles, selectedPath]);
 
+  const normalizedDiagnosticsByFile = useMemo<Record<string, STDiagnosticMarker[]>>(() => {
+    const output: Record<string, STDiagnosticMarker[]> = {};
+    for (const [rawPath, markers] of Object.entries(diagnosticsByFile)) {
+      const normalizedPath = normalizePath(rawPath);
+      output[normalizedPath] = markers;
+      const pathParts = normalizedPath.split("/");
+      if (pathParts[0] === "control_logic") {
+        const stripped = pathParts.slice(1).join("/");
+        if (stripped) {
+          output[stripped] = markers;
+        }
+      }
+    }
+    return output;
+  }, [diagnosticsByFile]);
+
+  const getOrCreateModel = (filePath: string, content: string): monaco.editor.ITextModel => {
+    const normalized = normalizePath(filePath);
+    const existing = modelByPathRef.current.get(normalized);
+    if (existing) {
+      if (existing.getValue() !== content) {
+        existing.setValue(content);
+      }
+      return existing;
+    }
+
+    const uri = monaco.Uri.parse(`inmemory://crosslayerx/${encodeURIComponent(normalized)}`);
+    const model = monaco.editor.createModel(content, "plaintext", uri);
+    modelByPathRef.current.set(normalized, model);
+    return model;
+  };
+
   useEffect(() => {
     if (!editorMountRef.current || loading || error || !hasFiles) {
       return;
     }
 
+    const activeFile = selectedFile ?? resolvedFiles[0];
+    const activeModel = getOrCreateModel(activeFile.path, activeFile.content || "");
+
+    const filePathSet = new Set(resolvedFiles.map((file) => normalizePath(file.path)));
+    for (const [filePath, model] of modelByPathRef.current.entries()) {
+      if (!filePathSet.has(filePath)) {
+        model.dispose();
+        modelByPathRef.current.delete(filePath);
+      }
+    }
+
     if (!editorRef.current) {
-      modelRef.current = monaco.editor.createModel(selectedFile?.content || "", "plaintext");
       editorRef.current = monaco.editor.create(editorMountRef.current, {
-        model: modelRef.current,
+        model: activeModel,
         readOnly: true,
         automaticLayout: true,
         minimap: { enabled: false },
@@ -190,16 +251,68 @@ export default function CodeExplorerPanel({
       return;
     }
 
-    if (modelRef.current) {
-      modelRef.current.setValue(selectedFile?.content || "");
-      editorRef.current.setModel(modelRef.current);
+    editorRef.current.setModel(activeModel);
+  }, [error, hasFiles, loading, resolvedFiles, selectedFile]);
+
+  useEffect(() => {
+    for (const file of resolvedFiles) {
+      const model = getOrCreateModel(file.path, file.content || "");
+      const markers = (normalizedDiagnosticsByFile[normalizePath(file.path)] ?? []).map((item) => ({
+        startLineNumber: Math.max(1, item.line || 1),
+        startColumn: Math.max(1, item.column || 1),
+        endLineNumber: Math.max(1, item.line || 1),
+        endColumn: Math.max(1, (item.column || 1) + 1),
+        message: item.message,
+        code: item.code,
+        severity: item.severity === "error" ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning,
+      }));
+      monaco.editor.setModelMarkers(model, "st-verifier", markers);
     }
-  }, [error, hasFiles, loading, selectedFile]);
+  }, [normalizedDiagnosticsByFile, resolvedFiles]);
+
+  useEffect(() => {
+    if (!jumpToLocation) {
+      return;
+    }
+    const normalizedPath = normalizePath(jumpToLocation.file);
+    const directMatch = resolvedFiles.find((file) => normalizePath(file.path) === normalizedPath);
+    const fallbackMatch = normalizedPath.startsWith("control_logic/")
+      ? resolvedFiles.find((file) => normalizePath(file.path) === normalizedPath.replace(/^control_logic\//, ""))
+      : null;
+    const targetFile = directMatch ?? fallbackMatch;
+    if (!targetFile) {
+      return;
+    }
+
+    setSelectedPath(targetFile.path);
+    onSelectFile?.(targetFile.path);
+
+    const lineNumber = Math.max(1, jumpToLocation.line || 1);
+    const column = Math.max(1, jumpToLocation.column || 1);
+
+    window.setTimeout(() => {
+      if (!editorRef.current) {
+        return;
+      }
+      editorRef.current.revealPositionInCenter({ lineNumber, column });
+      editorRef.current.setPosition({ lineNumber, column });
+      editorRef.current.focus();
+      editorRef.current.setSelection({
+        startLineNumber: lineNumber,
+        startColumn: column,
+        endLineNumber: lineNumber,
+        endColumn: column + 1,
+      });
+    }, 0);
+  }, [jumpToLocation, onSelectFile, resolvedFiles]);
 
   useEffect(() => {
     return () => {
       editorRef.current?.dispose();
-      modelRef.current?.dispose();
+      for (const model of modelByPathRef.current.values()) {
+        model.dispose();
+      }
+      modelByPathRef.current.clear();
     };
   }, []);
 

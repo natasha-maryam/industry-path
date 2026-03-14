@@ -1,4 +1,5 @@
 import { Suspense, lazy } from "react";
+import type { IOMappingIssue, IOMappingTableRow } from "../services/api";
 import type { Equipment } from "./rightTabs/types";
 
 const RightDetailsTab = lazy(() => import("./rightTabs/RightDetailsTab"));
@@ -15,7 +16,12 @@ type DetailsPanelProps = {
   activeTab: RightTab;
   replayPoint: number;
   selectedEquipment: Equipment;
+  selectedNodeId?: string;
   tracePath: string[];
+  ioMappingRows?: IOMappingTableRow[];
+  ioMappingIssues?: IOMappingIssue[];
+  selectedIOMappingTag?: string | null;
+  onSelectIOMappingTag?: (tag: string) => void;
   onTabChange: (tab: RightTab) => void;
 };
 
@@ -25,7 +31,12 @@ export default function DetailsPanel({
   activeTab,
   replayPoint,
   selectedEquipment,
+  selectedNodeId = "",
   tracePath,
+  ioMappingRows = [],
+  ioMappingIssues = [],
+  selectedIOMappingTag = null,
+  onSelectIOMappingTag,
   onTabChange,
 }: DetailsPanelProps) {
   const renderActiveTab = () => {
@@ -42,7 +53,15 @@ export default function DetailsPanel({
       return <RightReplayTab replayPoint={replayPoint} />;
     }
     if (activeTab === "IO Mapping") {
-      return <RightIOMappingTab selectedEquipment={selectedEquipment} />;
+      return (
+        <RightIOMappingTab
+          selectedNodeId={selectedNodeId}
+          mappingRows={ioMappingRows}
+          mappingIssues={ioMappingIssues}
+          selectedTag={selectedIOMappingTag}
+          onSelectTag={onSelectIOMappingTag}
+        />
+      );
     }
     if (activeTab === "Versions") {
       return <RightVersionsTab />;

@@ -1,10 +1,10 @@
-import CodeExplorerPanel, { type GeneratedLogicFile } from "./CodeExplorerPanel";
+import CodeExplorerPanel, { type GeneratedLogicFile, type STDiagnosticMarker, type STJumpLocation } from "./CodeExplorerPanel";
 import RuntimeValidationPanel, { type RuntimeValidationPanelData } from "./RuntimeValidationPanel";
 import SimulationValidationPanel, { type SimulationValidationPanelData } from "./SimulationValidationPanel";
-import STVerificationPanel, { type STVerificationError } from "./STVerificationPanel";
+import STVerificationPanel, { type STVerificationIssueItem } from "./STVerificationPanel";
 import IOMappingTablePanel from "./IOMappingTablePanel";
 import VersionHistoryPanel from "./VersionHistoryPanel";
-import type { IOMappingSummaryByType, IOMappingTableRow, STVerificationPanelPayload } from "../services/api";
+import type { IOMappingSummaryByType, IOMappingTableRow, STWorkspaceVerificationResponse } from "../services/api";
 
 type BottomView = "simulation" | "monitoring" | "logic";
 type CodePanelMode = "control_logic" | "generated_st" | "verification";
@@ -19,13 +19,17 @@ type BottomPanelsProps = {
   generatedSTFiles?: GeneratedLogicFile[];
   selectedSTFilePath?: string | null;
   onSelectSTFile?: (path: string) => void;
+  stDiagnosticsByFile?: Record<string, STDiagnosticMarker[]>;
+  stJumpLocation?: STJumpLocation | null;
   logicWarnings?: string[];
   logicValidationIssues?: string[];
-  stVerificationData?: STVerificationPanelPayload | null;
+  stVerificationData?: STWorkspaceVerificationResponse | null;
   isVerifyingST?: boolean;
   stVerificationFailedMessage?: string | null;
-  onSelectVerificationIssue?: (issue: STVerificationError) => void;
+  onSelectVerificationIssue?: (issue: STVerificationIssueItem) => void;
   ioMappingRows?: IOMappingTableRow[];
+  selectedIOMappingTag?: string | null;
+  onSelectIOMappingTag?: (tag: string) => void;
   ioMappingSummary?: IOMappingSummaryByType | null;
   isGeneratingIOMapping?: boolean;
   ioMappingFailedMessage?: string | null;
@@ -34,6 +38,10 @@ type BottomPanelsProps = {
   simulationValidationData?: SimulationValidationPanelData | null;
   simulationFailedMessage?: string | null;
   onRetryIOMapping?: () => void;
+  onGenerateIOMapping?: () => void;
+  onAutoAssignIOMappingChannels?: () => void;
+  onExportIOMappingCsv?: () => void;
+  onValidateIOMapping?: () => void;
   onRetrySTVerification?: () => void;
   onRetryRuntime?: () => void;
   onRetrySimulation?: () => void;
@@ -52,6 +60,8 @@ export default function BottomPanels({
   generatedSTFiles = [],
   selectedSTFilePath = null,
   onSelectSTFile,
+  stDiagnosticsByFile = {},
+  stJumpLocation = null,
   logicWarnings = [],
   logicValidationIssues = [],
   stVerificationData = null,
@@ -59,6 +69,8 @@ export default function BottomPanels({
   stVerificationFailedMessage = null,
   onSelectVerificationIssue,
   ioMappingRows = [],
+  selectedIOMappingTag = null,
+  onSelectIOMappingTag,
   ioMappingSummary = null,
   isGeneratingIOMapping = false,
   ioMappingFailedMessage = null,
@@ -67,6 +79,10 @@ export default function BottomPanels({
   simulationValidationData = null,
   simulationFailedMessage = null,
   onRetryIOMapping,
+  onGenerateIOMapping,
+  onAutoAssignIOMappingChannels,
+  onExportIOMappingCsv,
+  onValidateIOMapping,
   onRetrySTVerification,
   onRetryRuntime,
   onRetrySimulation,
@@ -118,6 +134,8 @@ export default function BottomPanels({
             bundledCode={generatedSTCode}
             selectedFilePath={selectedSTFilePath}
             onSelectFile={onSelectSTFile}
+            diagnosticsByFile={stDiagnosticsByFile}
+            jumpToLocation={stJumpLocation}
             loading={isGeneratingST}
             requiredPreviousStep="Generate ST"
           />
@@ -156,9 +174,15 @@ export default function BottomPanels({
             </div>
             <IOMappingTablePanel
               rows={ioMappingRows}
+              selectedTag={selectedIOMappingTag}
+              onSelectRow={onSelectIOMappingTag}
               loading={isGeneratingIOMapping}
               failedMessage={ioMappingFailedMessage}
               onRetry={onRetryIOMapping}
+              onGenerateMapping={onGenerateIOMapping}
+              onAutoAssignChannels={onAutoAssignIOMappingChannels}
+              onExportCsv={onExportIOMappingCsv}
+              onValidateMapping={onValidateIOMapping}
               requiredPreviousStep="Logic Completion + Plant Graph"
             />
           </>

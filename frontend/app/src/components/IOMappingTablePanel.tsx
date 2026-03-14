@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Search } from "lucide-react";
 import type { IOMappingTableRow } from "../services/api";
 import "../styles/io-mapping-table-panel.css";
@@ -7,9 +7,15 @@ const VALID_IO_TYPES = new Set(["AI", "AO", "DI", "DO"]);
 
 export type IOMappingTablePanelProps = {
   rows: IOMappingTableRow[];
+  selectedTag?: string | null;
+  onSelectRow?: (tag: string) => void;
   loading?: boolean;
   failedMessage?: string | null;
   onRetry?: () => void;
+  onGenerateMapping?: () => void;
+  onAutoAssignChannels?: () => void;
+  onExportCsv?: () => void;
+  onValidateMapping?: () => void;
   requiredPreviousStep?: string;
   pageSizeOptions?: number[];
   defaultPageSize?: number;
@@ -22,29 +28,21 @@ type RowWithValidation = IOMappingTableRow & {
   validations: ValidationCode[];
 };
 
-const VALIDATION_LABELS: Record<ValidationCode, string> = {
-  duplicate_tag: "Duplicate Tag",
-  invalid_io_type: "Invalid IO Type",
-  missing_signal: "Missing Signal",
-  channel_overflow: "Channel Overflow",
-};
-
 const normalizeToken = (value: string): string => value.toLowerCase().trim();
 
 const safeText = (value: string | number): string => String(value ?? "").trim();
 
-const statusClassForValidation = (code: ValidationCode): "warning" | "error" => {
-  if (code === "duplicate_tag" || code === "channel_overflow") {
-    return "error";
-  }
-  return "warning";
-};
-
 export default function IOMappingTablePanel({
   rows,
+  selectedTag = null,
+  onSelectRow,
   loading = false,
   failedMessage = null,
   onRetry,
+  onGenerateMapping,
+  onAutoAssignChannels,
+  onExportCsv,
+  onValidateMapping,
   requiredPreviousStep = "Logic Completion + Plant Graph",
   pageSizeOptions = [10, 20, 50],
   defaultPageSize = 10,
@@ -55,6 +53,14 @@ export default function IOMappingTablePanel({
   const [equipmentFilter, setEquipmentFilter] = useState<string>("all");
   const [pageSize, setPageSize] = useState<number>(defaultPageSize);
   const [page, setPage] = useState<number>(1);
+
+  useEffect(() => {
+    if (!selectedTag) {
+      return;
+    }
+    setTagFilter(selectedTag);
+    setPage(1);
+  }, [selectedTag]);
 
   const rowsWithValidation = useMemo<RowWithValidation[]>(() => {
     const tagCounts = new Map<string, number>();
@@ -165,6 +171,20 @@ export default function IOMappingTablePanel({
   return (
     <section className="io-mapping-table-panel">
       {warningCount > 0 ? <div className="io-mapping-warning">Validation warnings found ({warningCount}). Review highlighted rows; workspace remains active.</div> : null}
+      <div className="io-mapping-actions">
+        <button type="button" onClick={onGenerateMapping} disabled={!onGenerateMapping || loading}>
+          Generate Mapping
+        </button>
+        <button type="button" onClick={onAutoAssignChannels} disabled={!onAutoAssignChannels || loading || rows.length === 0}>
+          Auto-Assign Channels
+        </button>
+        <button type="button" onClick={onExportCsv} disabled={!onExportCsv || rows.length === 0}>
+          Export CSV
+        </button>
+        <button type="button" onClick={onValidateMapping} disabled={!onValidateMapping || rows.length === 0}>
+          Validate Mapping
+        </button>
+      </div>
       <header className="io-mapping-toolbar">
         <div className="io-mapping-search-wrap">
           <Search size={13} />
@@ -221,42 +241,26 @@ export default function IOMappingTablePanel({
           <thead>
             <tr>
               <th>Tag</th>
-              <th>Device Type</th>
-              <th>Signal Type</th>
-              <th>IO Type</th>
+              <th>Type</th>
+              <th>IO</th>
               <th>PLC ID</th>
               <th>Slot</th>
               <th>Channel</th>
-              <th>Description</th>
-              <th>Equipment ID</th>
-              <th>Validation</th>
             </tr>
           </thead>
           <tbody>
             {pageRows.map((row, rowIndex) => (
-              <tr key={`${row.tag}-${row.plc_id}-${row.slot}-${row.channel}-${rowIndex}`}>
+              <tr
+                key={`${row.tag}-${row.plc_id}-${row.slot}-${row.channel}-${rowIndex}`}
+                className={selectedTag && selectedTag.toUpperCase() === row.tag.toUpperCase() ? "io-mapping-row-selected" : ""}
+                onClick={() => onSelectRow?.(row.tag)}
+              >
                 <td className="mono">{row.tag}</td>
                 <td>{row.device_type}</td>
-                <td>{row.signal_type || "—"}</td>
                 <td className="mono">{row.io_type}</td>
                 <td className="mono">{row.plc_id}</td>
                 <td className="mono">{row.slot}</td>
                 <td className="mono">{row.channel}</td>
-                <td>{row.description || "—"}</td>
-                <td className="mono">{row.equipment_id}</td>
-                <td>
-                  {row.validations.length > 0 ? (
-                    <div className="io-mapping-badges">
-                      {row.validations.map((validationCode) => (
-                        <span key={`${row.tag}-${validationCode}`} className={`io-badge ${statusClassForValidation(validationCode)}`}>
-                          {VALIDATION_LABELS[validationCode]}
-                        </span>
-                      ))}
-                    </div>
-                  ) : (
-                    <span className="io-badge success">Valid</span>
-                  )}
-                </td>
               </tr>
             ))}
           </tbody>

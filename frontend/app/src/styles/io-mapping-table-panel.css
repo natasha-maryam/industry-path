@@ -25,6 +25,31 @@
   font-size: 0.62rem;
 }
 
+.io-mapping-actions {
+  border-bottom: 1px solid #d4dde6;
+  background: #f1f5f9;
+  padding: 0.36rem 0.56rem;
+  display: inline-flex;
+  gap: 0.34rem;
+  flex-wrap: wrap;
+}
+
+.io-mapping-actions button {
+  border: 1px solid #bcc8d4;
+  background: #f8fbfe;
+  border-radius: 4px;
+  padding: 0.18rem 0.45rem;
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: #243648;
+  cursor: pointer;
+}
+
+.io-mapping-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .io-mapping-search-wrap {
   border: 1px solid #bcc8d4;
   border-radius: 4px;
@@ -101,6 +126,10 @@
 
 .io-mapping-table tbody tr:nth-child(even) {
   background: #f8fbfe;
+}
+
+.io-mapping-table tbody tr.io-mapping-row-selected {
+  background: #dce8f4;
 }
 
 .io-mapping-table .mono {

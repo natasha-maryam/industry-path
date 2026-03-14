@@ -181,11 +181,43 @@ export type STVerificationServiceResponse = {
   panel: STVerificationPanelPayload;
 };
 
+export type STWorkspaceVerifyRequest = {
+  workspace_path: string;
+};
+
+export type STWorkspaceVerificationIssue = {
+  line: number;
+  column: number;
+  code: string;
+  message: string;
+};
+
+export type STWorkspaceVerificationFileResult = {
+  file: string;
+  status: "passed" | "warnings" | "failed";
+  errors: STWorkspaceVerificationIssue[];
+  warnings: STWorkspaceVerificationIssue[];
+};
+
+export type STWorkspaceVerificationSummary = {
+  files_checked: number;
+  error_count: number;
+  warning_count: number;
+};
+
+export type STWorkspaceVerificationResponse = {
+  status: "passed" | "passed_with_warnings" | "failed";
+  summary: STWorkspaceVerificationSummary;
+  files: STWorkspaceVerificationFileResult[];
+};
+
 export type VerifySTOptions = {
   maxAttempts?: number;
   initialDelayMs?: number;
   backoffFactor?: number;
 };
+
+export type VerifySTWorkspaceOptions = VerifySTOptions;
 
 export type IOMappingTableRow = {
   tag: string;
@@ -220,14 +252,91 @@ export type IOMappingGenerationApiResponse = {
   channels: IOMappingGenerationChannel[];
 };
 
+export type IOMappingIssue = {
+  code: string;
+  severity: "warning" | "error";
+  message: string;
+  tag?: string | null;
+};
+
+export type IOMappingEngineResponse = {
+  project_id?: string;
+  version_id?: string | null;
+  version_number?: number | null;
+  generated_at?: string;
+  is_active?: boolean;
+  status: "passed" | "passed_with_warnings" | "failed";
+  summary: {
+    total_signals: number;
+    warning_count: number;
+    error_count: number;
+  };
+  rows: Array<{
+    tag: string;
+    device_type: string;
+    signal_type: string;
+    io_type: string;
+    plc_id: string;
+    slot: number;
+    channel: number;
+    description: string;
+  }>;
+  issues: IOMappingIssue[];
+};
+
 export type IOMappingGenerationResult = {
+  status: "passed" | "passed_with_warnings" | "failed";
   project_id: string;
+  version_id?: string | null;
+  version_number?: number | null;
+  generated_at?: string;
+  is_active?: boolean;
   rows: IOMappingTableRow[];
   summary: IOMappingSummaryByType;
+  validation_summary: {
+    total_signals: number;
+    warning_count: number;
+    error_count: number;
+  };
+  issues: IOMappingIssue[];
   total: number;
 };
 
 export type GenerateIOMappingOptions = {
+  maxAttempts?: number;
+  initialDelayMs?: number;
+  backoffFactor?: number;
+};
+
+export type RuntimeDeployRequest = {
+  project_id: string;
+  workspace_path: string;
+  runtime_config: {
+    target_runtime: string;
+    ip_address: string;
+    protocol: string;
+    port?: number;
+  };
+};
+
+export type RuntimeDeployResponse = {
+  status: "passed" | "failed";
+  summary: {
+    files_loaded: number;
+    io_points_bound: number;
+    runtime_target: string;
+    project_name: string;
+  };
+  steps: Array<{
+    name: "create_project" | "import_st" | "apply_io_config" | "start_runtime";
+    status: "passed" | "failed";
+    message: string;
+  }>;
+  errors: string[];
+  warnings: string[];
+};
+
+export type DeployRuntimeOptions = {
   maxAttempts?: number;
   initialDelayMs?: number;
   backoffFactor?: number;
@@ -362,10 +471,113 @@ const adaptIOMappingGenerationResponse = (payload: IOMappingGenerationApiRespons
   }
 
   return {
+    status: "passed",
     project_id: payload.project_id,
     rows,
     summary,
+    validation_summary: {
+      total_signals: rows.length,
+      warning_count: 0,
+      error_count: 0,
+    },
+    issues: [],
     total: rows.length,
+  };
+};
+
+const adaptIOMappingEngineResponse = (payload: IOMappingEngineResponse, projectId: string): IOMappingGenerationResult => {
+  const rows: IOMappingTableRow[] = payload.rows.map((row) => ({
+    tag: row.tag,
+    device_type: row.device_type,
+    signal_type: row.signal_type,
+    io_type: row.io_type,
+    plc_id: row.plc_id,
+    slot: row.slot,
+    channel: row.channel,
+    description: row.description,
+    equipment_id: inferEquipmentId(row.tag),
+  }));
+
+  const summary: IOMappingSummaryByType = { AI: 0, AO: 0, DI: 0, DO: 0 };
+  for (const row of rows) {
+    const ioType = row.io_type.toUpperCase() as keyof IOMappingSummaryByType;
+    if (ioType in summary) {
+      summary[ioType] += 1;
+    }
+  }
+
+  return {
+    status: payload.status,
+    project_id: payload.project_id || projectId,
+    version_id: payload.version_id ?? null,
+    version_number: payload.version_number ?? null,
+    generated_at: payload.generated_at,
+    is_active: payload.is_active ?? true,
+    rows,
+    summary,
+    validation_summary: payload.summary,
+    issues: payload.issues,
+    total: rows.length,
+  };
+};
+
+const adaptRuntimeDeployResponse = (
+  payload: RuntimeDeployResponse,
+  projectId: string
+): RuntimeValidationPanelResponse => {
+  const stepToCheckName: Record<string, string> = {
+    create_project: "Project Creation",
+    import_st: "ST Import",
+    apply_io_config: "IO Binding",
+    start_runtime: "Runtime Start",
+  };
+
+  const checks = payload.steps.map((step, index) => ({
+    check_id: `runtime-step-${index + 1}`,
+    check_name: stepToCheckName[step.name] || step.name,
+    status: step.status === "passed" ? "success" : "failed",
+    expected_value: "passed",
+    actual_value: step.status,
+    tolerance: null,
+    message: step.message,
+  }));
+
+  const checksPassed = checks.filter((item) => item.status === "success").length;
+  const checksFailed = checks.filter((item) => item.status === "failed").length;
+  const checksWarning = 0;
+
+  const diagnostics = [
+    ...payload.errors.map((message) => ({
+      step: "deployment_readiness" as const,
+      severity: "error" as const,
+      message,
+      detail: null,
+    })),
+    ...payload.warnings.map((message) => ({
+      step: "deployment_readiness" as const,
+      severity: "warning" as const,
+      message,
+      detail: null,
+    })),
+  ];
+
+  const stepStatusByName = new Map(payload.steps.map((step) => [step.name, step.status === "passed" ? "success" : "failed"]));
+
+  return {
+    project_id: projectId,
+    run_id: `runtime-${Date.now()}`,
+    validated_at: new Date().toISOString(),
+    overall_status: payload.status === "passed" ? "success" : "failed",
+    checks_passed: checksPassed,
+    checks_failed: checksFailed,
+    checks_warning: checksWarning,
+    checks,
+    project_creation_status: stepStatusByName.get("create_project") || "idle",
+    st_import_status: stepStatusByName.get("import_st") || "idle",
+    io_binding_status: stepStatusByName.get("apply_io_config") || "idle",
+    runtime_start_status: stepStatusByName.get("start_runtime") || "idle",
+    deployment_readiness_status: payload.status === "passed" ? "success" : "failed",
+    diagnostics,
   };
 };
 
@@ -570,6 +782,40 @@ export async function verifySTLogic(projectId: string): Promise<STVerificationSe
   return adaptSTVerificationResponse(response.data);
 }
 
+export async function verifySTWorkspace(request: STWorkspaceVerifyRequest): Promise<STWorkspaceVerificationResponse> {
+  const response = await api.post<STWorkspaceVerificationResponse>("/verify-st", request);
+  return response.data;
+}
+
+export async function verifySTWorkspaceWithRetry(
+  workspacePathOrProjectId: string,
+  options: VerifySTWorkspaceOptions = {}
+): Promise<STWorkspaceVerificationResponse> {
+  const maxAttempts = options.maxAttempts ?? 3;
+  const initialDelayMs = options.initialDelayMs ?? 700;
+  const backoffFactor = options.backoffFactor ?? 2;
+
+  let attempt = 0;
+  let delayMs = initialDelayMs;
+  let lastError: unknown = null;
+
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    try {
+      return await verifySTWorkspace({ workspace_path: workspacePathOrProjectId });
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxAttempts) {
+        throw error;
+      }
+      await delay(delayMs);
+      delayMs = Math.max(initialDelayMs, Math.floor(delayMs * backoffFactor));
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Workspace ST verification failed after retries");
+}
+
 export async function verifySTLogicWithRetry(
   projectId: string,
   options: VerifySTOptions = {}
@@ -600,8 +846,13 @@ export async function verifySTLogicWithRetry(
 }
 
 export async function generateIOMapping(projectId: string): Promise<IOMappingGenerationResult> {
-  const response = await api.post<IOMappingGenerationApiResponse>(`/projects/${projectId}/logic/generate-io-mapping`);
-  return adaptIOMappingGenerationResponse(response.data);
+  const response = await api.post<IOMappingEngineResponse>(`/projects/${projectId}/io-mapping/generate`);
+  return adaptIOMappingEngineResponse(response.data, projectId);
+}
+
+export async function getLatestIOMapping(projectId: string): Promise<IOMappingGenerationResult> {
+  const response = await api.get<IOMappingEngineResponse>(`/projects/${projectId}/io-mapping/latest`);
+  return adaptIOMappingEngineResponse(response.data, projectId);
 }
 
 export async function generateIOMappingWithRetry(
@@ -711,6 +962,40 @@ export async function runSimulation(projectId: string): Promise<Record<string, u
 export async function deployProject(projectId: string): Promise<Record<string, unknown>> {
   const response = await api.post<Record<string, unknown>>(`/projects/${projectId}/deploy`);
   return response.data;
+}
+
+export async function deployRuntime(payload: RuntimeDeployRequest): Promise<RuntimeValidationPanelResponse> {
+  const response = await api.post<RuntimeDeployResponse>("/deploy-runtime", payload);
+  return adaptRuntimeDeployResponse(response.data, payload.project_id);
+}
+
+export async function deployRuntimeWithRetry(
+  payload: RuntimeDeployRequest,
+  options: DeployRuntimeOptions = {}
+): Promise<RuntimeValidationPanelResponse> {
+  const maxAttempts = options.maxAttempts ?? 2;
+  const initialDelayMs = options.initialDelayMs ?? 800;
+  const backoffFactor = options.backoffFactor ?? 2;
+
+  let attempt = 0;
+  let delayMs = initialDelayMs;
+  let lastError: unknown = null;
+
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    try {
+      return await deployRuntime(payload);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxAttempts) {
+        throw error;
+      }
+      await delay(delayMs);
+      delayMs = Math.max(initialDelayMs, Math.floor(delayMs * backoffFactor));
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Runtime deployment failed after retries");
 }
 
 export async function getMonitoring(projectId: string): Promise<Record<string, unknown>> {

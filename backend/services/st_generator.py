@@ -19,6 +19,17 @@ class STGenerator:
         self.logger = logging.getLogger(__name__)
 
     @staticmethod
+    def _dedupe_preserve_order(items: list[str]) -> list[str]:
+        seen: set[str] = set()
+        output: list[str] = []
+        for item in items:
+            if item in seen:
+                continue
+            seen.add(item)
+            output.append(item)
+        return output
+
+    @staticmethod
     def _write_file(base_dir: Path, relative_path: str, content: str) -> GeneratedSTFile:
         target = base_dir / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -747,6 +758,13 @@ class STGenerator:
     ) -> str:
         self._validate_module_order(["interlocks", "sequences", "equipment", "loops", "alarms"])
 
+        equipment_blocks = self._dedupe_preserve_order(equipment_blocks)
+        loop_blocks = self._dedupe_preserve_order(loop_blocks)
+        interlock_blocks = self._dedupe_preserve_order(interlock_blocks)
+        alarm_blocks = self._dedupe_preserve_order(alarm_blocks)
+        sequence_blocks = self._dedupe_preserve_order(sequence_blocks)
+        system_blocks = self._dedupe_preserve_order(system_blocks)
+
         lines = ["PROGRAM Main", "VAR"]
 
         lines.append("    (* system supervisors first *)")
@@ -880,15 +898,82 @@ class STGenerator:
         symbol_types: dict[str, str],
     ) -> str:
         lines = content.splitlines()
+        section_tokens = {"VAR", "VAR_GLOBAL", "VAR_INPUT", "VAR_OUTPUT", "VAR_EXTERNAL", "VAR_IN_OUT", "VAR_TEMP"}
+        decl_pattern = re.compile(r"\s*([A-Z_][A-Z0-9_]*)\s*:\s*([A-Z_][A-Z0-9_]*)", flags=re.IGNORECASE)
+
+        # Merge duplicate section types by moving unique declarations to first section and removing later duplicates.
+        section_ranges: list[dict] = []
+        section_stack: list[dict] = []
+        for idx, line in enumerate(lines):
+            token = line.strip().upper()
+            if token in section_tokens:
+                current = {"type": token, "start": idx, "end": None}
+                section_ranges.append(current)
+                section_stack.append(current)
+                continue
+            if token == "END_VAR" and section_stack:
+                current = section_stack.pop()
+                current["end"] = idx
+
+        ranges_by_type: dict[str, list[dict]] = {}
+        for section in section_ranges:
+            if section["end"] is None:
+                continue
+            ranges_by_type.setdefault(section["type"], []).append(section)
+
+        remove_indices: set[int] = set()
+        insertions: dict[int, list[str]] = {}
+
+        for section_type, sections_for_type in ranges_by_type.items():
+            if len(sections_for_type) <= 1:
+                continue
+            keeper = sections_for_type[0]
+            keeper_declared: set[str] = set()
+            for idx in range(keeper["start"] + 1, keeper["end"]):
+                match = decl_pattern.match(lines[idx])
+                if match:
+                    keeper_declared.add(match.group(1).upper())
+
+            for duplicate in sections_for_type[1:]:
+                moved_lines: list[str] = []
+                for idx in range(duplicate["start"] + 1, duplicate["end"]):
+                    match = decl_pattern.match(lines[idx])
+                    if not match:
+                        continue
+                    name = match.group(1).upper()
+                    if name in keeper_declared:
+                        continue
+                    keeper_declared.add(name)
+                    moved_lines.append(lines[idx])
+
+                if moved_lines:
+                    insertions.setdefault(keeper["end"], []).extend(moved_lines)
+
+                for idx in range(duplicate["start"], duplicate["end"] + 1):
+                    remove_indices.add(idx)
+
+        if insertions or remove_indices:
+            merged_lines: list[str] = []
+            for idx, line in enumerate(lines):
+                if idx in insertions:
+                    merged_lines.extend(insertions[idx])
+                if idx in remove_indices:
+                    continue
+                merged_lines.append(line)
+            if len(lines) in insertions:
+                merged_lines.extend(insertions[len(lines)])
+            lines = merged_lines
+
         sections: list[dict] = []
         declared: dict[str, dict] = {}
         reserved = self._reserved_tokens()
+        duplicate_decl_indices: set[int] = set()
 
         in_var = False
         current_section: dict | None = None
         for idx, line in enumerate(lines):
             stripped = line.strip().upper()
-            if stripped in {"VAR", "VAR_GLOBAL", "VAR_INPUT", "VAR_OUTPUT", "VAR_EXTERNAL", "VAR_IN_OUT", "VAR_TEMP"}:
+            if stripped in section_tokens:
                 in_var = True
                 current_section = {"type": stripped, "start": idx, "end": None}
                 sections.append(current_section)
@@ -900,16 +985,45 @@ class STGenerator:
                 current_section = None
                 continue
             if in_var:
-                match = re.match(r"\s*([A-Z_][A-Z0-9_]*)\s*:\s*([A-Z_][A-Z0-9_]*)", line, flags=re.IGNORECASE)
+                match = decl_pattern.match(line)
                 if match:
                     name = match.group(1).upper()
+                    if name in declared:
+                        duplicate_decl_indices.add(idx)
+                        continue
                     declared[name] = {"line": idx, "type": match.group(2).upper(), "section": current_section["type"] if current_section else "VAR"}
+
+        if duplicate_decl_indices:
+            lines = [line for idx, line in enumerate(lines) if idx not in duplicate_decl_indices]
+            # Rebuild declaration map after duplicate line removal.
+            sections = []
+            declared = {}
+            in_var = False
+            current_section = None
+            for idx, line in enumerate(lines):
+                stripped = line.strip().upper()
+                if stripped in section_tokens:
+                    in_var = True
+                    current_section = {"type": stripped, "start": idx, "end": None}
+                    sections.append(current_section)
+                    continue
+                if in_var and stripped == "END_VAR":
+                    in_var = False
+                    if current_section is not None:
+                        current_section["end"] = idx
+                    current_section = None
+                    continue
+                if in_var:
+                    match = decl_pattern.match(line)
+                    if match:
+                        name = match.group(1).upper()
+                        declared[name] = {"line": idx, "type": match.group(2).upper(), "section": current_section["type"] if current_section else "VAR"}
 
         executable_lines = []
         in_var = False
         for line in lines:
             stripped = line.strip().upper()
-            if stripped in {"VAR", "VAR_GLOBAL", "VAR_INPUT", "VAR_OUTPUT", "VAR_EXTERNAL", "VAR_IN_OUT", "VAR_TEMP"}:
+            if stripped in section_tokens:
                 in_var = True
                 continue
             if in_var and stripped == "END_VAR":
@@ -1274,7 +1388,10 @@ class STGenerator:
             stem = self._file_stem(routine.equipment_tag)
             relative = f"equipment/{stem}.st"
             self._ensure_no_inline_boolean_expressions(relative, content)
-            generated_contents[relative] = content
+            if relative in generated_contents:
+                self.logger.warning("Skipping duplicate equipment ST file path: %s", relative)
+            else:
+                generated_contents[relative] = content
             equipment_blocks.append(f"FB_EQ_{self._block_suffix(routine.equipment_tag)}")
 
         output_writer_owner: dict[str, str] = {}
@@ -1291,7 +1408,10 @@ class STGenerator:
             stem = self._file_stem(loop.loop_tag)
             relative = f"control_loops/{stem}.st"
             self._ensure_no_inline_boolean_expressions(relative, content)
-            generated_contents[relative] = content
+            if relative in generated_contents:
+                self.logger.warning("Skipping duplicate control loop ST file path: %s", relative)
+            else:
+                generated_contents[relative] = content
             loop_blocks.append(f"FB_LOOP_{self._block_suffix(loop.loop_tag)}")
 
         for interlock in sorted(model.interlocks, key=lambda item: item.interlock_id):
@@ -1299,7 +1419,10 @@ class STGenerator:
             stem = self._file_stem(interlock.interlock_id)
             relative = f"interlocks/{stem}.st"
             self._ensure_no_inline_boolean_expressions(relative, content)
-            generated_contents[relative] = content
+            if relative in generated_contents:
+                self.logger.warning("Skipping duplicate interlock ST file path: %s", relative)
+            else:
+                generated_contents[relative] = content
             interlock_blocks.append(f"FB_INTERLOCK_{self._block_suffix(interlock.interlock_id)}")
 
         for group in sorted(model.alarm_groups, key=lambda item: item.group_name):
@@ -1307,7 +1430,10 @@ class STGenerator:
             stem = self._file_stem(group.group_name)
             relative = f"alarms/{stem}.st"
             self._ensure_no_inline_boolean_expressions(relative, content)
-            generated_contents[relative] = content
+            if relative in generated_contents:
+                self.logger.warning("Skipping duplicate alarm ST file path: %s", relative)
+            else:
+                generated_contents[relative] = content
             alarm_blocks.append(f"FB_ALARM_{self._block_suffix(group.group_name)}")
 
         include_startup = bool(model.startup_sequence)
@@ -1315,12 +1441,18 @@ class STGenerator:
         if include_startup:
             startup = self._logic_expansion_pass(self._render_sequence_file("startup", model.startup_sequence, symbol_types, "STARTUP_CMD"))
             self._ensure_no_inline_boolean_expressions("sequences/startup_sequence.st", startup)
-            generated_contents["sequences/startup_sequence.st"] = startup
+            if "sequences/startup_sequence.st" in generated_contents:
+                self.logger.warning("Skipping duplicate sequence ST file path: sequences/startup_sequence.st")
+            else:
+                generated_contents["sequences/startup_sequence.st"] = startup
             sequence_blocks.append("FB_STARTUP_SEQUENCE")
         if include_shutdown:
             shutdown = self._logic_expansion_pass(self._render_sequence_file("shutdown", model.shutdown_sequence, symbol_types, "SHUTDOWN_CMD"))
             self._ensure_no_inline_boolean_expressions("sequences/shutdown_sequence.st", shutdown)
-            generated_contents["sequences/shutdown_sequence.st"] = shutdown
+            if "sequences/shutdown_sequence.st" in generated_contents:
+                self.logger.warning("Skipping duplicate sequence ST file path: sequences/shutdown_sequence.st")
+            else:
+                generated_contents["sequences/shutdown_sequence.st"] = shutdown
             sequence_blocks.append("FB_SHUTDOWN_SEQUENCE")
 
         main_st = self._render_main(

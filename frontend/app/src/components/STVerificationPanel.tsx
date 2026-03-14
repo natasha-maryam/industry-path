@@ -1,91 +1,63 @@
 import { useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, FileWarning, XCircle } from "lucide-react";
-import type { PanelStatus, STVerificationPanelResponse, VerificationSeverity } from "../services/api";
+import type { STWorkspaceVerificationResponse } from "../services/api";
 import "../styles/st-verification-panel.css";
 
-export type STVerificationError = {
+export type STVerificationIssueItem = {
   file: string;
   message: string;
-  severity: VerificationSeverity;
+  severity: "warning" | "error";
   line?: number | null;
+  column?: number | null;
   code?: string | null;
 };
 
-type ExtendedVerificationCheck = STVerificationPanelResponse["checks"][number] & {
-  file?: string | null;
-};
-
-export type STVerificationPanelData = STVerificationPanelResponse & {
-  parsed_file_count?: number;
-  ast_validation_result?: "pass" | "fail" | "warning";
-  errors?: STVerificationError[];
-  checks?: ExtendedVerificationCheck[];
-};
-
 type STVerificationPanelProps = {
-  data: STVerificationPanelData | null;
+  data: STWorkspaceVerificationResponse | null;
   loading?: boolean;
   failedMessage?: string | null;
   onRetry?: () => void;
-  onSelectIssue?: (issue: STVerificationError) => void;
+  onSelectIssue?: (issue: STVerificationIssueItem) => void;
   requiredPreviousStep?: string;
 };
 
 type ErrorGroup = {
   file: string;
-  items: STVerificationError[];
+  status: "passed" | "warnings" | "failed";
+  items: STVerificationIssueItem[];
 };
 
-const statusLabel = (status: PanelStatus): string => {
-  if (status === "success") {
-    return "Pass";
+const statusLabel = (status: STWorkspaceVerificationResponse["status"]): string => {
+  if (status === "passed") {
+    return "Passed";
+  }
+  if (status === "passed_with_warnings") {
+    return "Passed with Warnings";
   }
   if (status === "failed") {
-    return "Fail";
+    return "Failed";
   }
-  if (status === "warning") {
-    return "Warning";
-  }
-  if (status === "running") {
-    return "Running";
-  }
-  return "Idle";
+  return "Failed";
 };
 
-const statusIcon = (status: PanelStatus) => {
-  if (status === "success") {
+const statusIcon = (status: STWorkspaceVerificationResponse["status"]) => {
+  if (status === "passed") {
     return <CheckCircle2 size={14} />;
   }
   if (status === "failed") {
     return <XCircle size={14} />;
   }
-  if (status === "warning") {
+  if (status === "passed_with_warnings") {
     return <AlertTriangle size={14} />;
   }
   return <FileWarning size={14} />;
 };
 
-const severityLabel = (severity: VerificationSeverity): string => {
+const severityLabel = (severity: "warning" | "error"): string => {
   if (severity === "error") {
     return "Error";
   }
-  if (severity === "warning") {
-    return "Warning";
-  }
-  return "Info";
-};
-
-const toAstStatus = (result: STVerificationPanelData["ast_validation_result"], fallback: PanelStatus): PanelStatus => {
-  if (result === "pass") {
-    return "success";
-  }
-  if (result === "fail") {
-    return "failed";
-  }
-  if (result === "warning") {
-    return "warning";
-  }
-  return fallback;
+  return "Warning";
 };
 
 const formatTimestamp = (value: string): string => {
@@ -95,17 +67,6 @@ const formatTimestamp = (value: string): string => {
   }
   return date.toLocaleString();
 };
-
-const deriveErrorsFromChecks = (checks: ExtendedVerificationCheck[]): STVerificationError[] =>
-  checks
-    .filter((check) => check.severity !== "info" || check.status === "failed")
-    .map((check) => ({
-      file: check.file || "main.st",
-      message: check.message,
-      severity: check.severity,
-      line: check.line_number,
-      code: check.check_name,
-    }));
 
 export default function STVerificationPanel({
   data,
@@ -117,40 +78,36 @@ export default function STVerificationPanel({
 }: STVerificationPanelProps) {
   const [expandedFiles, setExpandedFiles] = useState<Record<string, boolean>>({});
 
-  const verificationErrors = useMemo<STVerificationError[]>(() => {
+  const groupedErrors = useMemo<ErrorGroup[]>(() => {
     if (!data) {
       return [];
     }
-    if (data.errors && data.errors.length > 0) {
-      return data.errors;
-    }
-    return deriveErrorsFromChecks((data.checks as ExtendedVerificationCheck[]) ?? []);
-  }, [data]);
-
-  const groupedErrors = useMemo<ErrorGroup[]>(() => {
-    const grouped = new Map<string, STVerificationError[]>();
-    for (const error of verificationErrors) {
-      const file = error.file || "main.st";
-      const existing = grouped.get(file) ?? [];
-      grouped.set(file, [...existing, error]);
-    }
-    return [...grouped.entries()]
-      .map(([file, items]) => ({ file, items }))
+    return data.files
+      .map((fileResult) => {
+        const errors: STVerificationIssueItem[] = fileResult.errors.map((item) => ({
+          file: fileResult.file,
+          message: item.message,
+          severity: "error",
+          line: item.line,
+          column: item.column,
+          code: item.code,
+        }));
+        const warnings: STVerificationIssueItem[] = fileResult.warnings.map((item) => ({
+          file: fileResult.file,
+          message: item.message,
+          severity: "warning",
+          line: item.line,
+          column: item.column,
+          code: item.code,
+        }));
+        return {
+          file: fileResult.file,
+          status: fileResult.status,
+          items: [...errors, ...warnings],
+        };
+      })
       .sort((left, right) => left.file.localeCompare(right.file));
-  }, [verificationErrors]);
-
-  const parsedFileCount = useMemo<number>(() => {
-    if (!data) {
-      return 0;
-    }
-    if (typeof data.parsed_file_count === "number") {
-      return data.parsed_file_count;
-    }
-    if (groupedErrors.length > 0) {
-      return groupedErrors.length;
-    }
-    return Math.max(1, data.checks_passed + data.checks_failed + data.checks_warning > 0 ? 1 : 0);
-  }, [data, groupedErrors.length]);
+  }, [data]);
 
   if (loading) {
     return <section className="st-verification-panel st-verification-state">Verifying Structured Text syntax...</section>;
@@ -171,36 +128,32 @@ export default function STVerificationPanel({
     return <section className="st-verification-panel st-verification-state">No verification results available yet. Complete {requiredPreviousStep} first.</section>;
   }
 
-  const astStatus = toAstStatus(data.ast_validation_result, data.overall_status);
-
   return (
     <section className="st-verification-panel">
       <header className="st-verification-header">
         <div className="st-verification-title-row">
           <h3>ST Verification</h3>
-          <span className={`st-verification-status ${data.overall_status}`}>
-            {statusIcon(data.overall_status)}
-            {statusLabel(data.overall_status)}
+          <span className={`st-verification-status ${data.status === "passed" ? "success" : data.status === "failed" ? "failed" : "warning"}`}>
+            {statusIcon(data.status)}
+            {statusLabel(data.status)}
           </span>
         </div>
 
         <div className="st-verification-meta-grid">
-          <span>Parsed Files: {parsedFileCount}</span>
-          <span className={`st-verification-ast ${astStatus}`}>AST: {statusLabel(astStatus)}</span>
-          <span>Verified: {formatTimestamp(data.verified_at)}</span>
-          <span>
-            Checks: {data.checks_passed} pass / {data.checks_warning} warn / {data.checks_failed} fail
-          </span>
+          <span>Files Checked: {data.summary.files_checked}</span>
+          <span>Errors: {data.summary.error_count}</span>
+          <span>Warnings: {data.summary.warning_count}</span>
+          <span>Verified: {formatTimestamp(new Date().toISOString())}</span>
         </div>
       </header>
 
-      {data.overall_status === "warning" ? (
+      {data.status === "passed_with_warnings" ? (
         <div className="st-verification-warning">Verification warnings detected. Review issues below; workspace remains usable.</div>
       ) : null}
 
       <div className="st-verification-content">
         <article className="st-verification-card">
-          <h4>Error Groups by File</h4>
+          <h4>Diagnostics by File</h4>
           {groupedErrors.length > 0 ? (
             <ul className="st-verification-file-list">
               {groupedErrors.map((group) => {
@@ -219,6 +172,7 @@ export default function STVerificationPanel({
                     >
                       {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                       <span>{group.file}</span>
+                      <span className={`st-verification-file-status ${group.status}`}>{group.status}</span>
                       <span className="st-verification-count">{group.items.length}</span>
                     </button>
 
@@ -235,7 +189,7 @@ export default function STVerificationPanel({
                             >
                               {item.message}
                             </button>
-                            {item.line ? <span className="st-verification-line">L{item.line}</span> : null}
+                            {item.line ? <span className="st-verification-line">L{item.line}{item.column ? `:C${item.column}` : ""}</span> : null}
                             {item.code ? <span className="st-verification-code">{item.code}</span> : null}
                           </li>
                         ))}
@@ -246,7 +200,7 @@ export default function STVerificationPanel({
               })}
             </ul>
           ) : (
-            <div className="st-verification-empty">No syntax errors detected (e.g. missing END_IF, malformed CASE, parse failure).</div>
+            <div className="st-verification-empty">No diagnostics detected. Workspace verification passed.</div>
           )}
         </article>
       </div>

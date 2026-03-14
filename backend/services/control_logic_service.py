@@ -1855,6 +1855,23 @@ class ControlLogicService:
         graph = graph_service.get_graph(project_id)
         return io_mapping_engine.build(project_id, graph, model)
 
+    def generate_io_mapping_report(self, project_id: str) -> dict:
+        project_service.ensure_project(project_id)
+        report = self.validate_engineering_model(project_id)
+        loops = self.detect_control_loops(project_id)
+        entities = self._load_latest_entities(project_id)
+        model = logic_completion_engine.complete(project_id, entities, loops, report)
+        graph = graph_service.get_graph(project_id)
+        return io_mapping_engine.generate_mapping_report(project_id, graph, model)
+
+    def get_latest_io_mapping(self, project_id: str) -> dict | None:
+        project_service.ensure_project(project_id)
+        return io_mapping_engine.get_latest_io_mapping(project_id)
+
+    def set_active_io_mapping_version(self, project_id: str, version_id: str) -> dict | None:
+        project_service.ensure_project(project_id)
+        return io_mapping_engine.set_active_io_mapping_version(project_id, version_id)
+
     def runtime_validate(self, project_id: str):
         project_service.ensure_project(project_id)
         latest = self.get_latest(project_id)

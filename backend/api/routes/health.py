@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from db.influx import InfluxClient
 from db.neo4j import Neo4jClient
 from db.postgres import PostgresClient
+from services.runtime_deployer import runtime_deployer
 
 router = APIRouter(prefix="/health", tags=["health"])
 
@@ -15,5 +16,6 @@ def health() -> dict[str, object]:
             "postgres": PostgresClient().health(),
             "neo4j": Neo4jClient().health(),
             "influx": InfluxClient().health(),
+            "openplc": runtime_deployer.openplc_health(),
         },
     }

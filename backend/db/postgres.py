@@ -383,6 +383,74 @@ class PostgresClient:
         ADD COLUMN IF NOT EXISTS generator_version VARCHAR DEFAULT 'deterministic-v1';
         """
 
+        create_io_mapping_versions_sql = """
+        CREATE TABLE IF NOT EXISTS io_mapping_versions (
+          id UUID PRIMARY KEY,
+          project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+          version_number INTEGER NOT NULL,
+          is_active BOOLEAN DEFAULT FALSE,
+          status VARCHAR NOT NULL,
+          summary JSONB DEFAULT '{}'::jsonb,
+          artifact_path TEXT NULL,
+          created_by VARCHAR DEFAULT 'system',
+          generated_at TIMESTAMP,
+          UNIQUE (project_id, version_number)
+        );
+        """
+
+        create_io_mappings_sql = """
+        CREATE TABLE IF NOT EXISTS io_mappings (
+          id UUID PRIMARY KEY,
+          project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+          version_id UUID REFERENCES io_mapping_versions(id) ON DELETE CASCADE,
+          tag VARCHAR NOT NULL,
+          device_type VARCHAR NOT NULL,
+          signal_type VARCHAR NOT NULL,
+          io_type VARCHAR NOT NULL,
+          plc_id VARCHAR NOT NULL,
+          slot INTEGER NOT NULL,
+          channel INTEGER NOT NULL,
+          description TEXT DEFAULT '',
+          equipment VARCHAR NULL,
+          created_at TIMESTAMP,
+          UNIQUE (project_id, version_id, tag)
+        );
+        """
+
+        create_io_mapping_issues_sql = """
+        CREATE TABLE IF NOT EXISTS io_mapping_issues (
+          id UUID PRIMARY KEY,
+          project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+          version_id UUID REFERENCES io_mapping_versions(id) ON DELETE CASCADE,
+          code VARCHAR NOT NULL,
+          severity VARCHAR NOT NULL,
+          message TEXT NOT NULL,
+          tag VARCHAR NULL,
+          created_at TIMESTAMP
+        );
+        """
+
+        create_io_mapping_versions_project_idx_sql = """
+        CREATE INDEX IF NOT EXISTS idx_io_mapping_versions_project
+          ON io_mapping_versions(project_id, generated_at DESC);
+        """
+
+        create_io_mapping_versions_active_unique_sql = """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_io_mapping_versions_active_unique
+          ON io_mapping_versions(project_id)
+          WHERE is_active = TRUE;
+        """
+
+        create_io_mappings_project_version_idx_sql = """
+        CREATE INDEX IF NOT EXISTS idx_io_mappings_project_version
+          ON io_mappings(project_id, version_id);
+        """
+
+        create_io_mapping_issues_project_version_idx_sql = """
+        CREATE INDEX IF NOT EXISTS idx_io_mapping_issues_project_version
+          ON io_mapping_issues(project_id, version_id);
+        """
+
         with self.connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(create_projects_sql)
@@ -425,6 +493,13 @@ class PostgresClient:
                 cursor.execute(alter_logic_runs_warnings_count_sql)
                 cursor.execute(alter_logic_runs_st_preview_sql)
                 cursor.execute(alter_logic_runs_generator_version_sql)
+                cursor.execute(create_io_mapping_versions_sql)
+                cursor.execute(create_io_mappings_sql)
+                cursor.execute(create_io_mapping_issues_sql)
+                cursor.execute(create_io_mapping_versions_project_idx_sql)
+                cursor.execute(create_io_mapping_versions_active_unique_sql)
+                cursor.execute(create_io_mappings_project_version_idx_sql)
+                cursor.execute(create_io_mapping_issues_project_version_idx_sql)
 
     def fetch_all(self, sql: str, params: tuple | None = None) -> list[dict]:
         with self.connection() as conn:

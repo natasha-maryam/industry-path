@@ -1,72 +1,80 @@
-import type { Equipment } from "./types";
+import { AlertTriangle } from "lucide-react";
+import type { IOMappingIssue, IOMappingTableRow } from "../../services/api";
+import { buildIOMappingSummary, groupMappingsByPlcAndSlot } from "./ioMappingPreview";
 
 type RightIOMappingTabProps = {
-  selectedEquipment: Equipment;
+  selectedNodeId?: string;
+  mappingRows: IOMappingTableRow[];
+  mappingIssues?: IOMappingIssue[];
+  selectedTag?: string | null;
+  onSelectTag?: (tag: string) => void;
 };
 
-const inferSignalType = (signal: string): string => {
-  const token = signal.toUpperCase();
-  if (token.includes("PV") || token.includes("LEVEL") || token.includes("FLOW") || token.includes("PRESS")) {
-    return "Analog";
-  }
-  if (token.includes("CMD") || token.includes("RUN") || token.includes("TRIP") || token.includes("FAULT")) {
-    return "Digital";
-  }
-  return "Unknown";
-};
-
-const inferIOType = (signal: string): string => {
-  const token = signal.toUpperCase();
-  if (token.includes("_PV") || token.includes("_AI") || token.includes("_MEAS")) {
-    return "AI";
-  }
-  if (token.includes("_SP") || token.includes("_AO") || token.includes("_OUT")) {
-    return "AO";
-  }
-  if (token.includes("_DI") || token.includes("_FB")) {
-    return "DI";
-  }
-  if (token.includes("_DO") || token.includes("_CMD") || token.includes("RUN")) {
-    return "DO";
-  }
-  return "N/A";
-};
-
-export default function RightIOMappingTab({ selectedEquipment }: RightIOMappingTabProps) {
-  const rows = selectedEquipment.signals.map((signal, index) => ({
-    signal,
-    signalType: inferSignalType(signal),
-    ioType: inferIOType(signal),
-    address: `%I${index}`,
-  }));
+export default function RightIOMappingTab({
+  selectedNodeId = "",
+  mappingRows,
+  mappingIssues = [],
+  selectedTag = null,
+  onSelectTag,
+}: RightIOMappingTabProps) {
+  const grouped = groupMappingsByPlcAndSlot(mappingRows, mappingIssues);
+  const summary = buildIOMappingSummary(mappingRows);
 
   return (
     <>
       <div className="panel-subtitle">IO Mapping Preview</div>
-      {rows.length === 0 ? (
-        <div className="monitor-frame">No signals available for mapping preview.</div>
+      {selectedNodeId ? <div className="panel-subtitle">Selected node: {selectedNodeId}</div> : null}
+      {mappingRows.length === 0 ? (
+        <div className="monitor-frame">
+          {selectedNodeId
+            ? `No IO mappings found for selected node ${selectedNodeId}.`
+            : "No signals available for mapping preview."}
+        </div>
       ) : (
-        <div className="right-mini-table-wrap">
-          <table className="right-mini-table">
-            <thead>
-              <tr>
-                <th>Tag</th>
-                <th>Signal Type</th>
-                <th>IO Type</th>
-                <th>Address</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.signal}>
-                  <td className="value-mono">{row.signal}</td>
-                  <td>{row.signalType}</td>
-                  <td className="value-mono">{row.ioType}</td>
-                  <td className="value-mono">{row.address}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="right-io-preview">
+          <div className="right-io-summary-grid">
+            <span>Total: {summary.totalSignals}</span>
+            <span>AI: {summary.ai}</span>
+            <span>AO: {summary.ao}</span>
+            <span>DI: {summary.di}</span>
+            <span>DO: {summary.doCount}</span>
+          </div>
+
+          <div className="right-io-groups">
+            {grouped.map((plc) => (
+              <article key={plc.plcId} className="right-io-plc-group">
+                <header className="right-io-plc-header">{plc.plcId}</header>
+                <div className="right-io-slot-list">
+                  {plc.slots.map((slotGroup) => (
+                    <section key={`${plc.plcId}-slot-${slotGroup.slot}`} className="right-io-slot-group">
+                      <h5>Slot {slotGroup.slot}</h5>
+                      <ul>
+                        {slotGroup.channels.map((item) => (
+                          <li key={`${plc.plcId}-${slotGroup.slot}-${item.channel}-${item.tag}`}>
+                            <button
+                              type="button"
+                              className={`right-io-item ${selectedTag && selectedTag.toUpperCase() === item.tag.toUpperCase() ? "selected" : ""}`}
+                              onClick={() => onSelectTag?.(item.tag)}
+                            >
+                              <span className="value-mono">CH{item.channel}</span>
+                              <span className="value-mono">{item.tag}</span>
+                              <span className="right-io-type">{item.ioType}</span>
+                              {item.deviceType ? <span className="right-io-device">{item.deviceType}</span> : null}
+                              {item.hasWarning ? (
+                                <span className="right-io-warning" title="Mapping warning">
+                                  <AlertTriangle size={10} />
+                                </span>
+                              ) : null}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </div>
         </div>
       )}
     </>

@@ -14,12 +14,13 @@ import {
 import { Toaster, toast } from "react-hot-toast";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import BottomPanels from "../components/BottomPanels";
-import type { GeneratedLogicFile } from "../components/CodeExplorerPanel";
+import type { GeneratedLogicFile, STDiagnosticMarker, STJumpLocation } from "../components/CodeExplorerPanel";
 import CommandBar, { type ToolbarAction } from "../components/CommandBar";
 import DetailsPanel, { type RightTab } from "../components/DetailsPanel";
 import GraphWorkspace from "../components/GraphWorkspace";
 import ProjectNavigator from "../components/ProjectNavigator";
 import SnapshotManagerModal, { type SnapshotRecord } from "../components/SnapshotManagerModal";
+import type { STVerificationIssueItem } from "../components/STVerificationPanel";
 import {
   applySnapshotTrigger,
   canRunStage,
@@ -27,10 +28,11 @@ import {
   createProject,
   createInitialPipelineStatuses,
   deleteProject,
-  deployProject,
+  deployRuntimeWithRetry,
   exportGeneratedLogicWithRetry,
   generateLogic,
   generateIOMappingWithRetry,
+  getLatestIOMapping,
   getMissingStagePrerequisites,
   getLogic,
   getGraph,
@@ -39,15 +41,17 @@ import {
   parseProject,
   runSimulation,
   uploadDocuments,
-  verifySTLogicWithRetry,
+  verifySTWorkspaceWithRetry,
   type GraphEdge,
   type GraphNode,
+  type IOMappingIssue,
   type IOMappingSummaryByType,
   type IOMappingTableRow,
   type PipelineStageKey,
   type RuntimeValidationPanelResponse,
+  type RuntimeDeployRequest,
   type SimulationValidationPanelResponse,
-  type STVerificationPanelPayload,
+  type STWorkspaceVerificationResponse,
   type PipelineStageStatusMap,
   type Project,
 } from "../services/api";
@@ -136,6 +140,15 @@ const parseGeneratedLogicFiles = (bundledCode: string): GeneratedLogicFile[] => 
     .filter((item, index, array) => array.findIndex((candidate) => candidate.path === item.path) === index);
 };
 
+const toWorkspaceVerifyTarget = (projectId: string): string => projectId;
+
+const normalizeVerifierFilePath = (filePath: string): string => {
+  const normalized = normalizeGeneratedFilePath(filePath);
+  return normalized.startsWith("control_logic/") ? normalized.replace(/^control_logic\//, "") : normalized;
+};
+
+const toComparableToken = (value: string): string => value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+
 const PIPELINE_STAGE_LABELS: Record<PipelineStageKey, string> = {
   extraction: "Extraction",
   normalization: "Normalization",
@@ -166,12 +179,16 @@ export default function Dashboard() {
   const [generatedLogic, setGeneratedLogic] = useState<string>("");
   const [generatedSTFiles, setGeneratedSTFiles] = useState<GeneratedLogicFile[]>([]);
   const [selectedSTFilePath, setSelectedSTFilePath] = useState<string | null>(null);
+  const [stDiagnosticsByFile, setSTDiagnosticsByFile] = useState<Record<string, STDiagnosticMarker[]>>({});
+  const [stJumpLocation, setSTJumpLocation] = useState<STJumpLocation | null>(null);
   const [logicWarnings, setLogicWarnings] = useState<string[]>([]);
   const [logicValidationIssues, setLogicValidationIssues] = useState<string[]>([]);
-  const [stVerificationData, setSTVerificationData] = useState<STVerificationPanelPayload | null>(null);
+  const [stVerificationData, setSTVerificationData] = useState<STWorkspaceVerificationResponse | null>(null);
   const [isVerifyingST, setIsVerifyingST] = useState<boolean>(false);
   const [stVerificationFailedMessage, setSTVerificationFailedMessage] = useState<string | null>(null);
   const [ioMappingRows, setIOMappingRows] = useState<IOMappingTableRow[]>([]);
+  const [ioMappingIssues, setIOMappingIssues] = useState<IOMappingIssue[]>([]);
+  const [selectedIOMappingTag, setSelectedIOMappingTag] = useState<string | null>(null);
   const [ioMappingSummary, setIOMappingSummary] = useState<IOMappingSummaryByType | null>(null);
   const [isGeneratingIOMapping, setIsGeneratingIOMapping] = useState<boolean>(false);
   const [isExportingLogic, setIsExportingLogic] = useState<boolean>(false);
@@ -183,6 +200,14 @@ export default function Dashboard() {
   const [graphEdges, setGraphEdges] = useState<GraphEdge[]>([]);
   const [runtimeValidationData, setRuntimeValidationData] = useState<RuntimeValidationPanelResponse | null>(null);
   const [runtimeFailedMessage, setRuntimeFailedMessage] = useState<string | null>(null);
+  const [isDeployingRuntime, setIsDeployingRuntime] = useState<boolean>(false);
+  const [showDeployRuntimeModal, setShowDeployRuntimeModal] = useState<boolean>(false);
+  const [runtimeDeployConfig, setRuntimeDeployConfig] = useState<RuntimeDeployRequest["runtime_config"]>({
+    target_runtime: "OpenPLC",
+    ip_address: "127.0.0.1",
+    protocol: "OpenPLC",
+    port: 8080,
+  });
   const [simulationValidationData, setSimulationValidationData] = useState<SimulationValidationPanelResponse | null>(null);
   const [simulationFailedMessage, setSimulationFailedMessage] = useState<string | null>(null);
   const [statusText, setStatusText] = useState<string>("Loading projects...");
@@ -417,30 +442,59 @@ export default function Dashboard() {
     setIsVerifyingST(true);
     setSTVerificationFailedMessage(null);
     try {
-      const verification = await verifySTLogicWithRetry(projectId, {
+      const verification = await verifySTWorkspaceWithRetry(toWorkspaceVerifyTarget(projectId), {
         maxAttempts: 3,
         initialDelayMs: 700,
         backoffFactor: 2,
       });
-      setSTVerificationData(verification.panel);
-      const validationIssues = verification.file_level_issues.map((issue) => {
-        const location = issue.line ? `${issue.file}:${issue.line}` : issue.file;
-        return `${location} [${issue.rule}] ${issue.message}`;
-      });
+      setSTVerificationData(verification);
+
+      const diagnostics: Record<string, STDiagnosticMarker[]> = {};
+      const validationIssues: string[] = [];
+      for (const fileResult of verification.files) {
+        const normalizedFilePath = normalizeVerifierFilePath(fileResult.file);
+        diagnostics[normalizedFilePath] = [
+          ...fileResult.errors.map((item) => ({
+            line: item.line || 1,
+            column: item.column || 1,
+            severity: "error" as const,
+            code: item.code,
+            message: item.message,
+          })),
+          ...fileResult.warnings.map((item) => ({
+            line: item.line || 1,
+            column: item.column || 1,
+            severity: "warning" as const,
+            code: item.code,
+            message: item.message,
+          })),
+        ];
+
+        for (const item of fileResult.errors) {
+          const location = item.line ? `${fileResult.file}:${item.line}` : fileResult.file;
+          validationIssues.push(`${location} [${item.code}] ${item.message}`);
+        }
+        for (const item of fileResult.warnings) {
+          const location = item.line ? `${fileResult.file}:${item.line}` : fileResult.file;
+          validationIssues.push(`${location} [${item.code}] ${item.message}`);
+        }
+      }
+
+      setSTDiagnosticsByFile(diagnostics);
       setLogicValidationIssues(validationIssues);
 
-      if (verification.summary.overall_status === "failed") {
+      if (verification.status === "failed") {
         updatePipelineStage("st_verification", "failed");
         if (!options.silent) {
-          setStatusText(`ST verification failed with ${verification.file_level_issues.length} issue(s).`);
+          setStatusText(`ST verification failed with ${verification.summary.error_count} error(s).`);
         }
         return;
       }
 
-      if (verification.summary.overall_status === "warning") {
+      if (verification.status === "passed_with_warnings") {
         updatePipelineStage("st_verification", "warning");
         if (!options.silent) {
-          setStatusText(`ST verification completed with warnings (${verification.summary.checks_warning}).`);
+          setStatusText(`ST verification passed with warnings (${verification.summary.warning_count}).`);
         }
         return;
       }
@@ -452,9 +506,10 @@ export default function Dashboard() {
     } catch {
       updatePipelineStage("st_verification", "failed");
       setSTVerificationData(null);
+      setSTDiagnosticsByFile({});
       setSTVerificationFailedMessage("ST verification endpoint failed after retries.");
       if (!options.silent) {
-        setStatusText("ST verification failed. Ensure backend validate-logic endpoint is available.");
+        setStatusText("ST verification failed. Ensure backend /verify-st endpoint is available.");
       }
     } finally {
       setIsVerifyingST(false);
@@ -525,6 +580,38 @@ export default function Dashboard() {
     };
   }, [graphNodes, selectedNode]);
 
+  const selectedNodeIOMappingRows = useMemo<IOMappingTableRow[]>(() => {
+    if (!selectedNode || ioMappingRows.length === 0) {
+      return ioMappingRows;
+    }
+
+    const selectedToken = toComparableToken(selectedNode);
+    if (!selectedToken) {
+      return ioMappingRows;
+    }
+
+    const signalTokens = new Set<string>(
+      [selectedEquipment.id, ...selectedEquipment.signals]
+        .map((item) => toComparableToken(item || ""))
+        .filter((item) => item.length > 0)
+    );
+
+    const filtered = ioMappingRows.filter((row) => {
+      const tagToken = toComparableToken(row.tag || "");
+      const equipmentToken = toComparableToken(row.equipment_id || "");
+
+      if (equipmentToken && equipmentToken === selectedToken) {
+        return true;
+      }
+      if (tagToken && (tagToken === selectedToken || tagToken.startsWith(selectedToken))) {
+        return true;
+      }
+      return signalTokens.has(tagToken);
+    });
+
+    return filtered;
+  }, [ioMappingRows, selectedEquipment.id, selectedEquipment.signals, selectedNode]);
+
   useEffect(() => {
     const initProjects = async (): Promise<void> => {
       try {
@@ -555,12 +642,16 @@ export default function Dashboard() {
       setGeneratedLogic("");
       setGeneratedSTFiles([]);
       setSelectedSTFilePath(null);
+      setSTDiagnosticsByFile({});
+      setSTJumpLocation(null);
       setLogicWarnings([]);
       setLogicValidationIssues([]);
       setSTVerificationData(null);
       setSTVerificationFailedMessage(null);
       setIsVerifyingST(false);
       setIOMappingRows([]);
+      setIOMappingIssues([]);
+      setSelectedIOMappingTag(null);
       setIOMappingSummary(null);
       setIOMappingFailedMessage(null);
       setIsGeneratingIOMapping(false);
@@ -589,7 +680,27 @@ export default function Dashboard() {
       }
     };
 
+    const loadLatestIOMapping = async (): Promise<void> => {
+      try {
+        const mapping = await getLatestIOMapping(selectedProjectId);
+        setIOMappingRows(mapping.rows);
+        setIOMappingIssues(mapping.issues ?? []);
+        setSelectedIOMappingTag(null);
+        setIOMappingSummary(mapping.summary);
+        setIOMappingFailedMessage(null);
+        if (mapping.rows.length > 0) {
+          updatePipelineStage("io_mapping", "success");
+        }
+      } catch {
+        setIOMappingRows([]);
+        setIOMappingIssues([]);
+        setSelectedIOMappingTag(null);
+        setIOMappingSummary(null);
+      }
+    };
+
     void loadGraph();
+    void loadLatestIOMapping();
   }, [selectedProjectId]);
 
   useEffect(() => {
@@ -629,6 +740,8 @@ export default function Dashboard() {
           setGeneratedLogic("");
           setGeneratedSTFiles([]);
           setSelectedSTFilePath(null);
+          setSTDiagnosticsByFile({});
+          setSTJumpLocation(null);
           setLogicWarnings([]);
           setLogicValidationIssues([]);
           setSTVerificationData(null);
@@ -640,6 +753,8 @@ export default function Dashboard() {
         setGeneratedLogic("");
         setGeneratedSTFiles([]);
         setSelectedSTFilePath(null);
+        setSTDiagnosticsByFile({});
+        setSTJumpLocation(null);
         setLogicWarnings([]);
         setLogicValidationIssues([]);
         setSTVerificationData(null);
@@ -757,6 +872,8 @@ export default function Dashboard() {
           const artifact = await generateLogic(selectedProjectId);
           const generatedCode = artifact.code || artifact.st_preview || "";
           const hasGeneratedCode = generatedCode.trim().length > 0;
+          setSTDiagnosticsByFile({});
+          setSTJumpLocation(null);
           setGeneratedLogic(generatedCode);
           const files = parseGeneratedLogicFiles(generatedCode);
           setGeneratedSTFiles(files);
@@ -772,6 +889,7 @@ export default function Dashboard() {
           updatePipelineStage("st_generation", hasGeneratedCode ? "success" : "failed");
           if (!hasGeneratedCode) {
             setSTVerificationData(null);
+            setSTDiagnosticsByFile({});
             setSTVerificationFailedMessage("No generated ST files available for verification.");
           }
           setShowLogic(true);
@@ -803,6 +921,8 @@ export default function Dashboard() {
             backoffFactor: 2,
           });
           setIOMappingRows(mappingResult.rows);
+          setIOMappingIssues(mappingResult.issues ?? []);
+          setSelectedIOMappingTag(null);
           setIOMappingSummary(mappingResult.summary);
           setMonitoringPanelMode("io_mapping");
           setActiveBottomView("monitoring");
@@ -811,6 +931,8 @@ export default function Dashboard() {
         } catch {
           updatePipelineStage("io_mapping", "failed");
           setIOMappingRows([]);
+          setIOMappingIssues([]);
+          setSelectedIOMappingTag(null);
           setIOMappingSummary(null);
           setIOMappingFailedMessage("IO mapping generation failed after retries.");
           setStatusText("IO mapping generation failed. Ensure backend endpoint is available.");
@@ -912,33 +1034,10 @@ export default function Dashboard() {
         if (!ensurePrerequisites("runtime_validation")) {
           return;
         }
-        setRuntimeFailedMessage(null);
+        setShowDeployRuntimeModal(true);
         setMonitoringPanelMode("runtime");
         setActiveBottomView("monitoring");
-        updatePipelineStage("runtime_validation", "running");
-        await deployProject(selectedProjectId);
-        setRuntimeValidationData({
-          project_id: selectedProjectId,
-          run_id: `runtime-${Date.now()}`,
-          validated_at: new Date().toISOString(),
-          overall_status: "success",
-          checks_passed: 3,
-          checks_failed: 0,
-          checks_warning: 0,
-          checks: [
-            {
-              check_id: "runtime-load",
-              check_name: "Runtime load",
-              status: "success",
-              expected_value: "loaded",
-              actual_value: "loaded",
-              tolerance: null,
-              message: "Runtime accepted deployment package",
-            },
-          ],
-        });
-        updatePipelineStage("runtime_validation", "success");
-        setStatusText("Deploy job accepted for active project.");
+        setStatusText("Configure runtime deployment and confirm.");
       }
 
     } catch {
@@ -1056,6 +1155,135 @@ export default function Dashboard() {
 
   const handleLeftPanelToggle = (): void => {
     setIsLeftPanelCollapsed((value) => !value);
+  };
+
+  const handleAutoAssignIOMappingChannels = (): void => {
+    if (ioMappingRows.length === 0) {
+      return;
+    }
+
+    const priority: Record<string, number> = { DI: 1, DO: 2, AI: 3, AO: 4 };
+    const counters: Record<string, number> = { DI: 0, DO: 0, AI: 0, AO: 0 };
+
+    const reassigned = [...ioMappingRows]
+      .sort((left, right) => {
+        const l = priority[left.io_type.toUpperCase()] ?? 99;
+        const r = priority[right.io_type.toUpperCase()] ?? 99;
+        if (l !== r) {
+          return l - r;
+        }
+        return left.tag.localeCompare(right.tag);
+      })
+      .map((row) => {
+        const key = row.io_type.toUpperCase();
+        const index = counters[key] ?? 0;
+        counters[key] = index + 1;
+        const baseSlot = key === "DI" ? 1 : key === "DO" ? 2 : key === "AI" ? 3 : key === "AO" ? 4 : 10;
+        return {
+          ...row,
+          slot: baseSlot + Math.floor(index / 16),
+          channel: (index % 16) + 1,
+        };
+      });
+
+    setIOMappingRows(reassigned);
+    setStatusText("IO mapping channels auto-assigned deterministically.");
+  };
+
+  const handleExportIOMappingCsv = (): void => {
+    if (ioMappingRows.length === 0) {
+      return;
+    }
+
+    const header = ["Tag", "Type", "IO", "PLC", "Slot", "Channel"];
+    const rows = ioMappingRows.map((row) => [row.tag, row.device_type, row.io_type, row.plc_id, String(row.slot), String(row.channel)]);
+    const csv = [header, ...rows]
+      .map((line) => line.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `io_mapping_${selectedProjectId || "project"}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setStatusText("IO mapping CSV exported.");
+  };
+
+  const handleValidateIOMapping = (): void => {
+    if (ioMappingRows.length === 0) {
+      setStatusText("No IO mapping rows to validate.");
+      return;
+    }
+
+    const duplicateTags = new Set<string>();
+    const seen = new Set<string>();
+    for (const row of ioMappingRows) {
+      const key = row.tag.trim().toUpperCase();
+      if (!key) {
+        continue;
+      }
+      if (seen.has(key)) {
+        duplicateTags.add(key);
+      }
+      seen.add(key);
+    }
+
+    const invalidRows = ioMappingRows.filter((row) => !["AI", "AO", "DI", "DO"].includes(row.io_type.toUpperCase()));
+    const overflowRows = ioMappingRows.filter((row) => row.channel < 1 || row.channel > 16);
+
+    const issueCount = duplicateTags.size + invalidRows.length + overflowRows.length;
+    if (issueCount > 0) {
+      setStatusText(`IO mapping validation found ${issueCount} issue(s).`);
+      return;
+    }
+
+    setStatusText("IO mapping validation passed.");
+  };
+
+  const handleConfirmRuntimeDeploy = async (): Promise<void> => {
+    if (!selectedProjectId) {
+      return;
+    }
+
+    setIsDeployingRuntime(true);
+    setRuntimeFailedMessage(null);
+    updatePipelineStage("runtime_validation", "running");
+    setMonitoringPanelMode("runtime");
+    setActiveBottomView("monitoring");
+
+    try {
+      const result = await deployRuntimeWithRetry(
+        {
+          project_id: selectedProjectId,
+          workspace_path: `/projects/${selectedProjectId}`,
+          runtime_config: runtimeDeployConfig,
+        },
+        {
+          maxAttempts: 2,
+          initialDelayMs: 800,
+          backoffFactor: 2,
+        }
+      );
+
+      setRuntimeValidationData(result);
+      const failedChecks = result.checks_failed > 0 || result.overall_status === "failed";
+      updatePipelineStage("runtime_validation", failedChecks ? "failed" : "success");
+      setStatusText(
+        failedChecks
+          ? "Runtime deployment failed. Review runtime diagnostics."
+          : "Runtime deployment passed. OpenPLC runtime accepted the project."
+      );
+      setShowDeployRuntimeModal(false);
+    } catch {
+      updatePipelineStage("runtime_validation", "failed");
+      setRuntimeValidationData(null);
+      setRuntimeFailedMessage("Runtime deployment failed. Check OpenPLC target availability and deployment config.");
+      setStatusText("Runtime deployment failed. Ensure OpenPLC runtime is reachable.");
+    } finally {
+      setIsDeployingRuntime(false);
+    }
   };
 
   return (
@@ -1218,6 +1446,102 @@ export default function Dashboard() {
         </div>
       ) : null}
 
+      {showDeployRuntimeModal ? (
+        <div className="modal-backdrop" onClick={() => !isDeployingRuntime && setShowDeployRuntimeModal(false)}>
+          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+            <h3>Deploy PLC Runtime Validation</h3>
+
+            <label className="modal-label" htmlFor="runtime-target">
+              Target Runtime
+            </label>
+            <input
+              id="runtime-target"
+              className="modal-input"
+              value={runtimeDeployConfig.target_runtime}
+              onChange={(event) =>
+                setRuntimeDeployConfig((value) => ({
+                  ...value,
+                  target_runtime: event.target.value,
+                }))
+              }
+            />
+
+            <label className="modal-label" htmlFor="runtime-address">
+              PLC Address
+            </label>
+            <input
+              id="runtime-address"
+              className="modal-input"
+              value={runtimeDeployConfig.ip_address}
+              onChange={(event) =>
+                setRuntimeDeployConfig((value) => ({
+                  ...value,
+                  ip_address: event.target.value,
+                }))
+              }
+            />
+
+            <label className="modal-label" htmlFor="runtime-port">
+              Port
+            </label>
+            <input
+              id="runtime-port"
+              className="modal-input"
+              type="number"
+              value={String(runtimeDeployConfig.port ?? 8080)}
+              onChange={(event) =>
+                setRuntimeDeployConfig((value) => ({
+                  ...value,
+                  port: Number(event.target.value) || 8080,
+                }))
+              }
+            />
+
+            <label className="modal-label" htmlFor="runtime-protocol">
+              Protocol
+            </label>
+            <input
+              id="runtime-protocol"
+              className="modal-input"
+              value={runtimeDeployConfig.protocol}
+              onChange={(event) =>
+                setRuntimeDeployConfig((value) => ({
+                  ...value,
+                  protocol: event.target.value,
+                }))
+              }
+            />
+
+            <div className="monitor-frame">
+              <pre className="monitor-json">
+                {`IO Configuration Summary\nTotal rows: ${ioMappingRows.length}\nAI: ${ioMappingSummary?.AI ?? 0}\nAO: ${ioMappingSummary?.AO ?? 0}\nDI: ${ioMappingSummary?.DI ?? 0}\nDO: ${ioMappingSummary?.DO ?? 0}`}
+              </pre>
+            </div>
+
+            <div className="modal-actions">
+              <button
+                className="command-btn"
+                onClick={() => setShowDeployRuntimeModal(false)}
+                type="button"
+                disabled={isDeployingRuntime}
+              >
+                Cancel
+              </button>
+              <button
+                className="command-btn primary"
+                onClick={() => {
+                  void handleConfirmRuntimeDeploy();
+                }}
+                type="button"
+                disabled={isDeployingRuntime}
+              >
+                {isDeployingRuntime ? "Deploying..." : "Deploy PLC"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <input
         ref={uploadInputRef}
         hidden
@@ -1343,7 +1667,17 @@ export default function Dashboard() {
                     activeTab={activeTab}
                     replayPoint={replayPoint}
                     selectedEquipment={selectedEquipment}
+                    selectedNodeId={selectedNode}
                     tracePath={tracePath}
+                    ioMappingRows={selectedNodeIOMappingRows}
+                    ioMappingIssues={ioMappingIssues}
+                    selectedIOMappingTag={selectedIOMappingTag}
+                    onSelectIOMappingTag={(tag) => {
+                      setSelectedIOMappingTag(tag);
+                      setActiveBottomView("monitoring");
+                      setMonitoringPanelMode("io_mapping");
+                      setActiveTab("IO Mapping");
+                    }}
                     onTabChange={setActiveTab}
                   />
                 ) : null}
@@ -1363,19 +1697,30 @@ export default function Dashboard() {
               generatedSTFiles={generatedSTFiles}
               selectedSTFilePath={selectedSTFilePath}
               onSelectSTFile={setSelectedSTFilePath}
+              stDiagnosticsByFile={stDiagnosticsByFile}
+              stJumpLocation={stJumpLocation}
               logicWarnings={logicWarnings}
               logicValidationIssues={logicValidationIssues}
               stVerificationData={stVerificationData}
               isVerifyingST={isVerifyingST}
               stVerificationFailedMessage={stVerificationFailedMessage}
-              onSelectVerificationIssue={(issue) => {
+              onSelectVerificationIssue={(issue: STVerificationIssueItem) => {
                 if (issue.file) {
-                  setSelectedSTFilePath(normalizeGeneratedFilePath(issue.file));
+                  const normalizedFile = normalizeVerifierFilePath(issue.file);
+                  setSelectedSTFilePath(normalizedFile);
+                  setSTJumpLocation({
+                    file: normalizedFile,
+                    line: issue.line ?? 1,
+                    column: issue.column ?? 1,
+                    nonce: Date.now(),
+                  });
                   setCodePanelMode("generated_st");
                   setActiveBottomView("logic");
                 }
               }}
               ioMappingRows={ioMappingRows}
+              selectedIOMappingTag={selectedIOMappingTag}
+              onSelectIOMappingTag={setSelectedIOMappingTag}
               ioMappingSummary={ioMappingSummary}
               isGeneratingIOMapping={isGeneratingIOMapping}
               ioMappingFailedMessage={ioMappingFailedMessage}
@@ -1386,6 +1731,12 @@ export default function Dashboard() {
               onRetryIOMapping={() => {
                 void handleToolbarAction("io_mapping");
               }}
+              onGenerateIOMapping={() => {
+                void handleToolbarAction("io_mapping");
+              }}
+              onAutoAssignIOMappingChannels={handleAutoAssignIOMappingChannels}
+              onExportIOMappingCsv={handleExportIOMappingCsv}
+              onValidateIOMapping={handleValidateIOMapping}
               onRetrySTVerification={() => {
                 void handleToolbarAction("verify_st");
               }}
