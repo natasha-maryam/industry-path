@@ -121,16 +121,25 @@ class RuntimeSignalState:
             for row in source_rows:
                 tag = str(row.get("tag") or "").strip()
                 io_type = str(row.get("io_type") or "").upper().strip()
-                if not tag or io_type not in {"AI", "AO", "DI", "DO"}:
+                if not tag:
                     continue
 
                 signal_type = str(row.get("signal_type") or "").strip()
-                data_type = self._infer_data_type(io_type, signal_type)
+                st_type = str(row.get("st_type") or row.get("data_type") or "").upper().strip()
+
+                if io_type in {"AI", "AO", "DI", "DO"}:
+                    data_type = self._infer_data_type(io_type, signal_type)
+                    is_input = self._is_input_io(io_type)
+                else:
+                    data_type = st_type if st_type in {"BOOL", "INT", "REAL", "STRING"} else self._infer_data_type(io_type or "AI", signal_type)
+                    io_type = io_type or "VIRTUAL"
+                    is_input = bool(row.get("is_input", True))
+
                 tag_defs[tag] = TagDefinition(
                     tag=tag,
                     io_type=io_type,
                     data_type=data_type,
-                    is_input=self._is_input_io(io_type),
+                    is_input=is_input,
                 )
                 values[tag] = self._default_value(data_type)
 

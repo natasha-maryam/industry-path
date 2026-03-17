@@ -116,7 +116,79 @@ class STCodegenUtils:
         is_modulating = strategy == "PID" or actuator == "control_valve"
         if is_modulating:
             return f"{base}_OUT", f"{base}_CMD"
+        if actuator in {"pump", "blower", "chemical_system_device"}:
+            return f"{base}_RUN_CMD", f"{base}_RUN_CMD"
         return f"{base}_CMD", f"{base}_CMD"
+
+    def infer_equipment_signal_family(self, equipment_tag: str | None, canonical_type: str | None) -> dict[str, str | None]:
+        base = self.normalize_symbol(equipment_tag)
+        behavior = self.classify_equipment_behavior(canonical_type)
+
+        command_tag = f"{base}_RUN_CMD" if behavior == "start_stop" else f"{base}_CMD"
+        status_tag = f"{base}_RUN_STATUS" if behavior == "start_stop" else f"{base}_STATUS"
+        return {
+            "command_tag": command_tag,
+            "status_tag": status_tag,
+            "fault_tag": f"{base}_FAULT",
+            "permissive_tag": f"{base}_PERMISSIVE",
+            "auto_mode_tag": f"{base}_AUTO",
+            "manual_mode_tag": f"{base}_MANUAL",
+            "run_feedback_tag": f"{base}_RUN_FB",
+            "open_command_tag": f"{base}_OPEN_CMD" if behavior == "open_close" else None,
+            "close_command_tag": f"{base}_CLOSE_CMD" if behavior == "open_close" else None,
+            "output_tag": f"{base}_OUT" if behavior == "modulating" else None,
+            "run_command_tag": f"{base}_RUN_CMD",
+            "run_status_tag": f"{base}_RUN_STATUS",
+        }
+
+    def infer_command_dependencies(self, command_tag: str | None) -> dict[str, list[str]] | None:
+        normalized = self.normalize_symbol(command_tag)
+        if not normalized or not normalized.endswith("_CMD"):
+            return None
+
+        if normalized in {"STARTUP_CMD", "SHUTDOWN_CMD", "STOP_ALL_CMD", "AUTO_ENABLE_CMD"} or normalized.startswith("PLANT_"):
+            return None
+
+        if normalized.endswith("_RUN_CMD"):
+            base = normalized[: -len("_RUN_CMD")]
+            return {
+                "status_tags": [f"{base}_RUN_STATUS"],
+                "fault_tags": [f"{base}_FAULT"],
+            }
+
+        if normalized.endswith("_START_CMD"):
+            base = normalized[: -len("_START_CMD")]
+            return {
+                "status_tags": [f"{base}_RUN_STATUS"],
+                "fault_tags": [f"{base}_FAULT"],
+            }
+
+        if normalized.endswith("_STOP_CMD"):
+            base = normalized[: -len("_STOP_CMD")]
+            return {
+                "status_tags": [f"{base}_RUN_STATUS"],
+                "fault_tags": [f"{base}_FAULT"],
+            }
+
+        if normalized.endswith("_OPEN_CMD"):
+            base = normalized[: -len("_OPEN_CMD")]
+            return {
+                "status_tags": [f"{base}_STATUS"],
+                "fault_tags": [f"{base}_FAULT"],
+            }
+
+        if normalized.endswith("_CLOSE_CMD"):
+            base = normalized[: -len("_CLOSE_CMD")]
+            return {
+                "status_tags": [f"{base}_STATUS"],
+                "fault_tags": [f"{base}_FAULT"],
+            }
+
+        base = normalized[: -len("_CMD")]
+        return {
+            "status_tags": [f"{base}_STATUS"],
+            "fault_tags": [f"{base}_FAULT"],
+        }
 
     def infer_threshold_tags(self, sensor_tag: str | None) -> dict[str, str]:
         base = self.normalize_symbol(sensor_tag)

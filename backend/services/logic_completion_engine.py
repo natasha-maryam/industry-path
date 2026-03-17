@@ -43,6 +43,7 @@ class LogicCompletionEngine:
         for entity in sorted(entities, key=lambda item: item.id):
             if entity.canonical_type in {"pump", "control_valve", "valve", "blower", "chemical_system_device"}:
                 routine_type = st_codegen_utils.classify_equipment_behavior(entity.canonical_type)
+                family = st_codegen_utils.infer_equipment_signal_family(entity.id, entity.canonical_type)
                 output_owner = "loop_manager" if routine_type == "modulating" else "equipment_manager"
                 auto_owner = "loop_manager" if routine_type == "modulating" else "equipment_manager"
                 manual_owner = "equipment_manager" if routine_type in {"modulating", "open_close", "start_stop"} else "none"
@@ -51,17 +52,17 @@ class LogicCompletionEngine:
                         equipment_tag=entity.id,
                         routine_name=f"{entity.id}_AUTO_ROUTINE",
                         routine_type="modulation" if routine_type == "modulating" else "start_stop",
-                        command_tag=f"{entity.id}_CMD",
-                        status_tag=f"{entity.id}_STATUS",
-                        fault_tag=f"{entity.id}_FAULT",
+                        command_tag=family["command_tag"],
+                        status_tag=family["status_tag"],
+                        fault_tag=family["fault_tag"],
                         equipment_type=entity.canonical_type,
-                        permissive_tags=[f"{entity.id}_PERMISSIVE"],
-                        auto_mode_tag=f"{entity.id}_AUTO",
-                        manual_mode_tag=f"{entity.id}_MANUAL",
-                        run_feedback_tag=f"{entity.id}_RUN_FB",
-                        open_command_tag=f"{entity.id}_OPEN_CMD" if entity.canonical_type in {"valve", "control_valve"} else None,
-                        close_command_tag=f"{entity.id}_CLOSE_CMD" if entity.canonical_type in {"valve", "control_valve"} else None,
-                        output_tag=f"{entity.id}_OUT" if entity.canonical_type == "control_valve" else None,
+                        permissive_tags=[str(family["permissive_tag"])],
+                        auto_mode_tag=family["auto_mode_tag"],
+                        manual_mode_tag=family["manual_mode_tag"],
+                        run_feedback_tag=family["run_feedback_tag"],
+                        open_command_tag=family["open_command_tag"],
+                        close_command_tag=family["close_command_tag"],
+                        output_tag=family["output_tag"],
                         safe_output_value=self._safe_stop_value(entity.canonical_type),
                         output_owner=output_owner,
                         auto_owner=auto_owner,
@@ -117,7 +118,11 @@ class LogicCompletionEngine:
                     target_tag=loop.actuator_tag,
                     comparator=">=" if sensor_signal_type == "analog" else "==",
                     threshold_tag=threshold_map["INTERLOCK"] if sensor_signal_type == "analog" else "TRUE",
-                    target_command_tag=loop.command_tag_bool or f"{loop.actuator_tag}_CMD",
+                    target_command_tag=loop.command_tag_bool
+                    or st_codegen_utils.infer_equipment_signal_family(
+                        loop.actuator_tag,
+                        target_entity.canonical_type if target_entity else None,
+                    )["command_tag"],
                     target_output_tag=loop.output_tag_analog,
                     inhibit_tag=f"{loop.actuator_tag}_ENABLE",
                     interlock_action_type="force_output" if (loop.output_signal_type == "analog" or loop.output_tag_analog) else "force_command",

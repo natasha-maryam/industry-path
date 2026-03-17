@@ -10,6 +10,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from services.st_codegen_utils import st_codegen_utils
+
 
 class BeremizAdapter:
     """Headless runtime adapter (matiec + gcc/make) with Beremiz-compatible naming."""
@@ -25,6 +27,33 @@ class BeremizAdapter:
     @staticmethod
     def _which(command: str) -> str | None:
         return shutil.which(command)
+
+    @staticmethod
+    def _detect_version(command: str) -> str | None:
+        executable = shutil.which(command)
+        if not executable:
+            return None
+        candidates = [
+            [executable, "--version"],
+            [executable, "-v"],
+            [executable, "-V"],
+        ]
+        for probe in candidates:
+            try:
+                completed = subprocess.run(
+                    probe,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+            except Exception:
+                continue
+            output = (completed.stdout or "") + "\n" + (completed.stderr or "")
+            first_line = next((line.strip() for line in output.splitlines() if line.strip()), "")
+            if first_line:
+                return first_line
+        return None
 
     @staticmethod
     def _resolve_executable(command: str) -> str | None:
@@ -275,62 +304,213 @@ END_TYPE
             text = self._sanitize_empty_var_blocks(text)
             text = re.sub(r"\bTYPE\s+PLANT_STATE\s*:\s*\([^;]*\)\s*;\s*END_TYPE\s*", "", text, flags=re.I | re.S)
             text = self._rewrite_var_global_for_state_manager(text)
+
+            if re.fullmatch(r"\s*VAR_GLOBAL\b[\s\S]*\bEND_VAR\b\s*", text, flags=re.I):
+                continue
+
             if source.name.lower() == "main.st":
                 text = self._inject_main_instance_declarations(text, known_function_blocks)
             parts.append(text.strip())
 
-        bundle_content = preamble + "\n\n" + "\n\n".join([part for part in parts if part]) + "\n"
+        bundle_sections: list[str] = [preamble]
+        bundle_sections.extend([part for part in parts if part])
+
+        bundle_content = "\n\n".join(bundle_sections) + "\n"
         bundle_content = self._shorten_long_identifiers(bundle_content)
         bundle_content = self._normalize_bool_subtractions(bundle_content)
         bundle_path.write_text(bundle_content)
         return bundle_path, bundle_content
 
     @staticmethod
-    def _ensure_located_variables_fallback(project_dir: Path) -> None:
+    def _ensure_global_accessor_bindings(generated_c_dir: Path) -> None:
+        pous_header = generated_c_dir / "POUS.h"
+        if not pous_header.exists():
+            return
+
+        pous_text = pous_header.read_text()
+        required_scalars = {
+            name: type_name
+            for type_name, name in re.findall(r"__DECLARE_EXTERNAL\((\w+),(\w+)\)", pous_text)
+        }
+        required_fbs = {
+            name: type_name
+            for type_name, name in re.findall(r"__DECLARE_EXTERNAL_FB\((\w+),(\w+)\)", pous_text)
+        }
+        if not required_scalars and not required_fbs:
+            return
+
+        located_header = generated_c_dir / "LOCATED_VARIABLES.h"
+        located_text = located_header.read_text() if located_header.exists() else ""
+
+        declared_scalars = {
+            name for _, _, name in re.findall(r"__DECLARE_GLOBAL\((\w+),(\w+),(\w+)\)", located_text)
+        }
+        declared_fbs = {
+            name for _, _, name in re.findall(r"__DECLARE_GLOBAL_FB\((\w+),(\w+),(\w+)\)", located_text)
+        }
+
+        scalar_lines = [
+            f"__DECLARE_GLOBAL({required_scalars[name]},RUNTIME_GLOBAL,{name})"
+            for name in sorted(required_scalars.keys())
+            if name not in declared_scalars
+        ]
+        fb_lines = [
+            f"__DECLARE_GLOBAL_FB({required_fbs[name]},RUNTIME_GLOBAL,{name})"
+            for name in sorted(required_fbs.keys())
+            if name not in declared_fbs
+        ]
+        synthesized_lines = scalar_lines + fb_lines
+        if not synthesized_lines:
+            return
+
+        if not located_text.strip():
+            new_content = "\n".join(
+                [
+                    "#ifndef __LOCATED_VARIABLES_H",
+                    "#define __LOCATED_VARIABLES_H",
+                    "",
+                    "#include \"accessor.h\"",
+                    "",
+                    *synthesized_lines,
+                    "",
+                    "#endif",
+                    "",
+                ]
+            )
+            located_header.write_text(new_content)
+            return
+
+        existing = located_text.rstrip()
+        if "#endif" in existing:
+            idx = existing.rfind("#endif")
+            updated = existing[:idx].rstrip() + "\n\n" + "\n".join(synthesized_lines) + "\n\n" + existing[idx:] + "\n"
+        else:
+            updated = existing + "\n\n" + "\n".join(synthesized_lines) + "\n"
+        located_header.write_text(updated)
+
+    @staticmethod
+    def _extract_declared_global_names(st_sources: list[Path]) -> set[str]:
+        declared: set[str] = set()
+        block_pattern = re.compile(r"\b(VAR|VAR_INPUT|VAR_OUTPUT|VAR_EXTERNAL|VAR_IN_OUT|VAR_TEMP|VAR_GLOBAL)\b(.*?)\bEND_VAR\b", flags=re.S | re.I)
+        declaration_pattern = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:", flags=re.M)
+        for source in st_sources:
+            text = source.read_text()
+            for _, block in block_pattern.findall(text):
+                for match in declaration_pattern.finditer(block):
+                    declared.add(match.group(1))
+        return declared
+
+    @staticmethod
+    def _engineering_error(
+        *,
+        code: str,
+        message: str,
+        variable: str,
+        source_file: str,
+        stage: str,
+        suggestion: str,
+    ) -> dict[str, Any]:
+        return {
+            "success": False,
+            "error_code": code,
+            "message": message,
+            "details": {
+                "variable": variable,
+                "source_file": source_file,
+                "stage": stage,
+                "suggestion": suggestion,
+            },
+        }
+
+    def _validate_generated_externals(
+        self,
+        project_dir: Path,
+        *,
+        st_sources: list[Path],
+        allowed_registry: set[str],
+        runtime_catalog: set[str],
+    ) -> list[dict[str, Any]]:
         generated_c_dir = project_dir / "generated_c"
         pous_header = generated_c_dir / "POUS.h"
         located_header = generated_c_dir / "LOCATED_VARIABLES.h"
-        if not pous_header.exists() or not located_header.exists():
-            return
+        if not pous_header.exists():
+            return [
+                self._engineering_error(
+                    code="MISSING_GENERATED_HEADER",
+                    message="POUS.h was not generated by ST compile output.",
+                    variable="POUS.h",
+                    source_file="generated_c/POUS.h",
+                    stage="compile_st",
+                    suggestion="Verify ST generation and iec2c output before runtime packaging.",
+                )
+            ]
 
-        current_located = located_header.read_text().strip()
-        if current_located:
-            return
+        declared_globals = self._extract_declared_global_names(st_sources)
+        allowed_all = {item for item in allowed_registry if item}
+        allowed_all.update(declared_globals)
 
         content = pous_header.read_text()
-        external_matches = re.findall(r"__DECLARE_EXTERNAL\((\w+),(\w+)\)", content)
-        external_fb_matches = re.findall(r"__DECLARE_EXTERNAL_FB\((\w+),(\w+)\)", content)
+        required_externals = {
+            name for _, name in re.findall(r"__DECLARE_EXTERNAL\((\w+),(\w+)\)", content)
+        }
+        required_externals.update(
+            name for _, name in re.findall(r"__DECLARE_EXTERNAL_FB\((\w+),(\w+)\)", content)
+        )
 
-        global_vars: list[tuple[str, str]] = []
-        seen_globals: set[str] = set()
-        for var_type, name in external_matches:
-            if name in seen_globals:
+        located_text = located_header.read_text() if located_header.exists() else ""
+        declared_located = {
+            name for _, _, name in re.findall(r"__DECLARE_GLOBAL\((\w+),(\w+),(\w+)\)", located_text)
+        }
+        declared_located.update(
+            name for _, _, name in re.findall(r"__DECLARE_GLOBAL_FB\((\w+),(\w+),(\w+)\)", located_text)
+        )
+
+        errors: list[dict[str, Any]] = []
+        for variable in sorted(required_externals):
+            if re.fullmatch(r"CLX_\d+", variable):
                 continue
-            seen_globals.add(name)
-            global_vars.append((var_type, name))
-
-        global_fbs: list[tuple[str, str]] = []
-        seen_fbs: set[str] = set()
-        for fb_type, name in external_fb_matches:
-            if name in seen_fbs:
+            if variable in declared_located:
                 continue
-            seen_fbs.add(name)
-            global_fbs.append((fb_type, name))
+            if variable in allowed_all:
+                continue
 
-        lines = [
-            "#ifndef __LOCATED_VARIABLES_H",
-            "#define __LOCATED_VARIABLES_H",
-            "",
-            "#include \"accessor.h\"",
-            "",
-            "/* Auto-generated fallback globals for matiec externals */",
-        ]
-        for var_type, name in global_vars:
-            lines.append(f"__DECLARE_GLOBAL({var_type},CLX,{name})")
-        for fb_type, name in global_fbs:
-            lines.append(f"__DECLARE_GLOBAL_FB({fb_type},CLX,{name})")
-        lines.extend(["", "#endif /* __LOCATED_VARIABLES_H */", ""])
-        located_header.write_text("\n".join(lines))
+            source_guess = next((item.name for item in st_sources if variable in item.read_text()), st_sources[0].name if st_sources else "unknown")
+            errors.append(
+                self._engineering_error(
+                    code="UNDECLARED_ST_VARIABLE",
+                    message=f"Structured Text references variable `{variable}` but it is not declared in the generated logic model or IO mapping.",
+                    variable=variable,
+                    source_file=source_guess,
+                    stage="compile_st",
+                    suggestion="Declare the variable in the logic model or generate the required IO/tag binding before deployment.",
+                )
+            )
+
+        available_for_dependency = allowed_all | required_externals | declared_located | runtime_catalog
+        for variable in sorted(required_externals):
+            dependencies = st_codegen_utils.infer_command_dependencies(variable)
+            if not dependencies:
+                continue
+            expected_tags = [
+                *dependencies.get("status_tags", []),
+                *dependencies.get("fault_tags", []),
+            ]
+            for expected in expected_tags:
+                if expected in available_for_dependency:
+                    continue
+                source_guess = next((item.name for item in st_sources if variable in item.read_text()), st_sources[0].name if st_sources else "unknown")
+                errors.append(
+                    self._engineering_error(
+                        code="MISSING_DEPENDENT_SIGNAL",
+                        message=f"Structured Text command tag `{variable}` requires dependent signal `{expected}` but no declaration or tag binding was found.",
+                        variable=expected,
+                        source_file=source_guess,
+                        stage="compile_st",
+                        suggestion="Add the missing status/fault signal in the logic model or IO/tag registry before deployment.",
+                    )
+                )
+
+        return errors
 
     @staticmethod
     def _write_runtime_main_stub(project_dir: Path) -> None:
@@ -352,15 +532,24 @@ END_TYPE
         iec2c_path = self._resolve_executable("iec2c")
         dependencies = {
             "iec2c": iec2c_path,
+            "beremiz": self._which("beremiz"),
             "gcc": self._which("gcc"),
             "make": self._which("make"),
             "python3": self._which("python3"),
             "matiec_lib": self._resolve_matiec_lib_dir(iec2c_path),
         }
+        versions = {
+            "iec2c": self._detect_version("iec2c"),
+            "beremiz": self._detect_version("beremiz"),
+            "gcc": self._detect_version("gcc"),
+            "make": self._detect_version("make"),
+            "python3": self._detect_version("python3"),
+        }
         missing = [name for name in ("iec2c", "matiec_lib", "gcc", "make", "python3") if not dependencies.get(name)]
         return {
             "ok": len(missing) == 0,
             "dependencies": dependencies,
+            "versions": versions,
             "missing": missing,
         }
 
@@ -452,7 +641,13 @@ END_TYPE
         makefile.write_text(content)
         self._write_runtime_main_stub(project_dir)
 
-    def compile_st(self, project_dir: Path) -> tuple[bool, dict[str, Any]]:
+    def compile_st(
+        self,
+        project_dir: Path,
+        *,
+        allowed_registry: set[str] | None = None,
+        runtime_catalog: set[str] | None = None,
+    ) -> tuple[bool, dict[str, Any]]:
         st_files = sorted(project_dir.glob("*.st"))
         if not st_files:
             return False, self._step("compile_st", "failed", f"No .st files found in {project_dir}.")
@@ -501,7 +696,25 @@ END_TYPE
                 detail={"bundle": str(bundle_path), "matiec_lib": matiec_lib_dir},
             )
 
-        self._ensure_located_variables_fallback(project_dir)
+        self._ensure_global_accessor_bindings(generated_c_dir)
+
+        validation_errors = self._validate_generated_externals(
+            project_dir,
+            st_sources=st_files,
+            allowed_registry=allowed_registry or set(),
+            runtime_catalog=runtime_catalog or set(),
+        )
+        if validation_errors:
+            first = validation_errors[0]
+            return False, self._step(
+                "compile_st",
+                "failed",
+                first.get("message", "Compile validation failed due to undeclared variables."),
+                detail={
+                    "error_code": first.get("error_code"),
+                    "engineering_errors": validation_errors,
+                },
+            )
 
         return True, self._step(
             "compile_st",

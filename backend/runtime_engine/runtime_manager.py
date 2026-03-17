@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,41 @@ class RuntimeManager:
             ]
         )
 
+    @staticmethod
+    def _extract_global_signal_rows(st_files: list[Path]) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        signal_type_by_st = {
+            "REAL": "analog",
+            "LREAL": "analog",
+            "INT": "int",
+            "DINT": "int",
+            "BOOL": "digital",
+        }
+
+        declaration_block_pattern = re.compile(r"\b(VAR_EXTERNAL|VAR_GLOBAL)\b(.*?)\bEND_VAR\b", flags=re.S | re.I)
+        declaration_pattern = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([A-Za-z_][A-Za-z0-9_]*)", flags=re.M)
+
+        for st_file in st_files:
+            content = st_file.read_text()
+            for _, block in declaration_block_pattern.findall(content):
+                for match in declaration_pattern.finditer(block):
+                    tag = match.group(1).upper().strip()
+                    st_type = match.group(2).upper().strip()
+                    if not tag or tag in seen:
+                        continue
+                    seen.add(tag)
+                    rows.append(
+                        {
+                            "tag": tag,
+                            "io_type": "VIRTUAL",
+                            "st_type": st_type,
+                            "signal_type": signal_type_by_st.get(st_type, "analog"),
+                            "is_input": True,
+                        }
+                    )
+        return rows
+
     def _load_project_io_map(self, project_id: str) -> list[dict[str, Any]]:
         latest = io_mapping_engine.get_latest_io_mapping(project_id)
         if latest:
@@ -60,6 +96,15 @@ class RuntimeManager:
         supplied_io_map = io_map or []
         resolved_st_files = self._ensure_st_paths(supplied_st_files) if supplied_st_files else self._collect_project_st_files(project_id)
         effective_io_map = supplied_io_map if supplied_io_map else self._load_project_io_map(project_id)
+        global_signal_rows = self._extract_global_signal_rows(resolved_st_files)
+        merged_catalog_rows = list(effective_io_map)
+        merged_tags = {str(item.get("tag") or "").strip().upper() for item in merged_catalog_rows if str(item.get("tag") or "").strip()}
+        for row in global_signal_rows:
+            tag = str(row.get("tag") or "").strip().upper()
+            if not tag or tag in merged_tags:
+                continue
+            merged_catalog_rows.append(row)
+            merged_tags.add(tag)
         self.logger.info(
             "runtime_manager deploy project_id=%s st_files=%s io_points=%s",
             project_id,
@@ -67,9 +112,18 @@ class RuntimeManager:
             len(effective_io_map),
         )
 
-        runtime_signal_state.sync_project(project_id, io_rows=effective_io_map)
+        runtime_signal_state.sync_project(project_id, io_rows=merged_catalog_rows)
         steps: list[dict[str, Any]] = []
         errors: list[str] = []
+        engineering_errors: list[dict[str, Any]] = []
+
+        allowed_registry = {
+            str(item.get("tag") or "").strip().upper()
+            for item in merged_catalog_rows
+            if str(item.get("tag") or "").strip()
+        }
+        runtime_snapshot = runtime_signal_state.get_project_snapshot(project_id)
+        runtime_catalog = set(runtime_snapshot.get("current_values", {}).keys())
 
         dependency_report = self.runtime.dependency_report()
         if not dependency_report["ok"]:
@@ -85,12 +139,14 @@ class RuntimeManager:
                 ]
             )
             return {
+                "success": False,
                 "status": "failed",
                 "project_id": project_id,
                 "runtime": "headless-matiec",
                 "runtime_project_dir": None,
                 "steps": steps,
                 "errors": errors,
+                "engineering_errors": engineering_errors,
                 "dependency_report": dependency_report,
             }
 
@@ -102,10 +158,19 @@ class RuntimeManager:
             errors.append(prepared_message)
 
         if not errors:
-            compile_ok, compile_step = self.runtime.compile_st(project_dir)
+            compile_ok, compile_step = self.runtime.compile_st(
+                project_dir,
+                allowed_registry=allowed_registry,
+                runtime_catalog=runtime_catalog,
+            )
             steps.append(compile_step)
             if not compile_ok:
                 errors.append(compile_step["message"])
+                detail = compile_step.get("detail") if isinstance(compile_step, dict) else None
+                if isinstance(detail, dict):
+                    compile_engineering_errors = detail.get("engineering_errors")
+                    if isinstance(compile_engineering_errors, list):
+                        engineering_errors.extend([item for item in compile_engineering_errors if isinstance(item, dict)])
 
         if not errors:
             generate_ok, generate_step = self.runtime.generate_c(project_dir)
@@ -144,12 +209,14 @@ class RuntimeManager:
             steps.append({"name": "start_runtime", "status": "failed", "message": "Skipped because apply_io failed."})
 
         return {
+            "success": len(errors) == 0,
             "status": "passed" if not errors else "failed",
             "project_id": project_id,
             "runtime": "headless-matiec",
             "runtime_project_dir": str(project_dir),
             "steps": steps,
             "errors": errors,
+            "engineering_errors": engineering_errors,
             "dependency_report": dependency_report,
             "runtime_status": self.runtime.runtime_status(),
         }

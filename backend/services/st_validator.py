@@ -137,7 +137,70 @@ def _is_empty_routine_body(content: str) -> bool:
     return has_logic is None
 
 
-def validate_ast(content: str, ast: Any, parse_issues: list[ParseIssue]) -> tuple[list[STVerifierIssue], list[STVerifierIssue]]:
+def _is_globals_or_registry_file(relative_path: str) -> bool:
+    normalized = relative_path.replace("\\", "/").strip().lower()
+    if normalized.startswith("control_logic/"):
+        normalized = normalized.split("/", 1)[1] if "/" in normalized else ""
+    if normalized.startswith("globals/"):
+        return True
+    filename = Path(normalized).name
+    return bool(re.search(r"(runtime_)?tag_registry|global_registry|globals?", filename))
+
+
+def _validate_declaration_file(content: str) -> list[STVerifierIssue]:
+    issues: list[STVerifierIssue] = []
+    in_var_block = False
+    has_var_block = False
+    var_open_re = re.compile(r"^\s*VAR(?:_(?:INPUT|OUTPUT|IN_OUT|EXTERNAL|TEMP|GLOBAL))?(?:\s+(?:CONSTANT|RETAIN))?\s*$", flags=re.IGNORECASE)
+    declaration_re = re.compile(
+        r"^\s*[A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*\s*(?:AT\s+%[A-Za-z0-9\._]+\s*)?:\s*[A-Za-z_][A-Za-z0-9_]*(?:\s*:=\s*.+)?;\s*$",
+        flags=re.IGNORECASE,
+    )
+
+    for line_no, line in enumerate(content.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("(*") or stripped.startswith("//"):
+            continue
+
+        if var_open_re.match(stripped):
+            has_var_block = True
+            in_var_block = True
+            continue
+
+        if stripped.upper() == "END_VAR":
+            in_var_block = False
+            continue
+
+        if in_var_block and not declaration_re.match(line):
+            issues.append(
+                STVerifierIssue(
+                    line=line_no,
+                    column=1,
+                    code="malformed_declaration",
+                    message="Declaration line is not well-formed inside VAR/END_VAR block.",
+                )
+            )
+
+    if not has_var_block:
+        issues.append(
+            STVerifierIssue(
+                line=1,
+                column=1,
+                code="missing_declaration_block",
+                message="Declaration file must contain at least one VAR...END_VAR block.",
+            )
+        )
+
+    return issues
+
+
+def validate_ast(
+    content: str,
+    ast: Any,
+    parse_issues: list[ParseIssue],
+    *,
+    relative_path: str | None = None,
+) -> tuple[list[STVerifierIssue], list[STVerifierIssue]]:
     """Validate syntax and structural rules from parse diagnostics and textual fallbacks."""
 
     errors: list[STVerifierIssue] = []
@@ -189,8 +252,11 @@ def validate_ast(content: str, ast: Any, parse_issues: list[ParseIssue]) -> tupl
             )
         )
 
+    is_declaration_file = _is_globals_or_registry_file(relative_path or "")
     headers = _routine_headers(content)
-    if not headers:
+    if is_declaration_file:
+        errors.extend(_validate_declaration_file(content))
+    elif not headers:
         errors.append(
             STVerifierIssue(
                 line=1,
@@ -238,7 +304,7 @@ def validate_ast(content: str, ast: Any, parse_issues: list[ParseIssue]) -> tupl
                 )
             )
 
-    if headers and _is_empty_routine_body(content):
+    if headers and (not is_declaration_file) and _is_empty_routine_body(content):
         warnings.append(
             STVerifierIssue(
                 line=headers[0][0],
@@ -307,8 +373,14 @@ def verify_st_workspace(workspace_path: str) -> dict:
 
     file_results: list[STVerifierFileResult] = []
     for file_path in st_files:
+        relative_path = file_path.relative_to(control_logic_root).as_posix()
         content, ast, parse_issues = parse_st_file(file_path, parser=parser)
-        errors, warnings = validate_ast(content=content, ast=ast, parse_issues=parse_issues)
+        errors, warnings = validate_ast(
+            content=content,
+            ast=ast,
+            parse_issues=parse_issues,
+            relative_path=relative_path,
+        )
 
         if errors:
             file_status = "failed"

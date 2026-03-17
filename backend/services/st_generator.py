@@ -14,6 +14,15 @@ class STGenerator:
 
     REQUIRED_MODULE_ORDER = ["interlocks", "sequences", "equipment", "loops", "alarms"]
     EXECUTION_LAYER_ORDER = ["system", "interlocks", "sequences", "equipment", "loops", "alarms"]
+    STATE_MANAGER_GLOBALS = {
+        "CURRENT_PLANT_STATE",
+        "NEXT_PLANT_STATE",
+        "PLANT_START_CMD",
+        "PLANT_STOP_CMD",
+        "PLANT_FAULT_ACTIVE",
+        "PROCESS_RUNNING",
+        "PROCESS_STOPPED",
+    }
 
     def __init__(self) -> None:
         self.logger = logging.getLogger(__name__)
@@ -95,6 +104,7 @@ class STGenerator:
         }
 
         for routine in model.equipment_routines:
+            behavior = st_codegen_utils.classify_equipment_behavior(routine.equipment_type)
             if routine.command_tag:
                 symbol_types[self._symbol(routine.command_tag)] = "BOOL"
             if routine.status_tag:
@@ -115,7 +125,8 @@ class STGenerator:
                 symbol_types[self._symbol(routine.close_command_tag)] = "BOOL"
             if routine.output_tag:
                 symbol_types[self._symbol(routine.output_tag)] = "REAL"
-            symbol_types[self._symbol(st_codegen_utils.normalize_tag_with_suffix(routine.equipment_tag, "RUN_CMD"))] = "BOOL"
+            if behavior == "start_stop":
+                symbol_types[self._symbol(st_codegen_utils.normalize_tag_with_suffix(routine.equipment_tag, "RUN_CMD"))] = "BOOL"
 
         for loop in model.loops:
             pv = self._symbol(loop.pv_tag or loop.sensor_tag)
@@ -246,6 +257,8 @@ class STGenerator:
             "INT",
             "CLX_CLAMPREAL",
             "FB_R_TRIG",
+            "CLK",
+            "Q",
             "PLANT_STATE",
             "PLANT_STOPPED",
             "PLANT_STARTING",
@@ -284,7 +297,6 @@ class STGenerator:
             auto_mode,
             permissive,
             run_feedback,
-            run_cmd,
             "CURRENT_PLANT_STATE",
         }
         if behavior in {"start_stop", "open_close"}:
@@ -463,6 +475,7 @@ class STGenerator:
             body.append(f"    {status} := FALSE;")
             body.append("END_IF;")
         else:
+            external_symbols.add(run_cmd)
             base = self._block_suffix(eq_tag)
             cmd_valid = f"CMD_VALID_{base}"
             permissive_ok = f"PERMISSIVE_OK_{base}"
@@ -1061,9 +1074,10 @@ class STGenerator:
             "SHUTDOWN_CMD",
         }
         remove_indices: set[int] = set()
-        for name, meta in declared.items():
-            if name not in used and name not in required_keep and meta["section"] in {"VAR", "VAR_EXTERNAL", "VAR_GLOBAL"}:
-                remove_indices.add(meta["line"])
+        if not relative_path.startswith("globals/"):
+            for name, meta in declared.items():
+                if name not in used and name not in required_keep and meta["section"] in {"VAR", "VAR_EXTERNAL", "VAR_GLOBAL"}:
+                    remove_indices.add(meta["line"])
         if remove_indices:
             lines = [line for idx, line in enumerate(lines) if idx not in remove_indices]
 
@@ -1174,23 +1188,63 @@ class STGenerator:
             ]
         )
 
+    @classmethod
+    def _render_global_tag_registry(cls, symbol_types: dict[str, str], required_symbols: set[str] | None = None) -> str:
+        allowed_types = {"BOOL", "REAL", "INT", "DINT", "LREAL", "STRING", "PLANT_STATE"}
+        required_symbols = required_symbols or set()
+
+        def _include_symbol(symbol: str, st_type: str) -> bool:
+            if symbol in cls.STATE_MANAGER_GLOBALS:
+                return False
+            if symbol.startswith("FB_") or symbol.startswith("INST_"):
+                return False
+            if symbol.startswith("CLX_"):
+                return False
+            return st_type in allowed_types
+
+        merged_symbol_types = dict(symbol_types)
+        for symbol in required_symbols:
+            merged_symbol_types.setdefault(symbol, "REAL")
+
+        registry_symbols = sorted(
+            [
+                (symbol, st_type)
+                for symbol, st_type in merged_symbol_types.items()
+                if _include_symbol(symbol, st_type)
+            ],
+            key=lambda item: item[0],
+        )
+
+        lines = ["VAR_GLOBAL"]
+        for symbol, st_type in registry_symbols:
+            lines.append(f"    {symbol} : {st_type};")
+        lines.append("END_VAR")
+        return "\n".join(lines).strip() + "\n"
+
+    @staticmethod
+    def _collect_threshold_symbols_from_generated_contents(generated_contents: dict[str, str]) -> set[str]:
+        pattern = re.compile(r"\b([A-Z_][A-Z0-9_]*(?:_HH_SP|_HI_SP|_H_SP|_LL_SP|_LO_SP|_L_SP))\b")
+        symbols: set[str] = set()
+        for content in generated_contents.values():
+            symbols.update(match.group(1) for match in pattern.finditer(content.upper()))
+        return symbols
+
     @staticmethod
     def _render_system_state_manager() -> str:
         return "\n".join(
             [
                 "TYPE PLANT_STATE : (PLANT_STOPPED, PLANT_STARTING, PLANT_RUNNING, PLANT_STOPPING, PLANT_FAULT); END_TYPE",
                 "",
-                "VAR_GLOBAL",
-                "    CURRENT_PLANT_STATE : PLANT_STATE := PLANT_STOPPED;",
-                "    NEXT_PLANT_STATE : PLANT_STATE := PLANT_STOPPED;",
+                "FUNCTION_BLOCK FB_SYSTEM_STATE_MANAGER",
+                "VAR_EXTERNAL",
+                "    CURRENT_PLANT_STATE : PLANT_STATE;",
+                "    NEXT_PLANT_STATE : PLANT_STATE;",
                 "    PLANT_START_CMD : BOOL;",
                 "    PLANT_STOP_CMD : BOOL;",
                 "    PLANT_FAULT_ACTIVE : BOOL;",
                 "    PROCESS_RUNNING : BOOL;",
                 "    PROCESS_STOPPED : BOOL;",
                 "END_VAR",
-                "",
-                "FUNCTION_BLOCK FB_SYSTEM_STATE_MANAGER",
                 "VAR",
                 "    StartEdge : FB_R_TRIG;",
                 "    StopEdge : FB_R_TRIG;",
@@ -1364,6 +1418,40 @@ class STGenerator:
         if errors:
             raise ValueError("Production completeness layer failed: " + " | ".join(errors))
 
+    def _validate_command_families(self, model: CompletedLogicModel, symbol_types: dict[str, str]) -> None:
+        available_tags = {self._symbol(tag) for tag in symbol_types.keys() if tag}
+        errors: list[str] = []
+
+        for routine in model.equipment_routines:
+            routine_tag = self._symbol(routine.equipment_tag)
+            command_candidates = [
+                routine.command_tag,
+                routine.open_command_tag,
+                routine.close_command_tag,
+            ]
+            for command_tag in command_candidates:
+                command_symbol = self._symbol(command_tag) if command_tag else ""
+                if not command_symbol:
+                    continue
+
+                dependencies = st_codegen_utils.infer_command_dependencies(command_symbol)
+                if not dependencies:
+                    continue
+
+                for status_tag in dependencies.get("status_tags", []):
+                    if status_tag not in available_tags:
+                        errors.append(
+                            f"equipment `{routine_tag}` command `{command_symbol}` missing dependent status `{status_tag}`"
+                        )
+                for fault_tag in dependencies.get("fault_tags", []):
+                    if fault_tag not in available_tags:
+                        errors.append(
+                            f"equipment `{routine_tag}` command `{command_symbol}` missing dependent fault `{fault_tag}`"
+                        )
+
+        if errors:
+            raise ValueError("Engineering command-family validation failed: " + " | ".join(errors))
+
     def generate(self, project_id: str, model: CompletedLogicModel) -> STGenerationResult:
         paths = project_service.workspace_paths(project_id)
         control_logic_root = paths.control_logic
@@ -1371,6 +1459,7 @@ class STGenerator:
             for old_file in control_logic_root.rglob("*.st"):
                 old_file.unlink(missing_ok=True)
         symbol_types = self._collect_symbol_types(model)
+        self._validate_command_families(model, symbol_types)
 
         files: list[GeneratedSTFile] = []
         generated_contents: dict[str, str] = {}
@@ -1474,6 +1563,11 @@ class STGenerator:
         generated_contents["utilities/r_trig.st"] = r_trig_st
         generated_contents["system/system_state_manager.st"] = self._logic_expansion_pass(self._render_system_state_manager())
         generated_contents["system/system_fault_manager.st"] = self._logic_expansion_pass(self._render_system_fault_manager(model))
+
+        threshold_symbols = self._collect_threshold_symbols_from_generated_contents(generated_contents)
+        generated_contents["globals/runtime_tag_registry.st"] = self._logic_expansion_pass(
+            self._render_global_tag_registry(symbol_types, required_symbols=threshold_symbols)
+        )
 
         self._run_deterministic_integrity_pass(model, generated_contents, symbol_types)
 
