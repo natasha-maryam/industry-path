@@ -24,7 +24,7 @@ const ACTIONS: Array<{ id: ToolbarAction; label: string; primary?: boolean }> = 
   { id: "generate_st", label: "Generate ST" },
   { id: "verify_st", label: "Verify ST" },
   { id: "io_mapping", label: "Generate IO Mapping" },
-  { id: "deploy", label: "Deploy PLC" },
+  { id: "deploy", label: "Deploy Runtime" },
   { id: "simulate", label: "Run Simulation", primary: true },
   { id: "versions", label: "Versions" },
   { id: "export_logic", label: "Export Logic" },

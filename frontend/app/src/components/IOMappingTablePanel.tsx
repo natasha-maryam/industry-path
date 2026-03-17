@@ -20,6 +20,7 @@ export type IOMappingTablePanelProps = {
   pageSizeOptions?: number[];
   defaultPageSize?: number;
   maxChannel?: number;
+  forcedTags?: string[];
 };
 
 type ValidationCode = "duplicate_tag" | "invalid_io_type" | "missing_signal" | "channel_overflow";
@@ -47,7 +48,12 @@ export default function IOMappingTablePanel({
   pageSizeOptions = [10, 20, 50],
   defaultPageSize = 10,
   maxChannel = 15,
+  forcedTags = [],
 }: IOMappingTablePanelProps) {
+    const forcedTagSet = useMemo<Set<string>>(() => {
+      return new Set(forcedTags.map((item) => item.toUpperCase()));
+    }, [forcedTags]);
+
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [tagFilter, setTagFilter] = useState<string>("all");
   const [equipmentFilter, setEquipmentFilter] = useState<string>("all");
@@ -252,10 +258,15 @@ export default function IOMappingTablePanel({
             {pageRows.map((row, rowIndex) => (
               <tr
                 key={`${row.tag}-${row.plc_id}-${row.slot}-${row.channel}-${rowIndex}`}
-                className={selectedTag && selectedTag.toUpperCase() === row.tag.toUpperCase() ? "io-mapping-row-selected" : ""}
+                className={`${selectedTag && selectedTag.toUpperCase() === row.tag.toUpperCase() ? "io-mapping-row-selected" : ""} ${
+                  forcedTagSet.has(row.tag.toUpperCase()) ? "io-mapping-row-forced" : ""
+                }`.trim()}
                 onClick={() => onSelectRow?.(row.tag)}
               >
-                <td className="mono">{row.tag}</td>
+                <td className="mono">
+                  {row.tag}
+                  {forcedTagSet.has(row.tag.toUpperCase()) ? <span className="io-badge warning">Forced</span> : null}
+                </td>
                 <td>{row.device_type}</td>
                 <td className="mono">{row.io_type}</td>
                 <td className="mono">{row.plc_id}</td>

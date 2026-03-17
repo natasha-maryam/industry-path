@@ -4,8 +4,11 @@ import json
 import logging
 import os
 import socket
+import urllib.parse
 import urllib.error
 import urllib.request
+import uuid
+from http.cookiejar import CookieJar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -22,6 +25,46 @@ class RuntimeDeployer:
 
     def __init__(self) -> None:
         self.logger = logging.getLogger(__name__)
+
+    @staticmethod
+    def _truncate(value: str, max_len: int = 220) -> str:
+        compact = " ".join(value.split())
+        if len(compact) <= max_len:
+            return compact
+        return f"{compact[:max_len]}..."
+
+    @staticmethod
+    def _response_indicates_failure(payload: str) -> bool:
+        text = payload.lower()
+        failure_tokens = (
+            "failed",
+            "failure",
+            "error",
+            "syntax error",
+            "compile error",
+            "compilation failed",
+            "unable",
+            "invalid",
+            "exception",
+        )
+        return any(token in text for token in failure_tokens)
+
+    @staticmethod
+    def _response_requires_auth(payload: str) -> bool:
+        text = payload.lower()
+        auth_tokens = (
+            "action=\"/login\"",
+            "name=\"username\"",
+            "name=\"password\"",
+            "sign in",
+            "login",
+        )
+        return any(token in text for token in auth_tokens)
+
+    def _append_step(self, steps: list[RuntimeDeployStep], name: str, status: str, message: str) -> None:
+        steps.append(self._step(name, status, message))
+        log_method = self.logger.info if status == "passed" else self.logger.warning
+        log_method("runtime_deploy step=%s status=%s detail=%s", name, status, message)
 
     @staticmethod
     def _is_containerized_runtime() -> bool:
@@ -153,8 +196,355 @@ class RuntimeDeployer:
             "status": "ok" if socket_ok else "error",
         }
 
+    @staticmethod
+    def _build_single_st_bundle(project_name: str, st_files: list[Path]) -> str:
+        header = [
+            f"(* CrossLayerX OpenPLC bundle for {project_name} *)",
+            f"(* Generated at {datetime.now(timezone.utc).isoformat()} *)",
+            "",
+        ]
+        body: list[str] = []
+        for st_file in st_files:
+            body.append(f"(* SOURCE: {st_file.name} *)")
+            body.append(st_file.read_text())
+            body.append("")
+        return "\n".join(header + body)
+
+    @staticmethod
+    def _encode_multipart_formdata(fields: dict[str, str], file_field: str, file_name: str, file_content: str) -> tuple[bytes, str]:
+        boundary = f"----crosslayerx-{uuid.uuid4().hex}"
+        chunks: list[bytes] = []
+
+        for key, value in fields.items():
+            chunks.append(f"--{boundary}\r\n".encode("utf-8"))
+            chunks.append(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8"))
+            chunks.append(value.encode("utf-8"))
+            chunks.append(b"\r\n")
+
+        chunks.append(f"--{boundary}\r\n".encode("utf-8"))
+        chunks.append(
+            f'Content-Disposition: form-data; name="{file_field}"; filename="{file_name}"\r\n'.encode("utf-8")
+        )
+        chunks.append(b"Content-Type: text/plain\r\n\r\n")
+        chunks.append(file_content.encode("utf-8"))
+        chunks.append(b"\r\n")
+        chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
+        return b"".join(chunks), boundary
+
+    def _http_request(
+        self,
+        method: str,
+        url: str,
+        timeout_seconds: float,
+        data: bytes | None = None,
+        headers: dict[str, str] | None = None,
+        opener: urllib.request.OpenerDirector | None = None,
+    ) -> tuple[bool, int, str]:
+        request = urllib.request.Request(url=url, method=method, data=data)
+        for key, value in (headers or {}).items():
+            request.add_header(key, value)
+
+        try:
+            open_fn = opener.open if opener is not None else urllib.request.urlopen
+            with open_fn(request, timeout=timeout_seconds) as response:
+                content = response.read().decode("utf-8", errors="ignore")
+                return True, int(response.status), content
+        except urllib.error.HTTPError as exc:
+            payload = exc.read().decode("utf-8", errors="ignore") if hasattr(exc, "read") else ""
+            return False, int(exc.code), payload
+        except Exception as exc:
+            return False, 0, str(exc)
+
+    def _openplc_establish_session(
+        self,
+        runtime_host: str,
+        runtime_port: int,
+        runtime_config: dict[str, Any],
+    ) -> tuple[urllib.request.OpenerDirector | None, bool, str]:
+        username = str(runtime_config.get("username") or os.getenv("OPENPLC_USERNAME", "")).strip()
+        password = str(runtime_config.get("password") or os.getenv("OPENPLC_PASSWORD", "")).strip()
+        if not username or not password:
+            return None, False, "OpenPLC credentials not configured; proceeding unauthenticated."
+
+        login_url = f"http://{runtime_host}:{runtime_port}/login"
+        cookie_jar = CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+
+        ok, status_code, login_page = self._http_request(
+            method="GET",
+            url=login_url,
+            timeout_seconds=6.0,
+            opener=opener,
+        )
+        if not ok:
+            return None, False, f"OpenPLC login page request failed (HTTP {status_code}): {self._truncate(login_page)}"
+
+        form_payload = urllib.parse.urlencode({"username": username, "password": password}).encode("utf-8")
+        ok, status_code, login_submit = self._http_request(
+            method="POST",
+            url=login_url,
+            timeout_seconds=8.0,
+            data=form_payload,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            opener=opener,
+        )
+        if not ok:
+            return None, False, f"OpenPLC login submission failed (HTTP {status_code}): {self._truncate(login_submit)}"
+        if self._response_requires_auth(login_submit) or self._response_indicates_failure(login_submit):
+            return None, False, f"OpenPLC login appears unsuccessful: {self._truncate(login_submit)}"
+
+        ok, status_code, home_payload = self._http_request(
+            method="GET",
+            url=f"http://{runtime_host}:{runtime_port}/",
+            timeout_seconds=6.0,
+            opener=opener,
+        )
+        if not ok:
+            return None, False, f"OpenPLC post-login verification failed (HTTP {status_code}): {self._truncate(home_payload)}"
+        if self._response_requires_auth(home_payload):
+            return None, False, "OpenPLC post-login verification still shows login page; credentials may be invalid."
+
+        return opener, True, f"Authenticated OpenPLC session established for user `{username}`."
+
+    def _openplc_verify_http_session(
+        self,
+        runtime_host: str,
+        runtime_port: int,
+        opener: urllib.request.OpenerDirector | None = None,
+    ) -> tuple[bool, str]:
+        ok, status_code, payload = self._http_request(
+            method="GET",
+            url=f"http://{runtime_host}:{runtime_port}/",
+            timeout_seconds=5.0,
+            opener=opener,
+        )
+        if ok and self._response_requires_auth(payload):
+            return False, "OpenPLC reachable, but HTTP session is unauthenticated (redirect/login page detected)."
+        if ok:
+            return True, f"OpenPLC HTTP session reachable (GET / -> HTTP {status_code})."
+        if status_code in {401, 403}:
+            return False, f"OpenPLC reachable but HTTP auth blocked access to / (HTTP {status_code})."
+        reason = self._truncate(payload) if payload else "no response body"
+        return False, f"OpenPLC HTTP session check failed (HTTP {status_code}): {reason}"
+
+    def _openplc_try_upload_project(
+        self,
+        runtime_host: str,
+        runtime_port: int,
+        project_name: str,
+        bundled_st_content: str,
+        opener: urllib.request.OpenerDirector | None = None,
+    ) -> tuple[bool, str, str]:
+        timeout_seconds = 8.0
+        upload_paths = [
+            "/upload-program",
+            "/upload",
+            "/api/program/upload",
+            "/api/upload-program",
+        ]
+        file_fields = ["program_file", "file", "st_file", "program"]
+        text_fields_sets = [
+            {"project_name": project_name},
+            {"name": project_name},
+            {},
+        ]
+        attempts: list[str] = []
+        auth_blocked = False
+
+        for path in upload_paths:
+            url = f"http://{runtime_host}:{runtime_port}{path}"
+            for file_field in file_fields:
+                for text_fields in text_fields_sets:
+                    payload, boundary = self._encode_multipart_formdata(
+                        fields=text_fields,
+                        file_field=file_field,
+                        file_name=f"{project_name}.st",
+                        file_content=bundled_st_content,
+                    )
+                    ok, status_code, response_text = self._http_request(
+                        method="POST",
+                        url=url,
+                        timeout_seconds=timeout_seconds,
+                        data=payload,
+                        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+                        opener=opener,
+                    )
+                    excerpt = self._truncate(response_text)
+                    attempts.append(
+                        f"POST {path} field={file_field} params={list(text_fields.keys()) or ['none']} -> "
+                        f"HTTP {status_code} {'ok' if ok else 'error'}; body='{excerpt}'"
+                    )
+                    if ok:
+                        if self._response_requires_auth(response_text):
+                            auth_blocked = True
+                            continue
+                        if self._response_indicates_failure(response_text):
+                            continue
+                        return (
+                            True,
+                            path,
+                            f"OpenPLC upload accepted at {path} (HTTP {status_code}). Response: {excerpt or 'empty body'}",
+                        )
+                    if status_code not in {404, 405} and response_text:
+                        self.logger.debug("OpenPLC upload attempt failed at %s (%s): %s", path, status_code, response_text[:200])
+
+        details = " | ".join(attempts[-6:])
+        if auth_blocked:
+            return False, "", f"OpenPLC upload blocked by authentication (login required). Attempts: {details or 'none'}"
+        return False, "", f"OpenPLC upload rejected/undetected. Attempts: {details or 'none'}"
+
+    def _openplc_try_compile_load(
+        self,
+        runtime_host: str,
+        runtime_port: int,
+        opener: urllib.request.OpenerDirector | None = None,
+    ) -> tuple[bool, str]:
+        timeout_seconds = 10.0
+        compile_candidates = [
+            ("POST", "/compile-program"),
+            ("POST", "/api/program/compile"),
+            ("POST", "/api/compile"),
+            ("GET", "/compile-program"),
+        ]
+        attempts: list[str] = []
+        auth_blocked = False
+
+        for method, path in compile_candidates:
+            url = f"http://{runtime_host}:{runtime_port}{path}"
+            ok, status_code, response_text = self._http_request(
+                method=method,
+                url=url,
+                timeout_seconds=timeout_seconds,
+                opener=opener,
+            )
+            excerpt = self._truncate(response_text)
+            attempts.append(f"{method} {path} -> HTTP {status_code} {'ok' if ok else 'error'}; body='{excerpt}'")
+            if ok:
+                if self._response_requires_auth(response_text):
+                    auth_blocked = True
+                    continue
+                if self._response_indicates_failure(response_text):
+                    continue
+                return True, f"Compile/load accepted via {path} (HTTP {status_code}). Response: {excerpt or 'empty body'}"
+
+        if auth_blocked:
+            return False, f"OpenPLC compile/load blocked by authentication (login required). Attempts: {' | '.join(attempts[-6:])}"
+        return False, f"OpenPLC compile/load failed or endpoint unsupported. Attempts: {' | '.join(attempts[-6:])}"
+
+    def _openplc_try_apply_io_mapping(
+        self,
+        runtime_host: str,
+        runtime_port: int,
+        io_rows: list[dict[str, Any]],
+        opener: urllib.request.OpenerDirector | None = None,
+    ) -> tuple[bool, str]:
+        timeout_seconds = 8.0
+        mapping_payload = json.dumps({"io_points": io_rows}).encode("utf-8")
+        mapping_candidates = [
+            "/api/io-mapping",
+            "/api/runtime/io",
+            "/api/io",
+            "/apply-io-config",
+        ]
+        attempts: list[str] = []
+        auth_blocked = False
+
+        for path in mapping_candidates:
+            url = f"http://{runtime_host}:{runtime_port}{path}"
+            ok, status_code, response_text = self._http_request(
+                method="POST",
+                url=url,
+                timeout_seconds=timeout_seconds,
+                data=mapping_payload,
+                headers={"Content-Type": "application/json"},
+                opener=opener,
+            )
+            excerpt = self._truncate(response_text)
+            attempts.append(f"POST {path} -> HTTP {status_code} {'ok' if ok else 'error'}; body='{excerpt}'")
+            if ok:
+                if self._response_requires_auth(response_text):
+                    auth_blocked = True
+                    continue
+                if self._response_indicates_failure(response_text):
+                    continue
+                return True, f"IO mapping applied via {path} (HTTP {status_code}). Response: {excerpt or 'empty body'}"
+
+        if auth_blocked:
+            return False, f"OpenPLC IO mapping blocked by authentication (login required). Attempts: {' | '.join(attempts[-6:])}"
+        return False, f"OpenPLC IO mapping failed or endpoint unsupported. Attempts: {' | '.join(attempts[-6:])}"
+
+    def _openplc_try_start_runtime(
+        self,
+        runtime_host: str,
+        runtime_port: int,
+        opener: urllib.request.OpenerDirector | None = None,
+    ) -> tuple[bool, str]:
+        timeout_seconds = 8.0
+        start_candidates = [
+            ("POST", "/start_plc"),
+            ("POST", "/api/runtime/start"),
+            ("POST", "/api/start"),
+            ("GET", "/start_plc"),
+        ]
+        attempts: list[str] = []
+        auth_blocked = False
+
+        for method, path in start_candidates:
+            url = f"http://{runtime_host}:{runtime_port}{path}"
+            ok, status_code, response_text = self._http_request(
+                method=method,
+                url=url,
+                timeout_seconds=timeout_seconds,
+                opener=opener,
+            )
+            excerpt = self._truncate(response_text)
+            attempts.append(f"{method} {path} -> HTTP {status_code} {'ok' if ok else 'error'}; body='{excerpt}'")
+            if ok:
+                if self._response_requires_auth(response_text):
+                    auth_blocked = True
+                    continue
+                if self._response_indicates_failure(response_text):
+                    continue
+                return True, f"OpenPLC runtime start triggered via {path} (HTTP {status_code}). Response: {excerpt or 'empty body'}"
+
+        if auth_blocked:
+            return False, f"OpenPLC runtime start blocked by authentication (login required). Attempts: {' | '.join(attempts[-6:])}"
+        return False, f"OpenPLC runtime start failed or endpoint unsupported. Attempts: {' | '.join(attempts[-6:])}"
+
+    def _openplc_verify_loaded_program(
+        self,
+        runtime_host: str,
+        runtime_port: int,
+        expected_project_name: str,
+        opener: urllib.request.OpenerDirector | None = None,
+    ) -> tuple[bool, str, str | None]:
+        verification_paths = ["/", "/programs", "/dashboard", "/api/program"]
+        expected_token = expected_project_name.strip().lower()
+        attempts: list[str] = []
+
+        for path in verification_paths:
+            url = f"http://{runtime_host}:{runtime_port}{path}"
+            ok, status_code, response_text = self._http_request(
+                method="GET",
+                url=url,
+                timeout_seconds=5.0,
+                opener=opener,
+            )
+            if not ok:
+                attempts.append(f"GET {path} -> HTTP {status_code} error")
+                continue
+
+            normalized = response_text.lower()
+            attempts.append(f"GET {path} -> HTTP {status_code} ok")
+            if "blank program" in normalized:
+                return False, f"OpenPLC reports Blank Program at {path} after deploy.", None
+            if expected_token and expected_token in normalized:
+                return True, f"Verified OpenPLC loaded generated project `{expected_project_name}` via {path} (HTTP {status_code}).", expected_project_name
+
+        return False, f"Could not verify generated project name in OpenPLC program view. Checks: {' | '.join(attempts)}", None
+
     def deploy_to_runtime(self, project_id: str, workspace_path: str, runtime_config: dict) -> dict:
-        """Deploy validated ST + IO mapping payload into OpenPLC runtime and return stepwise validation status."""
+        """Deploy ST + IO mappings into OpenPLC and only pass when generated logic is verifiably loaded."""
 
         project_service.ensure_project(project_id)
         errors: list[str] = []
@@ -162,6 +552,8 @@ class RuntimeDeployer:
         steps: list[RuntimeDeployStep] = []
         files_loaded = 0
         io_points_bound = 0
+        loaded_program_name: str | None = None
+        openplc_integration_mode: str = "active"
 
         workspace_root = self._resolve_workspace_root(project_id, workspace_path)
         control_logic_root = workspace_root / "control_logic"
@@ -172,26 +564,47 @@ class RuntimeDeployer:
 
         if runtime_target.lower() != "openplc":
             warnings.append(f"Runtime target `{runtime_target}` is not fully implemented yet; using generic connectivity validation only.")
+            openplc_integration_mode = "partial"
 
         openplc_project_dir = runtime_root / "openplc_project"
         st_import_dir = openplc_project_dir / "st_sources"
+        openplc_opener: urllib.request.OpenerDirector | None = None
+
+        runtime_ok, runtime_message = self._runtime_connectivity_check(runtime_host, runtime_port)
+        if runtime_ok:
+            self._append_step(steps, "runtime_connected", "passed", runtime_message)
+            openplc_opener, auth_ok, auth_message = self._openplc_establish_session(runtime_host, runtime_port, runtime_config)
+            http_ok, http_message = self._openplc_verify_http_session(runtime_host, runtime_port, opener=openplc_opener)
+            if not auth_ok:
+                openplc_integration_mode = "partial"
+                warnings.append(auth_message)
+            if not http_ok:
+                openplc_integration_mode = "partial"
+                warnings.append(http_message)
+            self.logger.info("runtime_deploy openplc_session auth_ok=%s http_ok=%s detail=%s | %s", auth_ok, http_ok, auth_message, http_message)
+        else:
+            self._append_step(steps, "runtime_connected", "failed", runtime_message)
+            errors.append(runtime_message)
 
         try:
             openplc_project_dir.mkdir(parents=True, exist_ok=True)
             st_import_dir.mkdir(parents=True, exist_ok=True)
-            steps.append(self._step("create_project", "passed", f"Prepared runtime project directory at {openplc_project_dir}."))
         except Exception as exc:
             message = f"Failed to prepare runtime project directory: {exc}"
-            steps.append(self._step("create_project", "failed", message))
             errors.append(message)
 
         st_files = self._collect_st_files(control_logic_root)
-        if errors:
-            st_files = []
 
         if not st_files:
-            message = f"No generated ST files found in {control_logic_root}."
-            steps.append(self._step("import_st", "failed", message))
+            directory_exists = control_logic_root.exists()
+            sample_entries = []
+            if directory_exists:
+                sample_entries = sorted([entry.name for entry in control_logic_root.iterdir()])[:10]
+            message = (
+                f"No generated ST files found in {control_logic_root}. "
+                f"directory_exists={directory_exists}; sample_entries={sample_entries}"
+            )
+            self._append_step(steps, "project_uploaded", "failed", message)
             errors.append(message)
         else:
             try:
@@ -199,56 +612,143 @@ class RuntimeDeployer:
                     target_file = st_import_dir / source_file.name
                     target_file.write_text(source_file.read_text())
                 files_loaded = len(st_files)
-                steps.append(self._step("import_st", "passed", f"Imported {files_loaded} ST file(s) into runtime project."))
+                self.logger.info(
+                    "runtime_deploy st_artifacts discovered=%s root=%s files=%s",
+                    files_loaded,
+                    control_logic_root,
+                    [file.name for file in st_files],
+                )
             except Exception as exc:
                 message = f"Failed to import ST files: {exc}"
-                steps.append(self._step("import_st", "failed", message))
                 errors.append(message)
+
+        if errors:
+            self._append_step(steps, "project_uploaded", "failed", "Project upload skipped because local preparation failed.")
+        else:
+            bundled_st = self._build_single_st_bundle(project_name=project_name, st_files=st_files)
+            uploaded, upload_path, upload_message = self._openplc_try_upload_project(
+                runtime_host=runtime_host,
+                runtime_port=runtime_port,
+                project_name=project_name,
+                bundled_st_content=bundled_st,
+                opener=openplc_opener,
+            )
+
+            if uploaded:
+                self._append_step(steps, "project_uploaded", "passed", upload_message)
+                self.logger.info("OpenPLC project upload completed for %s via %s", project_id, upload_path)
+            else:
+                openplc_integration_mode = "partial"
+                message = (
+                    f"{upload_message} Runtime is reachable, but generated project upload could not be confirmed. "
+                    "Deployment is treated as failed to avoid false success on Blank Program."
+                )
+                warnings.append("OpenPLC integration appears partial: upload endpoint handshake failed.")
+                self._append_step(steps, "project_uploaded", "failed", message)
+                errors.append(message)
+
+        if errors:
+            self._append_step(steps, "logic_loaded", "failed", "Logic load skipped because runtime/project upload prerequisites failed.")
+        else:
+            missing_artifacts = [file.name for file in st_files if not file.exists()]
+            if missing_artifacts:
+                message = f"Logic load blocked: generated ST artifacts disappeared before compile/load: {missing_artifacts}"
+                self._append_step(steps, "logic_loaded", "failed", message)
+                errors.append(message)
+            else:
+                self.logger.info("runtime_deploy logic_loaded precheck st_files=%s", [file.name for file in st_files])
+
+            if not errors:
+                compile_ok, compile_message = self._openplc_try_compile_load(
+                    runtime_host=runtime_host,
+                    runtime_port=runtime_port,
+                    opener=openplc_opener,
+                )
+                if not compile_ok:
+                    openplc_integration_mode = "partial"
+                    self._append_step(steps, "logic_loaded", "failed", compile_message)
+                    errors.append(compile_message)
+                    warnings.append("OpenPLC integration appears partial: compile/load endpoint handshake failed.")
+                else:
+                    verified, verify_message, loaded_name = self._openplc_verify_loaded_program(
+                        runtime_host=runtime_host,
+                        runtime_port=runtime_port,
+                        expected_project_name=project_name,
+                        opener=openplc_opener,
+                    )
+                    if verified:
+                        loaded_program_name = loaded_name
+                        self._append_step(steps, "logic_loaded", "passed", verify_message)
+                    else:
+                        self._append_step(steps, "logic_loaded", "failed", verify_message)
+                        errors.append(verify_message)
 
         io_rows, io_warnings = self._load_latest_io_mapping(project_id, workspace_root)
         warnings.extend(io_warnings)
-        if not io_rows:
+        if errors:
+            self._append_step(steps, "io_applied", "failed", "IO apply skipped because generated logic did not load successfully.")
+        elif not io_rows:
             message = "Validated IO mapping was not found for this project."
-            steps.append(self._step("apply_io_config", "failed", message))
+            self._append_step(steps, "io_applied", "failed", message)
             errors.append(message)
         else:
             try:
                 io_points_bound = len(io_rows)
                 io_config_file = openplc_project_dir / "io_config.json"
                 io_config_file.write_text(json.dumps({"io_points": io_rows}, indent=2))
-                steps.append(self._step("apply_io_config", "passed", f"Applied IO configuration with {io_points_bound} point(s)."))
             except Exception as exc:
-                message = f"Failed to apply IO configuration: {exc}"
-                steps.append(self._step("apply_io_config", "failed", message))
+                message = f"Failed to prepare IO configuration artifact: {exc}"
+                self._append_step(steps, "io_applied", "failed", message)
                 errors.append(message)
+
+        if not errors and io_rows:
+            mapping_applied, mapping_message = self._openplc_try_apply_io_mapping(
+                runtime_host=runtime_host,
+                runtime_port=runtime_port,
+                io_rows=io_rows,
+                opener=openplc_opener,
+            )
+            if mapping_applied:
+                self._append_step(steps, "io_applied", "passed", mapping_message)
+            else:
+                openplc_integration_mode = "partial"
+                self._append_step(steps, "io_applied", "failed", mapping_message)
+                errors.append(mapping_message)
+                warnings.append("OpenPLC integration appears partial: IO mapping endpoint handshake failed.")
 
         if errors:
-            steps.append(self._step("start_runtime", "failed", "Runtime start skipped because previous deployment steps failed."))
+            self._append_step(steps, "runtime_started", "failed", "Runtime start skipped because logic load or IO apply did not complete.")
         else:
-            ok, message = self._runtime_connectivity_check(runtime_host, runtime_port)
-
-            if ok:
-                runtime_config_enriched = {
-                    **runtime_config,
-                    "target_runtime": runtime_target,
-                    "protocol": runtime_protocol,
-                    "ip_address": runtime_host,
-                    "port": runtime_port,
-                }
-                payload = self._build_openplc_payload(
-                    project_id=project_id,
-                    project_name=project_name,
-                    st_files=st_files,
-                    io_rows=io_rows,
-                    runtime_config=runtime_config_enriched,
-                    workspace_root=workspace_root,
-                )
-                payload_file = openplc_project_dir / "openplc_payload.json"
-                payload_file.write_text(json.dumps(payload, indent=2))
-                steps.append(self._step("start_runtime", "passed", f"{message} Protocol={runtime_protocol}"))
+            started, started_message = self._openplc_try_start_runtime(
+                runtime_host=runtime_host,
+                runtime_port=runtime_port,
+                opener=openplc_opener,
+            )
+            if started:
+                self._append_step(steps, "runtime_started", "passed", f"{started_message} Protocol={runtime_protocol}")
             else:
-                steps.append(self._step("start_runtime", "failed", message))
-                errors.append(message)
+                openplc_integration_mode = "partial"
+                self._append_step(steps, "runtime_started", "failed", started_message)
+                errors.append(started_message)
+                warnings.append("OpenPLC integration appears partial: runtime start endpoint handshake failed.")
+
+        runtime_config_enriched = {
+            **runtime_config,
+            "target_runtime": runtime_target,
+            "protocol": runtime_protocol,
+            "ip_address": runtime_host,
+            "port": runtime_port,
+        }
+        payload = self._build_openplc_payload(
+            project_id=project_id,
+            project_name=project_name,
+            st_files=st_files,
+            io_rows=io_rows,
+            runtime_config=runtime_config_enriched,
+            workspace_root=workspace_root,
+        )
+        payload_file = openplc_project_dir / "openplc_payload.json"
+        payload_file.write_text(json.dumps(payload, indent=2))
 
         response = RuntimeDeployResponse(
             status="passed" if len(errors) == 0 else "failed",
@@ -257,6 +757,8 @@ class RuntimeDeployer:
                 io_points_bound=io_points_bound,
                 runtime_target=runtime_target,
                 project_name=project_name,
+                loaded_program_name=loaded_program_name,
+                openplc_integration_mode="active" if openplc_integration_mode == "active" else "partial",
             ),
             steps=steps,
             errors=errors,
