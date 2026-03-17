@@ -20,10 +20,12 @@ class RuntimeDeploySummary(BaseModel):
     io_points_bound: int = 0
     runtime_target: str = "OpenPLC"
     project_name: str
+    loaded_program_name: str | None = None
+    openplc_integration_mode: Literal["active", "partial"] = "partial"
 
 
 class RuntimeDeployStep(BaseModel):
-    name: Literal["create_project", "import_st", "apply_io_config", "start_runtime"]
+    name: Literal["runtime_connected", "project_uploaded", "logic_loaded", "io_applied", "runtime_started"]
     status: RuntimeStepStatus
     message: str
 

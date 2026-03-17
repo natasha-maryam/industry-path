@@ -4,7 +4,13 @@ import SimulationValidationPanel, { type SimulationValidationPanelData } from ".
 import STVerificationPanel, { type STVerificationIssueItem } from "./STVerificationPanel";
 import IOMappingTablePanel from "./IOMappingTablePanel";
 import VersionHistoryPanel from "./VersionHistoryPanel";
-import type { IOMappingSummaryByType, IOMappingTableRow, STWorkspaceVerificationResponse } from "../services/api";
+import type {
+  IOMappingSummaryByType,
+  IOMappingTableRow,
+  RuntimeInputCatalogItem,
+  RuntimeSignalType,
+  STWorkspaceVerificationResponse,
+} from "../services/api";
 
 type BottomView = "simulation" | "monitoring" | "logic";
 type CodePanelMode = "control_logic" | "generated_st" | "verification";
@@ -35,6 +41,7 @@ type BottomPanelsProps = {
   ioMappingFailedMessage?: string | null;
   runtimeValidationData?: RuntimeValidationPanelData | null;
   runtimeFailedMessage?: string | null;
+  runtimeActionLoading?: boolean;
   simulationValidationData?: SimulationValidationPanelData | null;
   simulationFailedMessage?: string | null;
   onRetryIOMapping?: () => void;
@@ -44,6 +51,14 @@ type BottomPanelsProps = {
   onValidateIOMapping?: () => void;
   onRetrySTVerification?: () => void;
   onRetryRuntime?: () => void;
+  onRuntimeStart?: () => void;
+  onRuntimeStop?: () => void;
+  runtimeForceableInputs?: RuntimeInputCatalogItem[];
+  forcedTagNames?: string[];
+  onRuntimeApplyForce?: (payload: { tag: string; value: unknown; type: RuntimeSignalType }) => Promise<void>;
+  onRuntimeClearForce?: (tag: string) => Promise<void>;
+  onRuntimeRefreshForceState?: () => Promise<void>;
+  onRuntimeRunEvaluationCycle?: () => Promise<void>;
   onRetrySimulation?: () => void;
   showControlLogic: boolean;
   isGeneratingST?: boolean;
@@ -76,6 +91,7 @@ export default function BottomPanels({
   ioMappingFailedMessage = null,
   runtimeValidationData = null,
   runtimeFailedMessage = null,
+  runtimeActionLoading = false,
   simulationValidationData = null,
   simulationFailedMessage = null,
   onRetryIOMapping,
@@ -85,6 +101,14 @@ export default function BottomPanels({
   onValidateIOMapping,
   onRetrySTVerification,
   onRetryRuntime,
+  onRuntimeStart,
+  onRuntimeStop,
+  runtimeForceableInputs = [],
+  forcedTagNames = [],
+  onRuntimeApplyForce,
+  onRuntimeClearForce,
+  onRuntimeRefreshForceState,
+  onRuntimeRunEvaluationCycle,
   onRetrySimulation,
   showControlLogic,
   isGeneratingST = false,
@@ -183,6 +207,7 @@ export default function BottomPanels({
               onAutoAssignChannels={onAutoAssignIOMappingChannels}
               onExportCsv={onExportIOMappingCsv}
               onValidateMapping={onValidateIOMapping}
+              forcedTags={forcedTagNames}
               requiredPreviousStep="Logic Completion + Plant Graph"
             />
           </>
@@ -191,8 +216,16 @@ export default function BottomPanels({
         {activeView === "monitoring" && monitoringPanelMode === "runtime" ? (
           <RuntimeValidationPanel
             data={runtimeValidationData}
+            actionLoading={runtimeActionLoading}
             failedMessage={runtimeFailedMessage}
-            onRetry={onRetryRuntime}
+            onDeploy={onRetryRuntime}
+            onStart={onRuntimeStart}
+            onStop={onRuntimeStop}
+            forceableInputs={runtimeForceableInputs}
+            onApplyInputForce={onRuntimeApplyForce}
+            onClearInputForce={onRuntimeClearForce}
+            onRefreshInputForceState={onRuntimeRefreshForceState}
+            onRunEvaluationCycle={onRuntimeRunEvaluationCycle}
             requiredPreviousStep="IO Mapping"
           />
         ) : null}

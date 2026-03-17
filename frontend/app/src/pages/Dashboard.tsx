@@ -19,20 +19,26 @@ import CommandBar, { type ToolbarAction } from "../components/CommandBar";
 import DetailsPanel, { type RightTab } from "../components/DetailsPanel";
 import GraphWorkspace from "../components/GraphWorkspace";
 import ProjectNavigator from "../components/ProjectNavigator";
+import type { RuntimeValidationPanelData } from "../components/RuntimeValidationPanel";
 import SnapshotManagerModal, { type SnapshotRecord } from "../components/SnapshotManagerModal";
 import type { STVerificationIssueItem } from "../components/STVerificationPanel";
 import {
   applySnapshotTrigger,
+  applyRuntimeInputForce,
   canRunStage,
+  clearRuntimeInputForce,
   createVersionSnapshotWithRetry,
   createProject,
   createInitialPipelineStatuses,
   deleteProject,
-  deployRuntimeWithRetry,
+  deployRuntimeControlWithRetry,
   exportGeneratedLogicWithRetry,
+  getRuntimeTags,
   generateLogic,
   generateIOMappingWithRetry,
   getLatestIOMapping,
+  getRuntimeDiagnostics,
+  getRuntimeForcedInputs,
   getMissingStagePrerequisites,
   getLogic,
   getGraph,
@@ -40,6 +46,9 @@ import {
   listProjects,
   parseProject,
   runSimulation,
+  runRuntimeEvaluationCycle,
+  startRuntimeControl,
+  stopRuntimeControl,
   uploadDocuments,
   verifySTWorkspaceWithRetry,
   type GraphEdge,
@@ -48,8 +57,10 @@ import {
   type IOMappingSummaryByType,
   type IOMappingTableRow,
   type PipelineStageKey,
-  type RuntimeValidationPanelResponse,
-  type RuntimeDeployRequest,
+  type RuntimeControlDeployResponse,
+  type RuntimeEvaluationCycle,
+  type RuntimeInputCatalogItem,
+  type RuntimeSignalType,
   type SimulationValidationPanelResponse,
   type STWorkspaceVerificationResponse,
   type PipelineStageStatusMap,
@@ -159,7 +170,7 @@ const PIPELINE_STAGE_LABELS: Record<PipelineStageKey, string> = {
   st_generation: "ST generation",
   st_verification: "ST verification",
   io_mapping: "IO mapping",
-  runtime_validation: "Runtime validation",
+  runtime_validation: "Runtime control",
   simulation_validation: "Simulation validation",
   version_snapshot: "Version snapshot",
 };
@@ -198,16 +209,13 @@ export default function Dashboard() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [graphNodes, setGraphNodes] = useState<GraphNode[]>([]);
   const [graphEdges, setGraphEdges] = useState<GraphEdge[]>([]);
-  const [runtimeValidationData, setRuntimeValidationData] = useState<RuntimeValidationPanelResponse | null>(null);
+  const [runtimeValidationData, setRuntimeValidationData] = useState<RuntimeValidationPanelData | null>(null);
   const [runtimeFailedMessage, setRuntimeFailedMessage] = useState<string | null>(null);
-  const [isDeployingRuntime, setIsDeployingRuntime] = useState<boolean>(false);
-  const [showDeployRuntimeModal, setShowDeployRuntimeModal] = useState<boolean>(false);
-  const [runtimeDeployConfig, setRuntimeDeployConfig] = useState<RuntimeDeployRequest["runtime_config"]>({
-    target_runtime: "OpenPLC",
-    ip_address: "127.0.0.1",
-    protocol: "OpenPLC",
-    port: 8080,
-  });
+  const [isRuntimeActionBusy, setIsRuntimeActionBusy] = useState<boolean>(false);
+  const [runtimeTelemetryTags, setRuntimeTelemetryTags] = useState<Record<string, unknown>>({});
+  const [runtimeForceableInputs, setRuntimeForceableInputs] = useState<RuntimeInputCatalogItem[]>([]);
+  const [forcedTagNames, setForcedTagNames] = useState<string[]>([]);
+  const [runtimeDiagnostics, setRuntimeDiagnostics] = useState<RuntimeEvaluationCycle | null>(null);
   const [simulationValidationData, setSimulationValidationData] = useState<SimulationValidationPanelResponse | null>(null);
   const [simulationFailedMessage, setSimulationFailedMessage] = useState<string | null>(null);
   const [statusText, setStatusText] = useState<string>("Loading projects...");
@@ -657,6 +665,10 @@ export default function Dashboard() {
       setIsGeneratingIOMapping(false);
       setRuntimeValidationData(null);
       setRuntimeFailedMessage(null);
+      setRuntimeTelemetryTags({});
+      setRuntimeForceableInputs([]);
+      setForcedTagNames([]);
+      setRuntimeDiagnostics(null);
       setSimulationValidationData(null);
       setSimulationFailedMessage(null);
       setPipelineStatuses(createInitialPipelineStatuses());
@@ -1034,10 +1046,10 @@ export default function Dashboard() {
         if (!ensurePrerequisites("runtime_validation")) {
           return;
         }
-        setShowDeployRuntimeModal(true);
         setMonitoringPanelMode("runtime");
         setActiveBottomView("monitoring");
-        setStatusText("Configure runtime deployment and confirm.");
+        setStatusText("Deploying project runtime...");
+        await handleConfirmRuntimeDeploy();
       }
 
     } catch {
@@ -1242,24 +1254,134 @@ export default function Dashboard() {
     setStatusText("IO mapping validation passed.");
   };
 
+  const mapRuntimeControlResult = (
+    result: RuntimeControlDeployResponse,
+    tags: Record<string, unknown>
+  ): RuntimeValidationPanelData => {
+    const toPanelStatus = (status: "passed" | "failed"): "success" | "failed" => (status === "passed" ? "success" : "failed");
+    const requiredStepNames = ["compile_st", "build_runtime", "apply_io", "start_runtime"] as const;
+
+    const stepMap: Partial<Record<(typeof requiredStepNames)[number], "idle" | "running" | "success" | "failed" | "warning">> = {};
+    const stepMessages: Partial<Record<(typeof requiredStepNames)[number], string>> = {};
+
+    for (const stepName of requiredStepNames) {
+      const found = result.steps.find((step) => step.name === stepName);
+      stepMap[stepName] = found ? toPanelStatus(found.status) : "idle";
+      stepMessages[stepName] = found?.message || `${stepName} not executed.`;
+    }
+
+    return {
+      project_id: result.project_id,
+      run_id: `runtime-control-${Date.now()}`,
+      validated_at: new Date().toISOString(),
+      overall_status: result.status === "passed" ? "success" : "failed",
+      checks_passed: result.steps.filter((step) => step.status === "passed").length,
+      checks_failed: result.steps.filter((step) => step.status === "failed").length,
+      checks_warning: 0,
+      checks: result.steps.map((step, index) => ({
+        check_id: `runtime-control-step-${index + 1}`,
+        check_name: step.name,
+        status: toPanelStatus(step.status),
+        expected_value: "passed",
+        actual_value: step.status,
+        tolerance: null,
+        message: step.message,
+      })),
+      runtime_state: result.runtime_status?.status || (result.status === "failed" ? "failed" : "idle"),
+      deployed_at: new Date().toISOString(),
+      active_project: result.project_id,
+      runtime_project_dir: result.runtime_project_dir,
+      steps_map: stepMap,
+      step_messages: stepMessages,
+      telemetry_tags: tags,
+      errors: result.errors,
+    };
+  };
+
+  const refreshRuntimeTags = async (): Promise<void> => {
+    try {
+      const tags = await getRuntimeTags();
+      setRuntimeTelemetryTags(tags);
+      setRuntimeValidationData((current) => (current ? { ...current, telemetry_tags: tags } : current));
+    } catch {
+      setStatusText("Runtime tags refresh failed.");
+    }
+  };
+
+  const refreshRuntimeForceState = async (): Promise<void> => {
+    if (!selectedProjectId) {
+      setRuntimeForceableInputs([]);
+      setForcedTagNames([]);
+      return;
+    }
+
+    try {
+      const response = await getRuntimeForcedInputs(selectedProjectId);
+      setRuntimeForceableInputs(response.input_catalog ?? []);
+      setForcedTagNames((response.forced_inputs ?? []).map((item) => item.tag));
+      if (response.diagnostics) {
+        setRuntimeDiagnostics(response.diagnostics);
+      }
+    } catch {
+      setRuntimeForceableInputs([]);
+      setForcedTagNames([]);
+    }
+  };
+
+  const refreshRuntimeDiagnostics = async (): Promise<void> => {
+    if (!selectedProjectId) {
+      setRuntimeDiagnostics(null);
+      return;
+    }
+    try {
+      const response = await getRuntimeDiagnostics(selectedProjectId);
+      setRuntimeDiagnostics(response.diagnostics ?? null);
+    } catch {
+      setRuntimeDiagnostics(null);
+    }
+  };
+
+  const handleApplyRuntimeInputForce = async (payload: { tag: string; value: unknown; type: RuntimeSignalType }): Promise<void> => {
+    if (!selectedProjectId) {
+      throw new Error("No active project selected");
+    }
+    await applyRuntimeInputForce(selectedProjectId, payload);
+    await Promise.all([refreshRuntimeForceState(), refreshRuntimeTags(), refreshRuntimeDiagnostics()]);
+    setStatusText(`Forced input applied for ${payload.tag}.`);
+  };
+
+  const handleClearRuntimeInputForce = async (tag: string): Promise<void> => {
+    if (!selectedProjectId) {
+      throw new Error("No active project selected");
+    }
+    await clearRuntimeInputForce(selectedProjectId, tag);
+    await Promise.all([refreshRuntimeForceState(), refreshRuntimeTags(), refreshRuntimeDiagnostics()]);
+    setStatusText(`Forced input cleared for ${tag}.`);
+  };
+
+  const handleRunRuntimeEvaluationCycle = async (): Promise<void> => {
+    if (!selectedProjectId) {
+      return;
+    }
+    await runRuntimeEvaluationCycle(selectedProjectId, "manual_debug");
+    await Promise.all([refreshRuntimeTags(), refreshRuntimeForceState(), refreshRuntimeDiagnostics()]);
+    setStatusText("Runtime evaluation cycle completed.");
+  };
+
   const handleConfirmRuntimeDeploy = async (): Promise<void> => {
     if (!selectedProjectId) {
       return;
     }
 
-    setIsDeployingRuntime(true);
+    setIsRuntimeActionBusy(true);
     setRuntimeFailedMessage(null);
     updatePipelineStage("runtime_validation", "running");
     setMonitoringPanelMode("runtime");
     setActiveBottomView("monitoring");
 
     try {
-      const result = await deployRuntimeWithRetry(
-        {
-          project_id: selectedProjectId,
-          workspace_path: `/projects/${selectedProjectId}`,
-          runtime_config: runtimeDeployConfig,
-        },
+      const result = await deployRuntimeControlWithRetry(
+        { project_id: selectedProjectId },
         {
           maxAttempts: 2,
           initialDelayMs: 800,
@@ -1267,24 +1389,88 @@ export default function Dashboard() {
         }
       );
 
-      setRuntimeValidationData(result);
-      const failedChecks = result.checks_failed > 0 || result.overall_status === "failed";
+      let tags: Record<string, unknown> = {};
+      try {
+        tags = await getRuntimeTags();
+      } catch {
+        tags = {};
+      }
+
+      const panelData = mapRuntimeControlResult(result, tags);
+      setRuntimeValidationData(panelData);
+      setRuntimeTelemetryTags(tags);
+      await Promise.all([refreshRuntimeForceState(), refreshRuntimeDiagnostics()]);
+      const failedChecks = panelData.checks_failed > 0 || panelData.overall_status === "failed";
       updatePipelineStage("runtime_validation", failedChecks ? "failed" : "success");
-      setStatusText(
-        failedChecks
-          ? "Runtime deployment failed. Review runtime diagnostics."
-          : "Runtime deployment passed. OpenPLC runtime accepted the project."
-      );
-      setShowDeployRuntimeModal(false);
+      setStatusText(failedChecks ? "Runtime deployment failed. Review runtime step diagnostics." : "Runtime deployment passed. Runtime is active.");
     } catch {
       updatePipelineStage("runtime_validation", "failed");
       setRuntimeValidationData(null);
-      setRuntimeFailedMessage("Runtime deployment failed. Check OpenPLC target availability and deployment config.");
-      setStatusText("Runtime deployment failed. Ensure OpenPLC runtime is reachable.");
+      setRuntimeFailedMessage("Runtime deployment failed. Check runtime dependencies and generated ST files.");
+      setStatusText("Runtime deployment failed.");
     } finally {
-      setIsDeployingRuntime(false);
+      setIsRuntimeActionBusy(false);
     }
   };
+
+  const handleRuntimeStart = async (): Promise<void> => {
+    setIsRuntimeActionBusy(true);
+    try {
+      const result = await startRuntimeControl();
+      setRuntimeValidationData((current) =>
+        current
+          ? {
+              ...current,
+              runtime_state: result.status === "passed" ? "running" : "failed",
+              deployed_at: new Date().toISOString(),
+            }
+          : current
+      );
+      await Promise.all([refreshRuntimeTags(), refreshRuntimeForceState(), refreshRuntimeDiagnostics()]);
+      setStatusText(result.step?.message || result.message || "Runtime start requested.");
+    } catch {
+      setStatusText("Runtime start failed.");
+    } finally {
+      setIsRuntimeActionBusy(false);
+    }
+  };
+
+  const handleRuntimeStop = async (): Promise<void> => {
+    setIsRuntimeActionBusy(true);
+    try {
+      const result = await stopRuntimeControl();
+      setRuntimeValidationData((current) =>
+        current
+          ? {
+              ...current,
+              runtime_state: result.status === "passed" ? "stopped" : "failed",
+            }
+          : current
+      );
+      await refreshRuntimeTags();
+      await Promise.all([refreshRuntimeForceState(), refreshRuntimeDiagnostics()]);
+      setStatusText(result.step?.message || result.message || "Runtime stop requested.");
+    } catch {
+      setStatusText("Runtime stop failed.");
+    } finally {
+      setIsRuntimeActionBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!selectedProjectId || monitoringPanelMode !== "runtime") {
+      return;
+    }
+
+    void Promise.all([refreshRuntimeTags(), refreshRuntimeForceState(), refreshRuntimeDiagnostics()]);
+    const timer = window.setInterval(() => {
+      void Promise.all([refreshRuntimeTags(), refreshRuntimeForceState(), refreshRuntimeDiagnostics()]);
+    }, 3000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [monitoringPanelMode, selectedProjectId]);
 
   return (
     <div className="dashboard">
@@ -1446,102 +1632,6 @@ export default function Dashboard() {
         </div>
       ) : null}
 
-      {showDeployRuntimeModal ? (
-        <div className="modal-backdrop" onClick={() => !isDeployingRuntime && setShowDeployRuntimeModal(false)}>
-          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
-            <h3>Deploy PLC Runtime Validation</h3>
-
-            <label className="modal-label" htmlFor="runtime-target">
-              Target Runtime
-            </label>
-            <input
-              id="runtime-target"
-              className="modal-input"
-              value={runtimeDeployConfig.target_runtime}
-              onChange={(event) =>
-                setRuntimeDeployConfig((value) => ({
-                  ...value,
-                  target_runtime: event.target.value,
-                }))
-              }
-            />
-
-            <label className="modal-label" htmlFor="runtime-address">
-              PLC Address
-            </label>
-            <input
-              id="runtime-address"
-              className="modal-input"
-              value={runtimeDeployConfig.ip_address}
-              onChange={(event) =>
-                setRuntimeDeployConfig((value) => ({
-                  ...value,
-                  ip_address: event.target.value,
-                }))
-              }
-            />
-
-            <label className="modal-label" htmlFor="runtime-port">
-              Port
-            </label>
-            <input
-              id="runtime-port"
-              className="modal-input"
-              type="number"
-              value={String(runtimeDeployConfig.port ?? 8080)}
-              onChange={(event) =>
-                setRuntimeDeployConfig((value) => ({
-                  ...value,
-                  port: Number(event.target.value) || 8080,
-                }))
-              }
-            />
-
-            <label className="modal-label" htmlFor="runtime-protocol">
-              Protocol
-            </label>
-            <input
-              id="runtime-protocol"
-              className="modal-input"
-              value={runtimeDeployConfig.protocol}
-              onChange={(event) =>
-                setRuntimeDeployConfig((value) => ({
-                  ...value,
-                  protocol: event.target.value,
-                }))
-              }
-            />
-
-            <div className="monitor-frame">
-              <pre className="monitor-json">
-                {`IO Configuration Summary\nTotal rows: ${ioMappingRows.length}\nAI: ${ioMappingSummary?.AI ?? 0}\nAO: ${ioMappingSummary?.AO ?? 0}\nDI: ${ioMappingSummary?.DI ?? 0}\nDO: ${ioMappingSummary?.DO ?? 0}`}
-              </pre>
-            </div>
-
-            <div className="modal-actions">
-              <button
-                className="command-btn"
-                onClick={() => setShowDeployRuntimeModal(false)}
-                type="button"
-                disabled={isDeployingRuntime}
-              >
-                Cancel
-              </button>
-              <button
-                className="command-btn primary"
-                onClick={() => {
-                  void handleConfirmRuntimeDeploy();
-                }}
-                type="button"
-                disabled={isDeployingRuntime}
-              >
-                {isDeployingRuntime ? "Deploying..." : "Deploy PLC"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
       <input
         ref={uploadInputRef}
         hidden
@@ -1672,6 +1762,9 @@ export default function Dashboard() {
                     ioMappingRows={selectedNodeIOMappingRows}
                     ioMappingIssues={ioMappingIssues}
                     selectedIOMappingTag={selectedIOMappingTag}
+                    runtimeTelemetryTags={runtimeTelemetryTags}
+                    forcedTagNames={forcedTagNames}
+                    runtimeDiagnostics={runtimeDiagnostics}
                     onSelectIOMappingTag={(tag) => {
                       setSelectedIOMappingTag(tag);
                       setActiveBottomView("monitoring");
@@ -1726,6 +1819,9 @@ export default function Dashboard() {
               ioMappingFailedMessage={ioMappingFailedMessage}
               runtimeValidationData={runtimeValidationData}
               runtimeFailedMessage={runtimeFailedMessage}
+              runtimeActionLoading={isRuntimeActionBusy}
+              runtimeForceableInputs={runtimeForceableInputs}
+              forcedTagNames={forcedTagNames}
               simulationValidationData={simulationValidationData}
               simulationFailedMessage={simulationFailedMessage}
               onRetryIOMapping={() => {
@@ -1741,8 +1837,18 @@ export default function Dashboard() {
                 void handleToolbarAction("verify_st");
               }}
               onRetryRuntime={() => {
-                void handleToolbarAction("deploy");
+                void handleConfirmRuntimeDeploy();
               }}
+              onRuntimeStart={() => {
+                void handleRuntimeStart();
+              }}
+              onRuntimeStop={() => {
+                void handleRuntimeStop();
+              }}
+              onRuntimeApplyForce={handleApplyRuntimeInputForce}
+              onRuntimeClearForce={handleClearRuntimeInputForce}
+              onRuntimeRefreshForceState={refreshRuntimeForceState}
+              onRuntimeRunEvaluationCycle={handleRunRuntimeEvaluationCycle}
               onRetrySimulation={() => {
                 void handleToolbarAction("simulate");
               }}

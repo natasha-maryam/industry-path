@@ -326,9 +326,11 @@ export type RuntimeDeployResponse = {
     io_points_bound: number;
     runtime_target: string;
     project_name: string;
+    loaded_program_name?: string | null;
+    openplc_integration_mode?: "active" | "partial";
   };
   steps: Array<{
-    name: "create_project" | "import_st" | "apply_io_config" | "start_runtime";
+    name: "runtime_connected" | "project_uploaded" | "logic_loaded" | "io_applied" | "runtime_started";
     status: "passed" | "failed";
     message: string;
   }>;
@@ -340,6 +342,128 @@ export type DeployRuntimeOptions = {
   maxAttempts?: number;
   initialDelayMs?: number;
   backoffFactor?: number;
+};
+
+export type RuntimeControlStepName = "compile_st" | "generate_c" | "build_runtime" | "apply_io" | "start_runtime";
+
+export type RuntimeControlStep = {
+  name: RuntimeControlStepName;
+  status: "passed" | "failed";
+  message: string;
+  detail?: Record<string, unknown>;
+};
+
+export type RuntimeControlDeployRequest = {
+  project_id: string;
+};
+
+export type RuntimeControlDeployResponse = {
+  status: "passed" | "failed";
+  project_id: string;
+  runtime: string;
+  runtime_project_dir: string | null;
+  steps: RuntimeControlStep[];
+  errors: string[];
+  dependency_report?: {
+    ok: boolean;
+    dependencies: Record<string, string | null>;
+    missing: string[];
+  };
+  runtime_status?: {
+    status: "running" | "stopped";
+    project_dir: string | null;
+    pid: number | null;
+    runtime_binary: string;
+  };
+};
+
+export type RuntimeControlActionResponse = {
+  status: "passed" | "failed";
+  message?: string;
+  runtime_project_dir?: string;
+  step?: {
+    name: string;
+    status: "passed" | "failed";
+    message: string;
+    detail?: Record<string, unknown>;
+  };
+};
+
+export type RuntimeTelemetryTagsResponse = Record<string, unknown>;
+
+export type RuntimeSignalType = "BOOL" | "INT" | "REAL" | "STRING";
+
+export type RuntimeForcedInputState = {
+  tag: string;
+  value: unknown;
+  type: RuntimeSignalType;
+  forced: boolean;
+  forced_at: string | null;
+};
+
+export type RuntimeInputCatalogItem = {
+  tag: string;
+  io_type: string;
+  type: RuntimeSignalType;
+  current_value: unknown;
+  forced: boolean;
+  forced_at: string | null;
+};
+
+export type RuntimeForceInputRequest = {
+  tag: string;
+  value: unknown;
+  type?: RuntimeSignalType;
+};
+
+export type RuntimeForceInputResponse = {
+  success: boolean;
+  message: string;
+  project_id: string;
+  forced: RuntimeForcedInputState;
+  changed_signals?: Array<{ tag: string; previous: unknown; current: unknown }>;
+  changed_alarms?: Array<{ tag: string; previous: unknown; current: unknown }>;
+  changed_health_checks?: Array<{ name: string; previous: unknown; current: unknown }>;
+  evaluation_cycle?: RuntimeEvaluationCycle;
+  timestamp: string;
+};
+
+export type RuntimeHealthCheckItem = {
+  name: string;
+  status: "healthy" | "warning" | "unhealthy";
+  message: string;
+};
+
+export type RuntimeEvaluationCycle = {
+  project_id: string;
+  reason: string;
+  evaluated_at: string;
+  forced_tag: string | null;
+  forced_value: unknown;
+  evaluated_blocks: string[];
+  alarms: Record<string, boolean>;
+  health_checks: RuntimeHealthCheckItem[];
+  changed_signals: Array<{ tag: string; previous: unknown; current: unknown }>;
+  changed_alarms: Array<{ tag: string; previous: unknown; current: unknown }>;
+  changed_health_checks: Array<{ name: string; previous: unknown; current: unknown }>;
+  signal_state_updated: boolean;
+};
+
+export type RuntimeDiagnosticsResponse = {
+  success: boolean;
+  project_id: string;
+  diagnostics: RuntimeEvaluationCycle;
+  timestamp: string;
+};
+
+export type RuntimeForcedInputsResponse = {
+  success: boolean;
+  message: string;
+  project_id: string;
+  forced_inputs: RuntimeForcedInputState[];
+  input_catalog: RuntimeInputCatalogItem[];
+  diagnostics?: RuntimeEvaluationCycle;
+  timestamp: string;
 };
 
 export type VersionSnapshotServiceResponse = {
@@ -526,10 +650,11 @@ const adaptRuntimeDeployResponse = (
   projectId: string
 ): RuntimeValidationPanelResponse => {
   const stepToCheckName: Record<string, string> = {
-    create_project: "Project Creation",
-    import_st: "ST Import",
-    apply_io_config: "IO Binding",
-    start_runtime: "Runtime Start",
+    runtime_connected: "Runtime Connected",
+    project_uploaded: "Project Uploaded",
+    logic_loaded: "Logic Loaded",
+    io_applied: "IO Applied",
+    runtime_started: "Runtime Started",
   };
 
   const checks = payload.steps.map((step, index) => ({
@@ -547,14 +672,24 @@ const adaptRuntimeDeployResponse = (
   const checksWarning = 0;
 
   const diagnostics = [
+    ...(payload.summary.openplc_integration_mode === "partial"
+      ? [
+          {
+            step: "logic_loaded" as const,
+            severity: "warning" as const,
+            message: "OpenPLC integration is partial; endpoint compatibility could not be fully confirmed.",
+            detail: null,
+          },
+        ]
+      : []),
     ...payload.errors.map((message) => ({
-      step: "deployment_readiness" as const,
+      step: "logic_loaded" as const,
       severity: "error" as const,
       message,
       detail: null,
     })),
     ...payload.warnings.map((message) => ({
-      step: "deployment_readiness" as const,
+      step: "logic_loaded" as const,
       severity: "warning" as const,
       message,
       detail: null,
@@ -572,11 +707,11 @@ const adaptRuntimeDeployResponse = (
     checks_failed: checksFailed,
     checks_warning: checksWarning,
     checks,
-    project_creation_status: stepStatusByName.get("create_project") || "idle",
-    st_import_status: stepStatusByName.get("import_st") || "idle",
-    io_binding_status: stepStatusByName.get("apply_io_config") || "idle",
-    runtime_start_status: stepStatusByName.get("start_runtime") || "idle",
-    deployment_readiness_status: payload.status === "passed" ? "success" : "failed",
+    runtime_connected_status: stepStatusByName.get("runtime_connected") || "idle",
+    project_uploaded_status: stepStatusByName.get("project_uploaded") || "idle",
+    logic_loaded_status: stepStatusByName.get("logic_loaded") || "idle",
+    io_applied_status: stepStatusByName.get("io_applied") || "idle",
+    runtime_started_status: stepStatusByName.get("runtime_started") || "idle",
     diagnostics,
   };
 };
@@ -996,6 +1131,91 @@ export async function deployRuntimeWithRetry(
   }
 
   throw lastError instanceof Error ? lastError : new Error("Runtime deployment failed after retries");
+}
+
+export async function deployRuntimeControl(payload: RuntimeControlDeployRequest): Promise<RuntimeControlDeployResponse> {
+  const response = await api.post<RuntimeControlDeployResponse>("/runtime/deploy", payload);
+  return response.data;
+}
+
+export async function deployRuntimeControlWithRetry(
+  payload: RuntimeControlDeployRequest,
+  options: DeployRuntimeOptions = {}
+): Promise<RuntimeControlDeployResponse> {
+  const maxAttempts = options.maxAttempts ?? 2;
+  const initialDelayMs = options.initialDelayMs ?? 800;
+  const backoffFactor = options.backoffFactor ?? 2;
+
+  let attempt = 0;
+  let delayMs = initialDelayMs;
+  let lastError: unknown = null;
+
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    try {
+      return await deployRuntimeControl(payload);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxAttempts) {
+        throw error;
+      }
+      await delay(delayMs);
+      delayMs = Math.max(initialDelayMs, Math.floor(delayMs * backoffFactor));
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Runtime control deployment failed after retries");
+}
+
+export async function startRuntimeControl(): Promise<RuntimeControlActionResponse> {
+  const response = await api.post<RuntimeControlActionResponse>("/runtime/start");
+  return response.data;
+}
+
+export async function stopRuntimeControl(): Promise<RuntimeControlActionResponse> {
+  const response = await api.post<RuntimeControlActionResponse>("/runtime/stop");
+  return response.data;
+}
+
+export async function restartRuntimeControl(): Promise<RuntimeControlActionResponse> {
+  const response = await api.post<RuntimeControlActionResponse>("/runtime/restart");
+  return response.data;
+}
+
+export async function getRuntimeTags(): Promise<RuntimeTelemetryTagsResponse> {
+  const response = await api.get<RuntimeTelemetryTagsResponse>("/runtime/tags");
+  return response.data;
+}
+
+export async function applyRuntimeInputForce(projectId: string, payload: RuntimeForceInputRequest): Promise<RuntimeForceInputResponse> {
+  const response = await api.post<RuntimeForceInputResponse>(`/runtime/${projectId}/force-input`, payload);
+  return response.data;
+}
+
+export async function clearRuntimeInputForce(projectId: string, tag: string): Promise<RuntimeForceInputResponse> {
+  const response = await api.post<RuntimeForceInputResponse>(`/runtime/${projectId}/clear-force`, { tag });
+  return response.data;
+}
+
+export async function getRuntimeForcedInputs(projectId: string): Promise<RuntimeForcedInputsResponse> {
+  const response = await api.get<RuntimeForcedInputsResponse>(`/runtime/${projectId}/forced-inputs`);
+  return response.data;
+}
+
+export async function runRuntimeEvaluationCycle(projectId: string, reason = "manual_debug"): Promise<RuntimeForceInputResponse> {
+  const response = await api.post<RuntimeForceInputResponse>(`/runtime/${projectId}/run-evaluation-cycle`, { reason });
+  return response.data;
+}
+
+export async function getRuntimeDiagnostics(projectId: string): Promise<RuntimeDiagnosticsResponse> {
+  const response = await api.get<RuntimeDiagnosticsResponse>(`/runtime/${projectId}/diagnostics`);
+  return response.data;
+}
+
+export function createRuntimeTelemetrySocket(): WebSocket {
+  const base = api.defaults.baseURL ?? "http://127.0.0.1:8000/api";
+  const wsBase = base.replace(/^http:\/\//i, "ws://").replace(/^https:\/\//i, "wss://").replace(/\/$/, "");
+  return new WebSocket(`${wsBase}/runtime/stream`);
 }
 
 export async function getMonitoring(projectId: string): Promise<Record<string, unknown>> {

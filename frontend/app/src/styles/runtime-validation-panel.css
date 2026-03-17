@@ -71,6 +71,18 @@
   color: #324150;
 }
 
+.runtime-control-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+  margin-top: 0.2rem;
+}
+
+.runtime-control-actions .command-btn {
+  font-size: 0.6rem;
+  padding: 0.14rem 0.4rem;
+}
+
 .runtime-validation-content {
   padding: 0.56rem;
   display: grid;
@@ -257,4 +269,70 @@
 
 .runtime-validation-spin {
   animation: spin-1 900ms linear infinite;
+}
+
+.runtime-force-panel {
+  margin-top: 0.45rem;
+  border-top: 1px solid #d5dee8;
+  padding-top: 0.45rem;
+}
+
+.runtime-force-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(140px, 1fr));
+  gap: 0.35rem;
+  align-items: end;
+}
+
+.runtime-force-grid label {
+  display: grid;
+  gap: 0.14rem;
+  font-size: 0.6rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: #4e6478;
+}
+
+.runtime-force-grid select,
+.runtime-force-grid input {
+  border: 1px solid #bcc8d4;
+  background: #f8fbfe;
+  border-radius: 4px;
+  padding: 0.26rem 0.36rem;
+  font-size: 0.66rem;
+  color: #243648;
+}
+
+.runtime-force-readout {
+  border: 1px solid #d1d9e2;
+  border-radius: 4px;
+  background: #f7fbff;
+  padding: 0.26rem 0.34rem;
+  display: grid;
+  gap: 0.12rem;
+  font-size: 0.62rem;
+  color: #435a6f;
+}
+
+.runtime-force-actions {
+  display: inline-flex;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+}
+
+.runtime-force-status {
+  display: grid;
+  gap: 0.14rem;
+  margin-top: 0.35rem;
+  font-size: 0.62rem;
+  color: #4e6478;
+}
+
+.runtime-force-ok {
+  color: #14532d;
+}
+
+.runtime-force-error {
+  color: #7c1d1d;
 }

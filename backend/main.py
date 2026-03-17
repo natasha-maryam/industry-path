@@ -12,6 +12,7 @@ from api.routes.pipeline import router as pipeline_router
 from api.routes.project_io_mapping import router as project_io_mapping_router
 from api.routes.projects import router as projects_router
 from api.routes.replay import router as replay_router
+from api.routes.runtime import router as runtime_router
 from api.routes.runtime_deploy import router as runtime_deploy_router
 from api.routes.simulation import router as simulation_router
 from api.routes.st_verify import router as st_verify_router
@@ -52,6 +53,7 @@ app.include_router(graph_router, prefix="/api")
 app.include_router(simulation_router, prefix="/api")
 app.include_router(replay_router, prefix="/api")
 app.include_router(runtime_deploy_router, prefix="/api")
+app.include_router(runtime_router, prefix="/api")
 app.include_router(monitoring_router, prefix="/api")
 app.include_router(logic_router, prefix="/api")
 app.include_router(io_mapping_router, prefix="/api")

@@ -42,3 +42,20 @@ docker-data/
 # Vite cache
 frontend/app/.vite/
 frontend/app/vite/
+
+# Runtime generated projects
+backend/runtime_projects/
+
+# Generated ST files
+*.st
+
+# Runtime binaries
+*.out
+*.bin
+
+# IO configs
+io_config.json
+
+# Temp / logs
+*.log
+*.tmp

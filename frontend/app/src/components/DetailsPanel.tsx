@@ -1,5 +1,5 @@
 import { Suspense, lazy } from "react";
-import type { IOMappingIssue, IOMappingTableRow } from "../services/api";
+import type { IOMappingIssue, IOMappingTableRow, RuntimeEvaluationCycle } from "../services/api";
 import type { Equipment } from "./rightTabs/types";
 
 const RightDetailsTab = lazy(() => import("./rightTabs/RightDetailsTab"));
@@ -21,6 +21,9 @@ type DetailsPanelProps = {
   ioMappingRows?: IOMappingTableRow[];
   ioMappingIssues?: IOMappingIssue[];
   selectedIOMappingTag?: string | null;
+  runtimeTelemetryTags?: Record<string, unknown>;
+  forcedTagNames?: string[];
+  runtimeDiagnostics?: RuntimeEvaluationCycle | null;
   onSelectIOMappingTag?: (tag: string) => void;
   onTabChange: (tab: RightTab) => void;
 };
@@ -36,6 +39,9 @@ export default function DetailsPanel({
   ioMappingRows = [],
   ioMappingIssues = [],
   selectedIOMappingTag = null,
+  runtimeTelemetryTags = {},
+  forcedTagNames = [],
+  runtimeDiagnostics = null,
   onSelectIOMappingTag,
   onTabChange,
 }: DetailsPanelProps) {
@@ -44,7 +50,7 @@ export default function DetailsPanel({
       return <RightDetailsTab selectedEquipment={selectedEquipment} />;
     }
     if (activeTab === "Signals") {
-      return <RightSignalsTab selectedEquipment={selectedEquipment} />;
+      return <RightSignalsTab selectedEquipment={selectedEquipment} runtimeTelemetryTags={runtimeTelemetryTags} forcedTags={forcedTagNames} />;
     }
     if (activeTab === "Trace") {
       return <RightTraceTab tracePath={tracePath} />;
@@ -66,7 +72,7 @@ export default function DetailsPanel({
     if (activeTab === "Versions") {
       return <RightVersionsTab />;
     }
-    return <RightDiagnosticsTab />;
+    return <RightDiagnosticsTab diagnostics={runtimeDiagnostics} />;
   };
 
   return (
