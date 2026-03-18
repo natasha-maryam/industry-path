@@ -1,20 +1,51 @@
+import SimulationTimeline from "../SimulationTimeline";
+import type { SimulationTraceIssue, SimulationTracePoint } from "../../services/api";
+
 type RightReplayTabProps = {
   replayPoint: number;
+  selectedTag?: string;
+  replayTrace?: SimulationTracePoint[];
+  replayIssues?: SimulationTraceIssue[];
+  onSelectedTagChange?: (tag: string) => void;
+  onReplayPointChange?: (point: number) => void;
 };
 
-export default function RightReplayTab({ replayPoint }: RightReplayTabProps) {
-  const replayTime = `12:${String(Math.floor(replayPoint / 2)).padStart(2, "0")}:34`;
+export default function RightReplayTab({
+  replayPoint,
+  selectedTag = "",
+  replayTrace = [],
+  replayIssues = [],
+  onSelectedTagChange,
+  onReplayPointChange,
+}: RightReplayTabProps) {
+  const effectiveTag = selectedTag || replayTrace[0]?.tag || "";
+  const sampleCount = effectiveTag ? replayTrace.filter((item) => item.tag === effectiveTag).length : 0;
+  const hasTrace = replayTrace.length > 0;
+  const replayTimeMs = effectiveTag
+    ? replayTrace.filter((item) => item.tag === effectiveTag)[Math.min(Math.max(replayPoint, 0), Math.max(sampleCount - 1, 0))]?.time ?? null
+    : null;
 
   return (
-    <dl className="kv kv-technical">
-      <dt>Time</dt>
-      <dd className="value-mono">{replayTime}</dd>
-      <dt>Tank-101</dt>
-      <dd className="value-mono">{`${replayPoint}% level`}</dd>
-      <dt>Pump-101</dt>
-      <dd>{replayPoint % 2 === 0 ? "RUNNING" : "IDLE"}</dd>
-      <dt>Flow Rate</dt>
-      <dd className="value-mono">{`${20 + Math.floor(replayPoint / 4)} m3/h`}</dd>
-    </dl>
+    <>
+      <SimulationTimeline
+        trace={replayTrace}
+        issues={replayIssues}
+        selectedTag={effectiveTag}
+        onSelectedTagChange={onSelectedTagChange}
+        replayPoint={replayPoint}
+        onReplayPointChange={onReplayPointChange}
+      />
+
+      <dl className="kv kv-technical">
+        <dt>TRACE</dt>
+        <dd className="value-mono">{hasTrace ? "1" : "0"}</dd>
+        <dt>SAMPLES</dt>
+        <dd className="value-mono">{sampleCount}</dd>
+        <dt>Detected Issues</dt>
+        <dd className="value-mono">{replayIssues.length}</dd>
+        <dt>Replay Time</dt>
+        <dd className="value-mono">{replayTimeMs === null ? "-" : `${replayTimeMs} ms`}</dd>
+      </dl>
+    </>
   );
 }

@@ -1,5 +1,5 @@
 import { Suspense, lazy } from "react";
-import type { IOMappingIssue, IOMappingTableRow, RuntimeEvaluationCycle } from "../services/api";
+import type { IOMappingIssue, IOMappingTableRow, RuntimeEvaluationCycle, SimulationTraceIssue, SimulationTracePoint } from "../services/api";
 import type { Equipment } from "./rightTabs/types";
 
 const RightDetailsTab = lazy(() => import("./rightTabs/RightDetailsTab"));
@@ -15,6 +15,7 @@ export type RightTab = "Details" | "Signals" | "Trace" | "Replay" | "IO Mapping"
 type DetailsPanelProps = {
   activeTab: RightTab;
   replayPoint: number;
+  selectedReplayTag?: string;
   selectedEquipment: Equipment;
   selectedNodeId?: string;
   tracePath: string[];
@@ -24,7 +25,11 @@ type DetailsPanelProps = {
   runtimeTelemetryTags?: Record<string, unknown>;
   forcedTagNames?: string[];
   runtimeDiagnostics?: RuntimeEvaluationCycle | null;
+  replayTrace?: SimulationTracePoint[];
+  replayIssues?: SimulationTraceIssue[];
+  onSelectedReplayTagChange?: (tag: string) => void;
   onSelectIOMappingTag?: (tag: string) => void;
+  onReplayPointChange?: (point: number) => void;
   onTabChange: (tab: RightTab) => void;
 };
 
@@ -33,6 +38,7 @@ const TABS: RightTab[] = ["Details", "Signals", "Trace", "Replay", "IO Mapping",
 export default function DetailsPanel({
   activeTab,
   replayPoint,
+  selectedReplayTag = "",
   selectedEquipment,
   selectedNodeId = "",
   tracePath,
@@ -42,7 +48,11 @@ export default function DetailsPanel({
   runtimeTelemetryTags = {},
   forcedTagNames = [],
   runtimeDiagnostics = null,
+  replayTrace = [],
+  replayIssues = [],
+  onSelectedReplayTagChange,
   onSelectIOMappingTag,
+  onReplayPointChange,
   onTabChange,
 }: DetailsPanelProps) {
   const renderActiveTab = () => {
@@ -56,7 +66,16 @@ export default function DetailsPanel({
       return <RightTraceTab tracePath={tracePath} />;
     }
     if (activeTab === "Replay") {
-      return <RightReplayTab replayPoint={replayPoint} />;
+      return (
+        <RightReplayTab
+          replayPoint={replayPoint}
+          selectedTag={selectedReplayTag}
+          replayTrace={replayTrace}
+          replayIssues={replayIssues}
+          onSelectedTagChange={onSelectedReplayTagChange}
+          onReplayPointChange={onReplayPointChange}
+        />
+      );
     }
     if (activeTab === "IO Mapping") {
       return (
@@ -72,7 +91,7 @@ export default function DetailsPanel({
     if (activeTab === "Versions") {
       return <RightVersionsTab />;
     }
-    return <RightDiagnosticsTab diagnostics={runtimeDiagnostics} />;
+    return <RightDiagnosticsTab diagnostics={runtimeDiagnostics} simulationIssues={replayIssues} />;
   };
 
   return (

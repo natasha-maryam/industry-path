@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes.deploy import router as deploy_router
+from api.routes.export import router as export_router
 from api.routes.graph import router as graph_router
 from api.routes.health import router as health_router
 from api.routes.io_mapping import router as io_mapping_router
@@ -59,5 +60,6 @@ app.include_router(logic_router, prefix="/api")
 app.include_router(io_mapping_router, prefix="/api")
 app.include_router(project_io_mapping_router, prefix="/api")
 app.include_router(deploy_router, prefix="/api")
+app.include_router(export_router, prefix="/api")
 app.include_router(pipeline_router, prefix="/api")
 app.include_router(st_verify_router, prefix="/api")

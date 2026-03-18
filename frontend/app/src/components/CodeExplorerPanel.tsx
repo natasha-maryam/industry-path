@@ -133,7 +133,9 @@ export default function CodeExplorerPanel({
 }: CodeExplorerPanelProps) {
   const editorMountRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const diffEditorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
   const modelByPathRef = useRef<Map<string, monaco.editor.ITextModel>>(new Map());
+  const originalModelByPathRef = useRef<Map<string, monaco.editor.ITextModel>>(new Map());
 
   const resolvedFiles = useMemo<GeneratedLogicFile[]>(() => {
     const sourceFiles = files && files.length > 0 ? files : parseBundledFiles(bundledCode);
@@ -158,6 +160,7 @@ export default function CodeExplorerPanel({
     control_loops: true,
   });
   const [selectedPath, setSelectedPath] = useState<string>("");
+  const [isDiffMode, setIsDiffMode] = useState<boolean>(false);
 
   useEffect(() => {
     if (!selectedFilePath) {
@@ -216,8 +219,21 @@ export default function CodeExplorerPanel({
     }
 
     const uri = monaco.Uri.parse(`inmemory://crosslayerx/${encodeURIComponent(normalized)}`);
-    const model = monaco.editor.createModel(content, "plaintext", uri);
+    const model = monaco.editor.createModel(content, "pascal", uri);
     modelByPathRef.current.set(normalized, model);
+    return model;
+  };
+
+  const getOrCreateOriginalModel = (filePath: string, content: string): monaco.editor.ITextModel => {
+    const normalized = normalizePath(filePath);
+    const existing = originalModelByPathRef.current.get(normalized);
+    if (existing) {
+      return existing;
+    }
+
+    const uri = monaco.Uri.parse(`inmemory://crosslayerx-original/${encodeURIComponent(normalized)}`);
+    const model = monaco.editor.createModel(content, "pascal", uri);
+    originalModelByPathRef.current.set(normalized, model);
     return model;
   };
 
@@ -228,6 +244,7 @@ export default function CodeExplorerPanel({
 
     const activeFile = selectedFile ?? resolvedFiles[0];
     const activeModel = getOrCreateModel(activeFile.path, activeFile.content || "");
+    const originalModel = getOrCreateOriginalModel(activeFile.path, activeFile.content || "");
 
     const filePathSet = new Set(resolvedFiles.map((file) => normalizePath(file.path)));
     for (const [filePath, model] of modelByPathRef.current.entries()) {
@@ -236,6 +253,40 @@ export default function CodeExplorerPanel({
         modelByPathRef.current.delete(filePath);
       }
     }
+    for (const [filePath, model] of originalModelByPathRef.current.entries()) {
+      if (!filePathSet.has(filePath)) {
+        model.dispose();
+        originalModelByPathRef.current.delete(filePath);
+      }
+    }
+
+    if (isDiffMode) {
+      editorRef.current?.dispose();
+      editorRef.current = null;
+
+      if (!diffEditorRef.current) {
+        diffEditorRef.current = monaco.editor.createDiffEditor(editorMountRef.current, {
+          readOnly: true,
+          automaticLayout: true,
+          minimap: { enabled: false },
+          renderSideBySide: true,
+          originalEditable: false,
+          lineNumbers: "on",
+          fontSize: 12,
+          scrollBeyondLastLine: false,
+          wordWrap: "off",
+          autoIndent: "full",
+          folding: true,
+          bracketPairColorization: { enabled: true },
+        });
+      }
+
+      diffEditorRef.current.setModel({ original: originalModel, modified: activeModel });
+      return;
+    }
+
+    diffEditorRef.current?.dispose();
+    diffEditorRef.current = null;
 
     if (!editorRef.current) {
       editorRef.current = monaco.editor.create(editorMountRef.current, {
@@ -247,12 +298,15 @@ export default function CodeExplorerPanel({
         fontSize: 12,
         scrollBeyondLastLine: false,
         wordWrap: "off",
+        autoIndent: "full",
+        folding: true,
+        bracketPairColorization: { enabled: true },
       });
       return;
     }
 
     editorRef.current.setModel(activeModel);
-  }, [error, hasFiles, loading, resolvedFiles, selectedFile]);
+  }, [error, hasFiles, isDiffMode, loading, resolvedFiles, selectedFile]);
 
   useEffect(() => {
     for (const file of resolvedFiles) {
@@ -291,13 +345,14 @@ export default function CodeExplorerPanel({
     const column = Math.max(1, jumpToLocation.column || 1);
 
     window.setTimeout(() => {
-      if (!editorRef.current) {
+      const activeEditor = editorRef.current ?? diffEditorRef.current?.getModifiedEditor();
+      if (!activeEditor) {
         return;
       }
-      editorRef.current.revealPositionInCenter({ lineNumber, column });
-      editorRef.current.setPosition({ lineNumber, column });
-      editorRef.current.focus();
-      editorRef.current.setSelection({
+      activeEditor.revealPositionInCenter({ lineNumber, column });
+      activeEditor.setPosition({ lineNumber, column });
+      activeEditor.focus();
+      activeEditor.setSelection({
         startLineNumber: lineNumber,
         startColumn: column,
         endLineNumber: lineNumber,
@@ -309,10 +364,15 @@ export default function CodeExplorerPanel({
   useEffect(() => {
     return () => {
       editorRef.current?.dispose();
+      diffEditorRef.current?.dispose();
       for (const model of modelByPathRef.current.values()) {
         model.dispose();
       }
       modelByPathRef.current.clear();
+      for (const model of originalModelByPathRef.current.values()) {
+        model.dispose();
+      }
+      originalModelByPathRef.current.clear();
     };
   }, []);
 
@@ -375,7 +435,12 @@ export default function CodeExplorerPanel({
     <section className={`code-explorer-panel ${className}`.trim()}>
       <header className="code-explorer-header">
         <h3>Generated ST</h3>
-        <span>{resolvedFiles.length} files</span>
+        <div className="code-explorer-header-actions">
+          <span>{resolvedFiles.length} files</span>
+          <button className="code-explorer-mode-btn" type="button" onClick={() => setIsDiffMode((current) => !current)}>
+            {isDiffMode ? "Standard" : "Diff"}
+          </button>
+        </div>
       </header>
 
       {warningMessage ? <div className="code-explorer-warning">{warningMessage}</div> : null}

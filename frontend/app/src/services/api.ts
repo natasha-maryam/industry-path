@@ -76,6 +76,27 @@ export type TraceResponse = {
   path: string[];
 };
 
+export type SimulationTracePoint = {
+  tag: string;
+  value: number | boolean | string;
+  time: number;
+};
+
+export type SimulationTraceIssue = {
+  tag: string;
+  issue: string;
+};
+
+export type SimulationTraceResponse = {
+  project_id: string;
+  trace: SimulationTracePoint[];
+};
+
+export type SimulationAnalysisResponse = {
+  project_id: string;
+  issues: SimulationTraceIssue[];
+};
+
 export type DiscoveredControlLoop = {
   loop_tag: string;
   sensor_tag: string;
@@ -1103,6 +1124,32 @@ export async function runSimulation(projectId: string): Promise<Record<string, u
   return response.data;
 }
 
+export async function getSimulationTrace(projectId: string): Promise<SimulationTraceResponse> {
+  const response = await api.get<SimulationTraceResponse>(`/projects/${projectId}/simulation/trace`);
+  return response.data;
+}
+
+export async function getSimulationAnalysis(projectId: string): Promise<SimulationAnalysisResponse> {
+  const response = await api.get<SimulationAnalysisResponse>(`/projects/${projectId}/simulation/analysis`);
+  return response.data;
+}
+
+export async function resetSimulationTrace(projectId: string): Promise<{ project_id: string; status: string; trace: SimulationTracePoint[] }> {
+  const response = await api.post<{ project_id: string; status: string; trace: SimulationTracePoint[] }>(
+    `/projects/${projectId}/simulation/simulation-trace/reset`
+  );
+  return response.data;
+}
+
+export async function runSimulationTraceCycle(
+  projectId: string
+): Promise<{ project_id: string; status: string; samples: number; trace: SimulationTracePoint[]; issues: SimulationTraceIssue[] }> {
+  const response = await api.post<{ project_id: string; status: string; samples: number; trace: SimulationTracePoint[]; issues: SimulationTraceIssue[] }>(
+    `/projects/${projectId}/simulation/simulation-trace/run`
+  );
+  return response.data;
+}
+
 export async function deployProject(projectId: string): Promise<Record<string, unknown>> {
   const response = await api.post<Record<string, unknown>>(`/projects/${projectId}/deploy`);
   return response.data;
@@ -1234,5 +1281,32 @@ export async function getMonitoring(projectId: string): Promise<Record<string, u
 
 export async function getReplay(projectId: string): Promise<Record<string, unknown>> {
   const response = await api.get<Record<string, unknown>>(`/projects/${projectId}/replay`);
+  return response.data;
+}
+
+export async function exportSimulationArtifact(projectId: string): Promise<Record<string, unknown>> {
+  const response = await api.get<Record<string, unknown>>(`/projects/${projectId}/export/simulation`);
+  return response.data;
+}
+
+export async function exportPlantArtifact(projectId: string): Promise<Record<string, unknown>> {
+  const response = await api.get<Record<string, unknown>>(`/projects/${projectId}/export/plant`);
+  return response.data;
+}
+
+export async function exportSignalsArtifact(projectId: string): Promise<Record<string, unknown>> {
+  const response = await api.get<Record<string, unknown>>(`/projects/${projectId}/export/signals`);
+  return response.data;
+}
+
+export async function exportIOMappingArtifact(projectId: string): Promise<Record<string, unknown>> {
+  const response = await api.get<Record<string, unknown>>(`/projects/${projectId}/export/io`);
+  return response.data;
+}
+
+export async function exportEngineeringBundle(projectId: string): Promise<Blob> {
+  const response = await api.get<Blob>(`/projects/${projectId}/export/bundle`, {
+    responseType: "blob",
+  });
   return response.data;
 }

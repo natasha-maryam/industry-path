@@ -271,6 +271,46 @@
   gap: 0.35rem;
 }
 
+.command-menu {
+  position: relative;
+}
+
+.command-menu-trigger {
+  min-width: 34px;
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.34rem;
+}
+
+.command-menu-icon {
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.command-dropdown {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  right: 0;
+  min-width: 190px;
+  max-width: 240px;
+  padding: 0.35rem;
+  border: 1px solid var(--stroke);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  z-index: 30;
+}
+
+.command-menu-item {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
 .command-btn {
   border: 1px solid var(--stroke);
   background: #f7f9fb;

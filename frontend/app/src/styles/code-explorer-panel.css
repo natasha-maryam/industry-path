@@ -31,6 +31,27 @@
   color: #3f5264;
 }
 
+.code-explorer-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.code-explorer-mode-btn {
+  border: 1px solid var(--stroke);
+  background: #f7f9fb;
+  color: var(--text);
+  border-radius: 4px;
+  font-size: 0.62rem;
+  font-weight: 600;
+  padding: 0.15rem 0.4rem;
+  cursor: pointer;
+}
+
+.code-explorer-mode-btn:hover {
+  background: #ffffff;
+}
+
 .code-explorer-body {
   height: 100%;
   min-height: 0;

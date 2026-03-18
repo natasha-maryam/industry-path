@@ -11,6 +11,7 @@ from runtime_engine.runtime_signal_state import runtime_signal_state
 from runtime_engine.runtime_telemetry import runtime_telemetry
 from services.io_mapping_engine import io_mapping_engine
 from services.project_service import project_service
+from services.st_codegen_utils import st_codegen_utils
 
 
 class RuntimeManager:
@@ -72,6 +73,41 @@ class RuntimeManager:
                     )
         return rows
 
+    @staticmethod
+    def _augment_command_dependency_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        augmented = list(rows)
+        known_tags = {str(item.get("tag") or "").strip().upper() for item in augmented if str(item.get("tag") or "").strip()}
+
+        additions: list[dict[str, Any]] = []
+        for row in augmented:
+            tag = str(row.get("tag") or "").strip().upper()
+            if not tag:
+                continue
+            dependencies = st_codegen_utils.infer_command_dependencies(tag)
+            if not dependencies:
+                continue
+            dependent_tags = [
+                *dependencies.get("status_tags", []),
+                *dependencies.get("fault_tags", []),
+            ]
+            for dependent in dependent_tags:
+                dependent_tag = str(dependent or "").strip().upper()
+                if not dependent_tag or dependent_tag in known_tags:
+                    continue
+                known_tags.add(dependent_tag)
+                additions.append(
+                    {
+                        "tag": dependent_tag,
+                        "io_type": "VIRTUAL",
+                        "st_type": "BOOL",
+                        "signal_type": "digital",
+                        "is_input": True,
+                    }
+                )
+
+        augmented.extend(additions)
+        return augmented
+
     def _load_project_io_map(self, project_id: str) -> list[dict[str, Any]]:
         latest = io_mapping_engine.get_latest_io_mapping(project_id)
         if latest:
@@ -105,6 +141,7 @@ class RuntimeManager:
                 continue
             merged_catalog_rows.append(row)
             merged_tags.add(tag)
+        merged_catalog_rows = self._augment_command_dependency_rows(merged_catalog_rows)
         self.logger.info(
             "runtime_manager deploy project_id=%s st_files=%s io_points=%s",
             project_id,
@@ -189,7 +226,7 @@ class RuntimeManager:
             steps.append({"name": "build_runtime", "status": "failed", "message": "Skipped because generate_c failed."})
 
         if not errors:
-            apply_ok, apply_step = self.runtime.apply_io(project_dir, effective_io_map)
+            apply_ok, apply_step = self.runtime.apply_io(project_dir, merged_catalog_rows)
             steps.append(apply_step)
             if not apply_ok:
                 errors.append(apply_step["message"])

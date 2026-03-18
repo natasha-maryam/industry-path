@@ -11,6 +11,7 @@ from runtime_engine.runtime_evaluator import runtime_evaluator
 from runtime_engine.runtime_signal_state import runtime_signal_state
 from runtime_engine.runtime_state_server import runtime_stream
 from runtime_engine.runtime_telemetry import runtime_telemetry
+from services.simulation_service import simulation_service
 
 router = APIRouter(prefix="/runtime", tags=["runtime"])
 
@@ -89,6 +90,7 @@ def force_runtime_input(project_id: str, payload: RuntimeForceInputRequest) -> d
         forced_value=payload.value,
         baseline_values=dict(baseline),
     )
+    trace = simulation_service.capture_trace(project_id, reset=False, step_ms=100, duration_ms=1000)
 
     return {
         "success": True,
@@ -99,6 +101,7 @@ def force_runtime_input(project_id: str, payload: RuntimeForceInputRequest) -> d
         "changed_alarms": cycle.get("changed_alarms", []),
         "changed_health_checks": cycle.get("changed_health_checks", []),
         "evaluation_cycle": cycle,
+        "trace_samples": len(trace),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -119,6 +122,7 @@ def clear_runtime_force(project_id: str, payload: RuntimeClearForceRequest) -> d
         forced_value=None,
         baseline_values=dict(baseline),
     )
+    trace = simulation_service.capture_trace(project_id, reset=False, step_ms=100, duration_ms=800)
 
     return {
         "success": True,
@@ -129,6 +133,7 @@ def clear_runtime_force(project_id: str, payload: RuntimeClearForceRequest) -> d
         "changed_alarms": cycle.get("changed_alarms", []),
         "changed_health_checks": cycle.get("changed_health_checks", []),
         "evaluation_cycle": cycle,
+        "trace_samples": len(trace),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -153,6 +158,7 @@ def get_forced_runtime_inputs(project_id: str) -> dict[str, Any]:
 def run_runtime_evaluation_cycle(project_id: str, payload: RuntimeRunEvaluationRequest) -> dict[str, Any]:
     _runtime_project_guard(project_id)
     cycle = runtime_evaluator.run_cycle(project_id, reason=payload.reason)
+    trace = simulation_service.capture_trace(project_id, reset=False, step_ms=100, duration_ms=1200)
     return {
         "success": True,
         "message": "Evaluation cycle completed.",
@@ -161,6 +167,7 @@ def run_runtime_evaluation_cycle(project_id: str, payload: RuntimeRunEvaluationR
         "changed_alarms": cycle.get("changed_alarms", []),
         "changed_health_checks": cycle.get("changed_health_checks", []),
         "evaluation_cycle": cycle,
+        "trace_samples": len(trace),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 

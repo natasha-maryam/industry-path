@@ -41,6 +41,8 @@ import {
   getLatestIOMapping,
   getRuntimeDiagnostics,
   getRuntimeForcedInputs,
+  getSimulationAnalysis,
+  getSimulationTrace,
   getMissingStagePrerequisites,
   getLogic,
   getPlantSignals,
@@ -64,6 +66,8 @@ import {
   type RuntimeEvaluationCycle,
   type RuntimeInputCatalogItem,
   type RuntimeSignalType,
+  type SimulationTraceIssue,
+  type SimulationTracePoint,
   type SimulationValidationPanelResponse,
   type DiscoveredControlLoop,
   type STWorkspaceVerificationResponse,
@@ -177,6 +181,15 @@ const normalizeVerifierFilePath = (filePath: string): string => {
 
 const toComparableToken = (value: string): string => value.toUpperCase().replace(/[^A-Z0-9]/g, "");
 
+const resolveTraceTag = (candidate: string, trace: SimulationTracePoint[]): string => {
+  const candidateToken = toComparableToken(candidate || "");
+  if (!candidateToken) {
+    return "";
+  }
+  const match = trace.find((item) => toComparableToken(item.tag || "") === candidateToken);
+  return match?.tag || "";
+};
+
 const PIPELINE_STAGE_LABELS: Record<PipelineStageKey, string> = {
   extraction: "Extraction",
   normalization: "Normalization",
@@ -237,6 +250,9 @@ export default function Dashboard() {
   const [runtimeDiagnostics, setRuntimeDiagnostics] = useState<RuntimeEvaluationCycle | null>(null);
   const [simulationValidationData, setSimulationValidationData] = useState<SimulationValidationPanelResponse | null>(null);
   const [simulationFailedMessage, setSimulationFailedMessage] = useState<string | null>(null);
+  const [simulationTrace, setSimulationTrace] = useState<SimulationTracePoint[]>([]);
+  const [simulationIssues, setSimulationIssues] = useState<SimulationTraceIssue[]>([]);
+  const [selectedReplayTag, setSelectedReplayTag] = useState<string>("");
   const [statusText, setStatusText] = useState<string>("Loading projects...");
   const [selectedUploadFiles, setSelectedUploadFiles] = useState<string[]>([]);
   const [isParsing, setIsParsing] = useState<boolean>(false);
@@ -694,6 +710,9 @@ export default function Dashboard() {
       setRuntimeDiagnostics(null);
       setSimulationValidationData(null);
       setSimulationFailedMessage(null);
+      setSimulationTrace([]);
+      setSimulationIssues([]);
+      setSelectedReplayTag("");
       setPipelineStatuses(createInitialPipelineStatuses());
       setShowLogic(false);
       return;
@@ -743,10 +762,68 @@ export default function Dashboard() {
       }
     };
 
+    const loadLatestSimulationTrace = async (): Promise<void> => {
+      try {
+        const [tracePayload, analysisPayload] = await Promise.all([getSimulationTrace(selectedProjectId), getSimulationAnalysis(selectedProjectId)]);
+        const traceRows = tracePayload.trace ?? [];
+        setSimulationTrace(traceRows);
+        setSimulationIssues(analysisPayload.issues ?? []);
+        if (traceRows.length === 0) {
+          setSelectedReplayTag("");
+        }
+      } catch {
+        setSimulationTrace([]);
+        setSimulationIssues([]);
+        setSelectedReplayTag("");
+      }
+    };
+
     void loadGraph();
     void loadPlantSignals();
     void loadLatestIOMapping();
+    void loadLatestSimulationTrace();
   }, [selectedProjectId]);
+
+  useEffect(() => {
+    if (!selectedProjectId || (activeTab !== "Replay" && activeTab !== "Diagnostics")) {
+      return;
+    }
+    const refresh = async (): Promise<void> => {
+      try {
+        const [tracePayload, analysisPayload] = await Promise.all([getSimulationTrace(selectedProjectId), getSimulationAnalysis(selectedProjectId)]);
+        const traceRows = tracePayload.trace ?? [];
+        setSimulationTrace(traceRows);
+        setSimulationIssues(analysisPayload.issues ?? []);
+        if (traceRows.length === 0) {
+          setSelectedReplayTag("");
+        }
+      } catch {
+        setSimulationTrace([]);
+        setSimulationIssues([]);
+      }
+    };
+    void refresh();
+  }, [activeTab, selectedProjectId]);
+
+  useEffect(() => {
+    if (simulationTrace.length === 0) {
+      setSelectedReplayTag("");
+      return;
+    }
+
+    const candidates = [selectedNode, ...(selectedEquipment.signals ?? [])].filter((item) => Boolean(item));
+    for (const candidate of candidates) {
+      const resolved = resolveTraceTag(candidate, simulationTrace);
+      if (resolved) {
+        setSelectedReplayTag((current) => (current === resolved ? current : resolved));
+        return;
+      }
+    }
+
+    if (!selectedReplayTag || !simulationTrace.some((row) => row.tag === selectedReplayTag)) {
+      setSelectedReplayTag(simulationTrace[0]?.tag || "");
+    }
+  }, [selectedNode, selectedEquipment.signals, simulationTrace, selectedReplayTag]);
 
   useEffect(() => {
     if (!selectedProjectId) {
@@ -1014,6 +1091,7 @@ export default function Dashboard() {
         setActiveBottomView("simulation");
         updatePipelineStage("simulation_validation", "running");
         const simulation = await runSimulation(selectedProjectId);
+        await refreshSimulationTraceData(selectedProjectId);
         const metrics = simulation.metrics;
         const scenarioValue = typeof metrics === "object" && metrics && Array.isArray((metrics as { scenarios?: unknown[] }).scenarios)
           ? ((metrics as { scenarios?: SimulationValidationPanelResponse["scenarios"] }).scenarios ?? [])
@@ -1046,9 +1124,6 @@ export default function Dashboard() {
       }
 
     } catch {
-      if (action === "generate") {
-        updatePipelineStage("logic_completion", "failed");
-      }
       if (action === "generate_st") {
         updatePipelineStage("st_generation", "failed");
       }
@@ -1334,12 +1409,34 @@ export default function Dashboard() {
     }
   };
 
+  const refreshSimulationTraceData = async (projectId?: string): Promise<void> => {
+    const activeProjectId = projectId || selectedProjectId;
+    if (!activeProjectId) {
+      setSimulationTrace([]);
+      setSimulationIssues([]);
+      setSelectedReplayTag("");
+      return;
+    }
+    try {
+      const [tracePayload, analysisPayload] = await Promise.all([getSimulationTrace(activeProjectId), getSimulationAnalysis(activeProjectId)]);
+      const traceRows = tracePayload.trace ?? [];
+      setSimulationTrace(traceRows);
+      setSimulationIssues(analysisPayload.issues ?? []);
+      if (traceRows.length === 0) {
+        setSelectedReplayTag("");
+      }
+    } catch {
+      setSimulationTrace([]);
+      setSimulationIssues([]);
+    }
+  };
+
   const handleApplyRuntimeInputForce = async (payload: { tag: string; value: unknown; type: RuntimeSignalType }): Promise<void> => {
     if (!selectedProjectId) {
       throw new Error("No active project selected");
     }
     await applyRuntimeInputForce(selectedProjectId, payload);
-    await Promise.all([refreshRuntimeForceState(), refreshRuntimeTags(), refreshRuntimeDiagnostics()]);
+    await Promise.all([refreshRuntimeForceState(), refreshRuntimeTags(), refreshRuntimeDiagnostics(), refreshSimulationTraceData(selectedProjectId)]);
     setStatusText(`Forced input applied for ${payload.tag}.`);
   };
 
@@ -1348,7 +1445,7 @@ export default function Dashboard() {
       throw new Error("No active project selected");
     }
     await clearRuntimeInputForce(selectedProjectId, tag);
-    await Promise.all([refreshRuntimeForceState(), refreshRuntimeTags(), refreshRuntimeDiagnostics()]);
+    await Promise.all([refreshRuntimeForceState(), refreshRuntimeTags(), refreshRuntimeDiagnostics(), refreshSimulationTraceData(selectedProjectId)]);
     setStatusText(`Forced input cleared for ${tag}.`);
   };
 
@@ -1357,7 +1454,7 @@ export default function Dashboard() {
       return;
     }
     await runRuntimeEvaluationCycle(selectedProjectId, "manual_debug");
-    await Promise.all([refreshRuntimeTags(), refreshRuntimeForceState(), refreshRuntimeDiagnostics()]);
+    await Promise.all([refreshRuntimeTags(), refreshRuntimeForceState(), refreshRuntimeDiagnostics(), refreshSimulationTraceData(selectedProjectId)]);
     setStatusText("Runtime evaluation cycle completed.");
   };
 
@@ -1915,6 +2012,9 @@ export default function Dashboard() {
                   <DetailsPanel
                     activeTab={activeTab}
                     replayPoint={replayPoint}
+                    selectedReplayTag={selectedReplayTag}
+                    replayTrace={simulationTrace}
+                    replayIssues={simulationIssues}
                     selectedEquipment={selectedEquipment}
                     selectedNodeId={selectedNode}
                     tracePath={tracePath}
@@ -1930,6 +2030,8 @@ export default function Dashboard() {
                       setMonitoringPanelMode("io_mapping");
                       setActiveTab("IO Mapping");
                     }}
+                    onReplayPointChange={setReplayPoint}
+                    onSelectedReplayTagChange={setSelectedReplayTag}
                     onTabChange={setActiveTab}
                   />
                 ) : null}
