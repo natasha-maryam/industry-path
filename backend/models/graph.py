@@ -62,3 +62,20 @@ class TraceResponse(BaseModel):
     project_id: str
     node_id: str
     path: list[str]
+
+
+class PlantSignalRow(BaseModel):
+    tag: str
+    type: str
+    signal_type: str | None = None
+    process_unit: str | None = None
+    connected_to: list[str] = Field(default_factory=list)
+    control_targets: list[str] = Field(default_factory=list)
+    controlling_signals: list[str] = Field(default_factory=list)
+    control_path: list[str] = Field(default_factory=list)
+    loop_ids: list[str] = Field(default_factory=list)
+    loop_id: str | None = None
+    relationship_types: list[str] = Field(default_factory=list)
+    confidence: float | None = None
+    source: str | None = None
+    source_details: list[str] = Field(default_factory=list)

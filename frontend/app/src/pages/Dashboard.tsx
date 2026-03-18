@@ -18,6 +18,7 @@ import type { GeneratedLogicFile, STDiagnosticMarker, STJumpLocation } from "../
 import CommandBar, { type ToolbarAction } from "../components/CommandBar";
 import DetailsPanel, { type RightTab } from "../components/DetailsPanel";
 import GraphWorkspace from "../components/GraphWorkspace";
+import PlantGraphTable from "../components/PlantGraphTable";
 import ProjectNavigator from "../components/ProjectNavigator";
 import type { RuntimeValidationPanelData } from "../components/RuntimeValidationPanel";
 import SnapshotManagerModal, { type SnapshotRecord } from "../components/SnapshotManagerModal";
@@ -32,6 +33,7 @@ import {
   createInitialPipelineStatuses,
   deleteProject,
   deployRuntimeControlWithRetry,
+  detectControlLoops,
   exportGeneratedLogicWithRetry,
   getRuntimeTags,
   generateLogic,
@@ -41,6 +43,7 @@ import {
   getRuntimeForcedInputs,
   getMissingStagePrerequisites,
   getLogic,
+  getPlantSignals,
   getGraph,
   getTrace,
   listProjects,
@@ -62,8 +65,10 @@ import {
   type RuntimeInputCatalogItem,
   type RuntimeSignalType,
   type SimulationValidationPanelResponse,
+  type DiscoveredControlLoop,
   type STWorkspaceVerificationResponse,
   type PipelineStageStatusMap,
+  type PlantSignalRow,
   type Project,
 } from "../services/api";
 import "../styles/dashboard.css";
@@ -72,6 +77,18 @@ type EquipmentType = "Tank" | "Pump" | "Sensor" | "Valve";
 type BottomView = "simulation" | "monitoring" | "logic";
 type CodePanelMode = "control_logic" | "generated_st" | "verification";
 type MonitoringPanelMode = "io_mapping" | "runtime" | "versions";
+
+type ControlLoopModalState = {
+  open: boolean;
+  noLoop: boolean;
+  loopId: string;
+  sensor: string;
+  process: string;
+  actuator: string;
+  controlPath: string;
+  source: string;
+  confidence: number | null;
+};
 
 type Equipment = {
   id: string;
@@ -209,6 +226,8 @@ export default function Dashboard() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [graphNodes, setGraphNodes] = useState<GraphNode[]>([]);
   const [graphEdges, setGraphEdges] = useState<GraphEdge[]>([]);
+  const [graphWorkspaceView, setGraphWorkspaceView] = useState<"graph" | "table">("graph");
+  const [plantSignalRows, setPlantSignalRows] = useState<PlantSignalRow[]>([]);
   const [runtimeValidationData, setRuntimeValidationData] = useState<RuntimeValidationPanelData | null>(null);
   const [runtimeFailedMessage, setRuntimeFailedMessage] = useState<string | null>(null);
   const [isRuntimeActionBusy, setIsRuntimeActionBusy] = useState<boolean>(false);
@@ -222,12 +241,22 @@ export default function Dashboard() {
   const [selectedUploadFiles, setSelectedUploadFiles] = useState<string[]>([]);
   const [isParsing, setIsParsing] = useState<boolean>(false);
   const [isUploading, setIsUploading] = useState<boolean>(false);
-  const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState<boolean>(false);
   const [isRightPanelExpanded, setIsRightPanelExpanded] = useState<boolean>(false);
   const [showCreateProjectModal, setShowCreateProjectModal] = useState<boolean>(false);
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
   const [showSnapshotManagerModal, setShowSnapshotManagerModal] = useState<boolean>(false);
+  const [controlLoopModal, setControlLoopModal] = useState<ControlLoopModalState>({
+    open: false,
+    noLoop: false,
+    loopId: "",
+    sensor: "",
+    process: "",
+    actuator: "",
+    controlPath: "",
+    source: "",
+    confidence: null,
+  });
   const [snapshotRecords, setSnapshotRecords] = useState<SnapshotRecord[]>([]);
   const [isLoadingSnapshots, setIsLoadingSnapshots] = useState<boolean>(false);
   const [snapshotErrorMessage, setSnapshotErrorMessage] = useState<string | null>(null);
@@ -374,9 +403,6 @@ export default function Dashboard() {
       return action !== "upload";
     }
 
-    if (action === "generate") {
-      return !canRunStage(pipelineStatuses, "logic_completion");
-    }
     if (action === "generate_st") {
       return !canRunStage(pipelineStatuses, "st_generation");
     }
@@ -406,7 +432,6 @@ export default function Dashboard() {
     () => ({
       upload: false,
       parse: isActionBlockedByPrerequisites("parse"),
-      generate: isActionBlockedByPrerequisites("generate"),
       generate_st: isActionBlockedByPrerequisites("generate_st"),
       io_mapping: isActionBlockedByPrerequisites("io_mapping"),
       verify_st: isActionBlockedByPrerequisites("verify_st"),
@@ -425,9 +450,6 @@ export default function Dashboard() {
     if (isUploading) {
       return "upload";
     }
-    if (isGenerating && activeAction === "generate") {
-      return "generate";
-    }
     if (pipelineStatuses.st_generation === "running" && !isExportingLogic) {
       return "generate_st";
     }
@@ -444,7 +466,7 @@ export default function Dashboard() {
       return "export_logic";
     }
     return null;
-  }, [activeAction, isExportingLogic, isGenerating, isParsing, isUploading, pipelineStatuses.io_mapping, pipelineStatuses.st_generation, pipelineStatuses.st_verification, pipelineStatuses.version_snapshot]);
+  }, [activeAction, isExportingLogic, isParsing, isUploading, pipelineStatuses.io_mapping, pipelineStatuses.st_generation, pipelineStatuses.st_verification, pipelineStatuses.version_snapshot]);
 
   const runSTVerification = async (projectId: string, options: { silent?: boolean } = {}): Promise<void> => {
     setIsVerifyingST(true);
@@ -645,6 +667,7 @@ export default function Dashboard() {
     if (!selectedProjectId) {
       setGraphNodes([]);
       setGraphEdges([]);
+      setPlantSignalRows([]);
       setSelectedNode("");
       setControlLogicCode("");
       setGeneratedLogic("");
@@ -692,6 +715,15 @@ export default function Dashboard() {
       }
     };
 
+    const loadPlantSignals = async (): Promise<void> => {
+      try {
+        const rows = await getPlantSignals(selectedProjectId);
+        setPlantSignalRows(rows);
+      } catch {
+        setPlantSignalRows([]);
+      }
+    };
+
     const loadLatestIOMapping = async (): Promise<void> => {
       try {
         const mapping = await getLatestIOMapping(selectedProjectId);
@@ -712,6 +744,7 @@ export default function Dashboard() {
     };
 
     void loadGraph();
+    void loadPlantSignals();
     void loadLatestIOMapping();
   }, [selectedProjectId]);
 
@@ -811,8 +844,10 @@ export default function Dashboard() {
         setStatusText("Parsing batch in progress. Combining P&ID and control narrative...");
         await parseProject(selectedProjectId);
         const graph = await getGraph(selectedProjectId);
+        const signals = await getPlantSignals(selectedProjectId);
         setGraphNodes(graph.nodes);
         setGraphEdges(graph.edges);
+        setPlantSignalRows(signals);
         setPipelineStatuses((previous) =>
           withDerivedPipelineStatuses({
             ...previous,
@@ -830,48 +865,6 @@ export default function Dashboard() {
           icon: <Cpu size={14} className="toast-icon" />,
         });
         setIsParsing(false);
-      }
-
-      if (action === "generate") {
-        if (!ensurePrerequisites("logic_completion")) {
-          return;
-        }
-        setIsGenerating(true);
-        updatePipelineStage("logic_completion", "running");
-        setStatusText("Generating control logic model...");
-        try {
-          const artifact = await generateLogic(selectedProjectId);
-          let generatedCode = (artifact.code || artifact.st_preview || "").trim();
-          const validationIssues = (artifact.st_validation?.issues ?? []).map((issue) => {
-            const location = issue.line ? `${issue.file}:${issue.line}` : issue.file;
-            return `${location} [${issue.rule}] ${issue.message}`;
-          });
-
-          setLogicWarnings(artifact.warnings ?? []);
-          setLogicValidationIssues(validationIssues);
-
-          if (!generatedCode) {
-            try {
-              const storedArtifact = await getLogic(selectedProjectId);
-              generatedCode = (storedArtifact.code || storedArtifact.st_preview || "").trim();
-            } catch {
-              generatedCode = "";
-            }
-          }
-
-          if (generatedCode) {
-            setControlLogicCode(generatedCode);
-            setGeneratedLogic(generatedCode);
-          }
-
-          updatePipelineStage("logic_completion", "success");
-          setStatusText(generatedCode ? "Control logic generated and shown in Control Logic panel." : "Control logic model generated.");
-          setCodePanelMode("control_logic");
-          setActiveBottomView("logic");
-          setShowLogic(true);
-        } finally {
-          setIsGenerating(false);
-        }
       }
 
       if (action === "generate_st") {
@@ -1472,6 +1465,67 @@ export default function Dashboard() {
     };
   }, [monitoringPanelMode, selectedProjectId]);
 
+  const openControlLoopModal = (loop: DiscoveredControlLoop): void => {
+    const processTag = loop.process_unit || "";
+    const controlPath = [loop.sensor_tag, processTag, loop.actuator_tag].filter((item) => item.length > 0).join(" -> ");
+    setControlLoopModal({
+      open: true,
+      noLoop: false,
+      loopId: loop.loop_tag,
+      sensor: loop.sensor_tag,
+      process: processTag,
+      actuator: loop.actuator_tag,
+      controlPath,
+      source: loop.source_reference || "",
+      confidence: typeof loop.confidence === "number" ? loop.confidence : null,
+    });
+  };
+
+  const openNoLoopModal = (): void => {
+    setControlLoopModal({
+      open: true,
+      noLoop: true,
+      loopId: "",
+      sensor: "",
+      process: "",
+      actuator: "",
+      controlPath: "",
+      source: "",
+      confidence: null,
+    });
+  };
+
+  const selectBestLoopForRow = (row: PlantSignalRow, loops: DiscoveredControlLoop[]): DiscoveredControlLoop | null => {
+    const normalizedTag = (row.tag || "").trim().toUpperCase();
+    const targetLoopIds = new Set<string>([
+      ...(row.loop_ids ?? []).map((item) => (item || "").trim().toUpperCase()),
+      ...((row.loop_id ? [row.loop_id] : []).map((item) => (item || "").trim().toUpperCase())),
+    ]);
+
+    const exactTagLoops = loops.filter((loop) => {
+      const sensor = (loop.sensor_tag || "").trim().toUpperCase();
+      const actuator = (loop.actuator_tag || "").trim().toUpperCase();
+      return sensor === normalizedTag || actuator === normalizedTag;
+    });
+    if (exactTagLoops.length > 0) {
+      return exactTagLoops[0];
+    }
+
+    if (targetLoopIds.size > 0) {
+      const idMatched = loops.filter((loop) => targetLoopIds.has((loop.loop_tag || "").trim().toUpperCase()));
+      if (idMatched.length > 0) {
+        return idMatched[0];
+      }
+    }
+
+    const processMatched = loops.filter((loop) => (loop.process_unit || "").trim().toUpperCase() === normalizedTag);
+    if (processMatched.length > 0) {
+      return processMatched[0];
+    }
+
+    return null;
+  };
+
   return (
     <div className="dashboard">
       <Toaster
@@ -1632,6 +1686,39 @@ export default function Dashboard() {
         </div>
       ) : null}
 
+      {controlLoopModal.open ? (
+        <div className="modal-backdrop" onClick={() => setControlLoopModal((value) => ({ ...value, open: false }))}>
+          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+            <h3>Control Loop</h3>
+            {controlLoopModal.noLoop ? (
+              <p className="modal-help-text">No control loop detected</p>
+            ) : (
+              <dl className="kv">
+                <dt>Loop ID</dt>
+                <dd>{controlLoopModal.loopId}</dd>
+                <dt>Path</dt>
+                <dd>{`${controlLoopModal.sensor} → ${controlLoopModal.process} → ${controlLoopModal.actuator}`}</dd>
+                <dt>Control Path</dt>
+                <dd>{controlLoopModal.controlPath}</dd>
+                <dt>Source</dt>
+                <dd>{controlLoopModal.source || "N/A"}</dd>
+                <dt>Confidence</dt>
+                <dd>{controlLoopModal.confidence !== null ? controlLoopModal.confidence.toFixed(2) : "N/A"}</dd>
+              </dl>
+            )}
+            <div className="modal-actions">
+              <button
+                className="command-btn"
+                onClick={() => setControlLoopModal((value) => ({ ...value, open: false }))}
+                type="button"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <input
         ref={uploadInputRef}
         hidden
@@ -1726,19 +1813,91 @@ export default function Dashboard() {
                 </aside>
 
                 <section className="graph-shell">
-                  <GraphWorkspace
-                    graphEdges={graphEdges}
-                    graphNodes={graphNodes}
-                    replayMode={replayMode}
-                    replayPoint={replayPoint}
-                    selectedNode={selectedNode}
-                    tracePath={tracePath}
-                    onNodeSelect={setSelectedNode}
-                    onReplayPointChange={setReplayPoint}
-                    onTraceNode={(nodeId) => {
-                      void handleTrace(nodeId);
-                    }}
-                  />
+                  <div className="plant-view-toggle">
+                    <button
+                      className={`command-btn ${graphWorkspaceView === "graph" ? "active" : ""}`}
+                      type="button"
+                      onClick={() => setGraphWorkspaceView("graph")}
+                    >
+                      Graph View
+                    </button>
+                    <button
+                      className={`command-btn ${graphWorkspaceView === "table" ? "active" : ""}`}
+                      type="button"
+                      onClick={() => setGraphWorkspaceView("table")}
+                    >
+                      Table View
+                    </button>
+                  </div>
+
+                  {graphWorkspaceView === "graph" ? (
+                    <GraphWorkspace
+                      graphEdges={graphEdges}
+                      graphNodes={graphNodes}
+                      replayMode={replayMode}
+                      replayPoint={replayPoint}
+                      selectedNode={selectedNode}
+                      tracePath={tracePath}
+                      onNodeSelect={setSelectedNode}
+                      onReplayPointChange={setReplayPoint}
+                      onTraceNode={(nodeId) => {
+                        void handleTrace(nodeId);
+                      }}
+                    />
+                  ) : (
+                    <PlantGraphTable
+                      rows={plantSignalRows}
+                      selectedTag={selectedNode}
+                      onSelectTag={(tag) => {
+                        setSelectedNode(tag);
+                        if (activeTab === "Trace") {
+                          void handleTrace(tag);
+                        }
+                      }}
+                      onTraceSignal={(row) => {
+                        void handleTrace(row.tag);
+                        setIsRightPanelExpanded(true);
+                      }}
+                      onOpenControlLoop={(row) => {
+                        setSelectedNode(row.tag);
+                        setActiveTab("Trace");
+                        setIsRightPanelExpanded(true);
+                        if (!selectedProjectId) {
+                          setStatusText("No active project selected.");
+                          return;
+                        }
+                        if (!row.loop_id && (!row.loop_ids || row.loop_ids.length === 0)) {
+                          openNoLoopModal();
+                          setStatusText("No control loop detected.");
+                          return;
+                        }
+                        void detectControlLoops(selectedProjectId)
+                          .then((loops) => {
+                            const selectedLoop = selectBestLoopForRow(row, loops);
+                            if (!selectedLoop) {
+                              openNoLoopModal();
+                              setStatusText("No control loop detected.");
+                              return;
+                            }
+                            setTracePath([selectedLoop.sensor_tag, selectedLoop.process_unit || "PROCESS", selectedLoop.actuator_tag]);
+                            openControlLoopModal(selectedLoop);
+                            setStatusText(`Opened ${selectedLoop.loop_tag} (${selectedLoop.control_strategy || "ON_OFF"}).`);
+                          })
+                          .catch(() => {
+                            openNoLoopModal();
+                            setStatusText("No control loop detected.");
+                          });
+                      }}
+                      onOpenIOMapping={(row) => {
+                        setActiveBottomView("monitoring");
+                        setMonitoringPanelMode("io_mapping");
+                        setActiveTab("IO Mapping");
+                        setIsRightPanelExpanded(true);
+                        setSelectedIOMappingTag(row.tag);
+                        setStatusText(`IO mapping focused on ${row.tag}${row.signal_type ? ` (${row.signal_type})` : ""}.`);
+                      }}
+                    />
+                  )}
                 </section>
               </div>
 
@@ -1854,7 +2013,7 @@ export default function Dashboard() {
               }}
               showControlLogic={showLogic}
               isGeneratingST={pipelineStatuses.st_generation === "running" && activeAction === "generate_st"}
-              isGenerating={isGenerating}
+              isGenerating={pipelineStatuses.logic_completion === "running"}
               onViewChange={(view) => {
                 setActiveBottomView(view);
                 if (view === "logic") {

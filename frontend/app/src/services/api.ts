@@ -1,6 +1,7 @@
 import axios from "axios";
 export * from "./pipelineStatus";
 export * from "./panelContracts";
+import type { RuntimeValidationPanelResponse } from "./panelContracts";
 
 export type Project = {
   id: string;
@@ -52,10 +53,38 @@ export type PlantGraph = {
   edges: GraphEdge[];
 };
 
+export type PlantSignalRow = {
+  tag: string;
+  type: string;
+  signal_type?: string | null;
+  process_unit?: string | null;
+  connected_to?: string[];
+  control_targets?: string[];
+  controlling_signals?: string[];
+  control_path?: string[];
+  loop_ids?: string[];
+  loop_id?: string | null;
+  relationship_types?: string[];
+  confidence?: number | null;
+  source?: string | null;
+  source_details?: string[];
+};
+
 export type TraceResponse = {
   project_id: string;
   node_id: string;
   path: string[];
+};
+
+export type DiscoveredControlLoop = {
+  loop_tag: string;
+  sensor_tag: string;
+  actuator_tag: string;
+  process_unit?: string | null;
+  control_strategy?: string;
+  loop_type?: string;
+  confidence: number;
+  source_reference?: string | null;
 };
 
 export type ControlRule = {
@@ -657,7 +686,7 @@ const adaptRuntimeDeployResponse = (
     runtime_started: "Runtime Started",
   };
 
-  const checks = payload.steps.map((step, index) => ({
+  const checks: RuntimeValidationPanelResponse["checks"] = payload.steps.map((step, index) => ({
     check_id: `runtime-step-${index + 1}`,
     check_name: stepToCheckName[step.name] || step.name,
     status: step.status === "passed" ? "success" : "failed",
@@ -671,33 +700,6 @@ const adaptRuntimeDeployResponse = (
   const checksFailed = checks.filter((item) => item.status === "failed").length;
   const checksWarning = 0;
 
-  const diagnostics = [
-    ...(payload.summary.openplc_integration_mode === "partial"
-      ? [
-          {
-            step: "logic_loaded" as const,
-            severity: "warning" as const,
-            message: "OpenPLC integration is partial; endpoint compatibility could not be fully confirmed.",
-            detail: null,
-          },
-        ]
-      : []),
-    ...payload.errors.map((message) => ({
-      step: "logic_loaded" as const,
-      severity: "error" as const,
-      message,
-      detail: null,
-    })),
-    ...payload.warnings.map((message) => ({
-      step: "logic_loaded" as const,
-      severity: "warning" as const,
-      message,
-      detail: null,
-    })),
-  ];
-
-  const stepStatusByName = new Map(payload.steps.map((step) => [step.name, step.status === "passed" ? "success" : "failed"]));
-
   return {
     project_id: projectId,
     run_id: `runtime-${Date.now()}`,
@@ -707,12 +709,6 @@ const adaptRuntimeDeployResponse = (
     checks_failed: checksFailed,
     checks_warning: checksWarning,
     checks,
-    runtime_connected_status: stepStatusByName.get("runtime_connected") || "idle",
-    project_uploaded_status: stepStatusByName.get("project_uploaded") || "idle",
-    logic_loaded_status: stepStatusByName.get("logic_loaded") || "idle",
-    io_applied_status: stepStatusByName.get("io_applied") || "idle",
-    runtime_started_status: stepStatusByName.get("runtime_started") || "idle",
-    diagnostics,
   };
 };
 
@@ -887,8 +883,18 @@ export async function getGraph(projectId: string): Promise<PlantGraph> {
   return response.data;
 }
 
+export async function getPlantSignals(projectId: string): Promise<PlantSignalRow[]> {
+  const response = await api.get<PlantSignalRow[]>(`/projects/${projectId}/plant-signals`);
+  return response.data;
+}
+
 export async function getTrace(projectId: string, nodeId: string): Promise<TraceResponse> {
   const response = await api.get<TraceResponse>(`/projects/${projectId}/trace/${nodeId}`);
+  return response.data;
+}
+
+export async function detectControlLoops(projectId: string): Promise<DiscoveredControlLoop[]> {
+  const response = await api.post<DiscoveredControlLoop[]>(`/projects/${projectId}/logic/detect-control-loops`);
   return response.data;
 }
 
@@ -981,7 +987,10 @@ export async function verifySTLogicWithRetry(
 }
 
 export async function generateIOMapping(projectId: string): Promise<IOMappingGenerationResult> {
-  const response = await api.post<IOMappingEngineResponse>(`/projects/${projectId}/io-mapping/generate`);
+  const response = await api.post<IOMappingEngineResponse | IOMappingGenerationApiResponse>(`/projects/${projectId}/io-mapping/generate`);
+  if ("channels" in response.data) {
+    return adaptIOMappingGenerationResponse(response.data);
+  }
   return adaptIOMappingEngineResponse(response.data, projectId);
 }
 

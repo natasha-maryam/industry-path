@@ -148,7 +148,7 @@ export default function BottomPanels({
               ) : null}
             </>
           ) : (
-            <div className="monitor-frame">No control logic artifact available yet. Run Generate Control Logic first.</div>
+            <div className="monitor-frame">No control logic artifact available yet. Run Generate ST first.</div>
           )
         ) : null}
 

@@ -651,7 +651,7 @@
   height: 100%;
   min-height: 0;
   display: grid;
-  grid-template-rows: 1fr auto;
+  grid-template-rows: auto 1fr;
   background:
     linear-gradient(#eef2f5 1px, transparent 1px),
     linear-gradient(90deg, #eef2f5 1px, transparent 1px),
@@ -659,10 +659,103 @@
   background-size: 20px 20px, 20px 20px, auto;
 }
 
+.plant-view-toggle {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0.45rem 0.55rem;
+  border-bottom: 1px solid var(--stroke);
+  background: #eef2f5;
+}
+
 .graph-canvas {
   min-height: 0;
   position: relative;
   animation: panel-enter 260ms ease;
+}
+
+.plant-table-wrap {
+  min-height: 0;
+  overflow: auto;
+  padding: 0.5rem;
+}
+
+.plant-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.7rem;
+  background: #f9fbfd;
+  border: 1px solid #ccd6df;
+}
+
+.plant-table th,
+.plant-table td {
+  border-bottom: 1px solid #d6dee6;
+  padding: 0.32rem 0.4rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.plant-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #eaf0f5;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.56rem;
+  color: #4b5f73;
+}
+
+.plant-table tr.active {
+  background: #f2f7fc;
+}
+
+.plant-table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+}
+
+.plant-table-actions .command-btn {
+  font-size: 0.6rem;
+  padding: 0.22rem 0.38rem;
+}
+
+.confidence-pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #b9c7d5;
+  border-radius: 999px;
+  padding: 0.06rem 0.34rem;
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: #35506a;
+  background: #edf4fb;
+}
+
+.source-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  font-size: 0.56rem;
+  padding: 0.06rem 0.34rem;
+  border: 1px solid #c4ccd5;
+  background: #f3f6f9;
+  color: #435262;
+  font-weight: 700;
+}
+
+.source-badge.source-pid { border-color: #9fc4de; background: #ebf5fc; color: #315f80; }
+.source-badge.source-narrative { border-color: #a8d3b0; background: #edf8ef; color: #2f6d3a; }
+.source-badge.source-inferred { border-color: #d4c6a2; background: #faf5e8; color: #6f5a2d; }
+.source-badge.source-pid-narrative,
+.source-badge.source-pid-inferred,
+.source-badge.source-narrative-inferred { border-color: #b7b1da; background: #f0eefc; color: #4f4685; }
+
+.plant-table-empty {
+  padding: 0.85rem;
+  color: var(--muted);
+  font-size: 0.76rem;
 }
 
 .node-context-menu {

@@ -12,6 +12,7 @@ from models.logic import DiscoveredControlLoop
 from models.graph import GraphEdge, GraphNode
 from models.graph import PlantGraph
 from services.graph_service import graph_service
+from services.signal_classification import controller_type_from_sensor, normalize_tag, process_role_from_node
 from services.st_codegen_utils import st_codegen_utils
 
 
@@ -44,17 +45,28 @@ class ControlLoopEngine:
         return {node.id.upper(): node.process_unit for node in graph.nodes}
 
     @staticmethod
-    def _confidence(edge_type: str, edge_confidence: float, sensor: str, actuator: str, sensor_unit: str | None, actuator_unit: str | None) -> float:
-        score = max(0.35, min(0.98, edge_confidence))
-        if edge_type in {"SIGNAL_TO", "CONTROLS"}:
-            score += 0.10
-        if sensor_unit and actuator_unit and sensor_unit == actuator_unit:
-            score += 0.10
-        if sensor.startswith(("LT", "LIT", "FT", "PIT", "AIT")) and actuator.startswith(("P", "PMP", "FCV", "VAL", "BL")):
-            score += 0.05
-        return round(min(score, 0.99), 3)
+    def _confidence(
+        measure_confidence: float,
+        control_confidence: float,
+        signal_confidence: float | None,
+        same_unit: bool,
+    ) -> float:
+        base = (0.42 * max(0.35, min(0.99, measure_confidence))) + (0.42 * max(0.35, min(0.99, control_confidence)))
+        if signal_confidence is not None:
+            base += 0.12 * max(0.35, min(0.99, signal_confidence))
+        else:
+            base += 0.06
+        if same_unit:
+            base += 0.06
+        return round(min(base, 0.99), 3)
 
-    def discover(self, project_id: str) -> list[DiscoveredControlLoop]:
+    @staticmethod
+    def _loop_tag(sensor: str, process: str, actuator: str) -> str:
+        sensor_token = normalize_tag(sensor)
+        actuator_token = normalize_tag(actuator)
+        return f"LOOP_{sensor_token}_{actuator_token}"
+
+    def discover(self, project_id: str, *, persist: bool = True) -> list[DiscoveredControlLoop]:
         graph = self._load_graph(project_id)
         node_type_map = self._node_type_map(graph)
         unit_map = self._node_unit_map(graph)
@@ -78,49 +90,84 @@ class ControlLoopEngine:
             if node_type in {"pump", "control_valve", "valve", "blower", "chemical_system_device"}
         }
 
-        loops: list[DiscoveredControlLoop] = []
+        process_nodes = {
+            node_id
+            for node_id, node_type in node_type_map.items()
+            if process_role_from_node(node_type) == "process"
+        }
+
+        measures_by_process: dict[str, list[tuple[str, float]]] = {}
+        controls_by_process: dict[str, list[tuple[str, float]]] = {}
+        direct_signal: dict[tuple[str, str], float] = {}
+
         for edge in graph.edges:
             edge_type = edge.edge_type.upper()
             source = edge.source.upper()
             target = edge.target.upper()
+            if edge_type in {"MEASURES", "MONITORS"} and source in sensors and target in process_nodes:
+                measures_by_process.setdefault(target, []).append((source, edge.confidence))
+            if edge_type in {"MEASURES", "MONITORS"} and target in sensors and source in process_nodes:
+                measures_by_process.setdefault(source, []).append((target, edge.confidence))
+            if edge_type == "CONTROLS" and source in actuators and target in process_nodes:
+                controls_by_process.setdefault(target, []).append((source, edge.confidence))
+            if edge_type == "CONTROLS" and target in actuators and source in process_nodes:
+                controls_by_process.setdefault(source, []).append((target, edge.confidence))
+            if edge_type in {"SIGNAL_TO", "CONTROLS"} and source in sensors and target in actuators:
+                direct_signal[(source, target)] = max(direct_signal.get((source, target), 0.0), edge.confidence)
 
-            if edge_type not in {"SIGNAL_TO", "CONTROLS", "MEASURES", "MONITORS"}:
+        # Legacy-graph fallback: infer sensor/actuator process membership from node.process_unit when
+        # explicit MEASURES/CONTROLS-to-process edges are missing.
+        for node_id, unit in unit_map.items():
+            if not unit:
+                continue
+            process_id = unit.upper()
+            if process_id not in process_nodes:
+                continue
+            node_type = node_type_map.get(node_id)
+            role = process_role_from_node(node_type)
+            if role == "sensor":
+                measures_by_process.setdefault(process_id, []).append((node_id, 0.6))
+            elif role == "actuator":
+                controls_by_process.setdefault(process_id, []).append((node_id, 0.6))
+
+        loops: list[DiscoveredControlLoop] = []
+        for process_id in sorted(set([*measures_by_process.keys(), *controls_by_process.keys()])):
+            measure_items = measures_by_process.get(process_id, [])
+            control_items = controls_by_process.get(process_id, [])
+            if not measure_items or not control_items:
                 continue
 
-            if source in sensors and target in actuators:
-                control_strategy = "PID" if node_type_map.get(source) in {"analyzer", "pressure_transmitter"} else "ON_OFF"
-                output_tag, command_tag = st_codegen_utils.infer_loop_output_tags(
-                    target,
-                    node_type_map.get(target),
-                    control_strategy,
-                )
-                confidence = self._confidence(
-                    edge_type=edge_type,
-                    edge_confidence=edge.confidence,
-                    sensor=source,
-                    actuator=target,
-                    sensor_unit=unit_map.get(source),
-                    actuator_unit=unit_map.get(target),
-                )
-                loops.append(
-                    DiscoveredControlLoop(
-                        loop_tag=f"LOOP-{source}-{target}",
-                        sensor_tag=source,
-                        actuator_tag=target,
-                        pv_tag=source,
-                        sp_tag=f"{source}_SP",
-                        output_tag_analog=output_tag if output_tag.endswith("_OUT") else None,
-                        command_tag_bool=command_tag,
-                        process_unit=unit_map.get(source) or unit_map.get(target),
-                        controller_tag=f"LIC-{source.split('-')[-1]}" if source.startswith("L") else None,
-                        loop_type="feedback",
-                        control_strategy=control_strategy,
-                        setpoint_tag=f"{source}_SP",
-                        output_tag=output_tag,
-                        confidence=confidence,
-                        status="inferred",
+            for sensor, measure_conf in measure_items:
+                for actuator, control_conf in control_items:
+                    signal_conf = direct_signal.get((sensor, actuator))
+                    strategy = controller_type_from_sensor(sensor, node_type_map.get(sensor))
+                    output_tag, command_tag = st_codegen_utils.infer_loop_output_tags(actuator, node_type_map.get(actuator), strategy)
+                    confidence = self._confidence(
+                        measure_confidence=measure_conf,
+                        control_confidence=control_conf,
+                        signal_confidence=signal_conf,
+                        same_unit=(unit_map.get(sensor) and unit_map.get(sensor) == unit_map.get(actuator)),
                     )
-                )
+                    loops.append(
+                        DiscoveredControlLoop(
+                            loop_tag=self._loop_tag(sensor, process_id, actuator),
+                            sensor_tag=sensor,
+                            actuator_tag=actuator,
+                            pv_tag=sensor,
+                            sp_tag=f"{sensor}_SP",
+                            output_tag_analog=output_tag if output_tag.endswith("_OUT") else None,
+                            command_tag_bool=command_tag,
+                            process_unit=process_id,
+                            controller_tag=f"CTRL-{sensor.split('-')[-1]}" if "-" in sensor else None,
+                            loop_type="feedback",
+                            control_strategy=strategy,
+                            setpoint_tag=f"{sensor}_SP",
+                            output_tag=output_tag,
+                            confidence=confidence,
+                            status="inferred",
+                            source_reference="sensor_measures_process + actuator_controls_process",
+                        )
+                    )
 
         # Deterministic dedup by (sensor, actuator)
         dedup: dict[tuple[str, str], DiscoveredControlLoop] = {}
@@ -131,7 +178,11 @@ class ControlLoopEngine:
                 dedup[key] = loop
 
         result = sorted(dedup.values(), key=lambda item: (item.process_unit or "", item.sensor_tag, item.actuator_tag))
-        self._persist(project_id, result)
+        if persist:
+            try:
+                self._persist(project_id, result)
+            except Exception as exc:
+                self.logger.warning("Control loop persistence skipped due to error: %s", exc)
         self.logger.info("Control loop discovery completed: project=%s loops=%s", project_id, len(result))
         return result
 
@@ -158,6 +209,15 @@ class ControlLoopEngine:
             return
 
         now = datetime.now(timezone.utc)
+        postgres_client.execute(
+            """
+            DELETE FROM control_loop_definitions
+            WHERE project_id = %s
+                AND parse_batch_id = %s
+                AND source_sentence LIKE 'Inferred loop:%%'
+            """,
+            (project_id, parse_batch_id),
+        )
         for loop in loops:
             postgres_client.execute(
                 """

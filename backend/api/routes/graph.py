@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from models.graph import PlantGraph, TraceResponse
+from models.graph import PlantGraph, PlantSignalRow, TraceResponse
 from services.graph_service import graph_service
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["graph"])
@@ -19,3 +19,8 @@ def trace_signal(project_id: str, node_id: str) -> TraceResponse:
 @router.get("/nodes/{node_id}")
 def node_details(project_id: str, node_id: str) -> dict[str, object]:
     return graph_service.node_details(project_id, node_id)
+
+
+@router.get("/plant-signals", response_model=list[PlantSignalRow])
+def plant_signals(project_id: str) -> list[PlantSignalRow]:
+    return graph_service.get_plant_signals(project_id)

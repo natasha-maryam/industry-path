@@ -171,8 +171,8 @@ class Neo4jClient:
                coalesce(n.controls, []) AS controls,
                coalesce(n.measures, []) AS measures,
                coalesce(n.control_path, []) AS control_path,
-               coalesce(n.metadata, {}) AS metadata,
-               coalesce(n.metadata_confidence, {}) AS metadata_confidence
+                             coalesce(properties(n)['metadata'], {}) AS metadata,
+                             coalesce(properties(n)['metadata_confidence'], {}) AS metadata_confidence
         """
         edge_query = """
         MATCH (a:Device {project_id: $project_id})-[r]->(b:Device {project_id: $project_id})
@@ -186,9 +186,9 @@ class Neo4jClient:
                 r.explanation AS explanation,
                 r.inference_source AS inference_source,
                 coalesce(r.source_references, []) AS source_references,
-                r.edge_label AS edge_label,
-                r.semantic_kind AS semantic_kind,
-                r.process_flow_direction AS process_flow_direction
+                                properties(r)['edge_label'] AS edge_label,
+                                properties(r)['semantic_kind'] AS semantic_kind,
+                                properties(r)['process_flow_direction'] AS process_flow_direction
         """
         with self.driver.session() as session:
             nodes = [dict(row) for row in session.run(node_query, project_id=project_id)]

@@ -10,6 +10,7 @@ from psycopg2.extras import Json
 from db.postgres import postgres_client
 from models.pipeline import DetectedTag, EngineeringEntity
 from services.document_ingestion_service import document_ingestion_service
+from services.deterministic_signal_extraction_service import deterministic_signal_extraction_service
 from services.engineering_inference import engineering_inference_service
 from services.entity_classification_service import entity_classification_service
 from services.graph_build_service import graph_build_service
@@ -40,6 +41,29 @@ class ParseService:
         if any(token in lowered for token in ("control narrative", "narrative", "control")):
             return "control_narrative"
         return "unknown_document"
+
+    @staticmethod
+    def _merge_metadata(
+        base: dict[str, dict[str, object]],
+        incoming: dict[str, dict[str, object]],
+    ) -> dict[str, dict[str, object]]:
+        for entity_id, payload in incoming.items():
+            base.setdefault(entity_id, {})
+            for key, value in payload.items():
+                existing = base[entity_id].get(key)
+                if isinstance(existing, list) and isinstance(value, list):
+                    merged = [*existing]
+                    for item in value:
+                        if item not in merged:
+                            merged.append(item)
+                    base[entity_id][key] = merged
+                elif isinstance(existing, dict) and isinstance(value, dict):
+                    base[entity_id][key] = {**existing, **value}
+                elif existing in (None, "", [], {}):
+                    base[entity_id][key] = value
+                else:
+                    base[entity_id][key] = value
+        return base
 
     def _project_files(self, project_id: str, file_ids: list[str] | None = None) -> list[dict]:
         params: list[object] = [project_id]
@@ -510,6 +534,15 @@ class ParseService:
                 rule_bundle=rule_bundle,
             )
             warnings.extend(engineering_warnings)
+
+            deterministic_relationships, deterministic_metadata, deterministic_warnings = deterministic_signal_extraction_service.extract(
+                entities=entities,
+                pid_chunks=pid_chunks,
+                narrative_chunks=narrative_chunks,
+            )
+            warnings.extend(deterministic_warnings)
+            engineering_relationships = [*engineering_relationships, *deterministic_relationships]
+            engineering_metadata = self._merge_metadata(engineering_metadata, deterministic_metadata)
 
             self._update_parse_job_stage(
                 parse_job_id,

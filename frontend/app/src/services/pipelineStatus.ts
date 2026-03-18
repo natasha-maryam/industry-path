@@ -129,7 +129,7 @@ export const PIPELINE_PREREQUISITES: PipelinePrerequisiteMap = {
   control_loop_discovery: ["plant_graph"],
   engineering_validation: ["control_loop_discovery"],
   logic_completion: ["engineering_validation"],
-  st_generation: ["logic_completion"],
+  st_generation: ["engineering_validation"],
   st_verification: ["st_generation"],
   io_mapping: ["st_verification"],
   runtime_validation: ["io_mapping"],

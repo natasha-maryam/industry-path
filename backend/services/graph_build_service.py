@@ -9,6 +9,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 from models.graph import GraphEdge, GraphNode
 from models.pipeline import EngineeringEntity, InferredRelationship
+from services.signal_classification import device_type_from_tag, process_role_from_node, signal_type_from_tag
 
 
 class GraphBuildService:
@@ -50,19 +51,8 @@ class GraphBuildService:
 
     @staticmethod
     def _signal_type(canonical_type: str) -> str | None:
-        mapping = {
-            "flow_transmitter": "analog",
-            "level_transmitter": "analog",
-            "pressure_transmitter": "analog",
-            "differential_pressure_transmitter": "analog",
-            "analyzer": "analog",
-            "level_switch": "digital",
-            "pump": "digital",
-            "valve": "digital",
-            "control_valve": "analog",
-            "blower": "digital",
-        }
-        return mapping.get(canonical_type)
+        signal_type = signal_type_from_tag(canonical_type, canonical_type)
+        return signal_type if signal_type != "unknown" else None
 
     @staticmethod
     def _instrument_role(canonical_type: str) -> str | None:
@@ -78,13 +68,8 @@ class GraphBuildService:
 
     @staticmethod
     def _control_role(canonical_type: str) -> str:
-        if canonical_type in {"pump", "valve", "control_valve", "blower", "chemical_system_device"}:
-            return "actuator"
-        if canonical_type in {"flow_transmitter", "level_transmitter", "pressure_transmitter", "differential_pressure_transmitter", "level_switch", "analyzer"}:
-            return "sensor"
-        if canonical_type == "process_unit":
-            return "process_unit"
-        return "equipment"
+        role = process_role_from_node(canonical_type)
+        return "process_unit" if role == "process" else role
 
     @staticmethod
     def _semantic_kind(relationship_type: str) -> str:
@@ -250,7 +235,7 @@ class GraphBuildService:
                     is_synthetic=entity.is_synthetic,
                     explanation=entity.explanation,
                     source_references=entity.source_references,
-                    equipment_type=str(enriched_metadata.get("equipment_type") or entity.canonical_type),
+                    equipment_type=str(enriched_metadata.get("equipment_type") or device_type_from_tag(entity.id, entity.canonical_type)),
                     signal_type=(
                         str(enriched_metadata.get("signal_type"))
                         if enriched_metadata.get("signal_type") is not None
@@ -328,9 +313,58 @@ class GraphBuildService:
                         inference_source="validation",
                         source_references=["graph_build_service:unit_signal_synthesis"],
                         edge_label="Signal",
-                        semantic_kind="signal",
+                        semantic_kind="control_signal",
                     ).model_dump()
                 )
+
+        process_nodes = {item.id: item for item in entities if item.canonical_type == "process_unit"}
+        for entity in entities:
+            if not entity.process_unit:
+                continue
+            process = process_nodes.get(entity.process_unit)
+            if process is None:
+                continue
+            role = process_role_from_node(entity.canonical_type)
+            if role == "sensor":
+                key = (entity.id, process.id, "MEASURES")
+                if key not in edge_keys:
+                    edge_keys.add(key)
+                    edges.append(
+                        GraphEdge(
+                            id=f"{entity.id}__MEASURES__{process.id}",
+                            source=entity.id,
+                            target=process.id,
+                            edge_type="MEASURES",
+                            edge_class="monitoring",
+                            line_style="dotted",
+                            confidence=0.72,
+                            explanation="Sensor assigned to process unit measures process context.",
+                            inference_source="assignment",
+                            source_references=["graph_build_service:process_measurement_synthesis"],
+                            edge_label="Measures",
+                            semantic_kind="measurement_signal",
+                        ).model_dump()
+                    )
+            if role == "actuator":
+                key = (entity.id, process.id, "CONTROLS")
+                if key not in edge_keys:
+                    edge_keys.add(key)
+                    edges.append(
+                        GraphEdge(
+                            id=f"{entity.id}__CONTROLS__{process.id}",
+                            source=entity.id,
+                            target=process.id,
+                            edge_type="CONTROLS",
+                            edge_class="monitoring",
+                            line_style="dashed",
+                            confidence=0.72,
+                            explanation="Actuator assigned to process unit controls process context.",
+                            inference_source="assignment",
+                            source_references=["graph_build_service:process_control_synthesis"],
+                            edge_label="Controls",
+                            semantic_kind="control_signal",
+                        ).model_dump()
+                    )
 
         self.logger.info("Graph build output: nodes=%s edges=%s", len(nodes), len(edges))
         return nodes, edges

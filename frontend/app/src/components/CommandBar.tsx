@@ -1,7 +1,6 @@
 export type ToolbarAction =
   | "upload"
   | "parse"
-  | "generate"
   | "generate_st"
   | "io_mapping"
   | "verify_st"
@@ -20,7 +19,6 @@ type CommandBarProps = {
 const ACTIONS: Array<{ id: ToolbarAction; label: string; primary?: boolean }> = [
   { id: "upload", label: "Upload Documents" },
   { id: "parse", label: "Parse System" },
-  { id: "generate", label: "Generate Control Logic" },
   { id: "generate_st", label: "Generate ST" },
   { id: "verify_st", label: "Verify ST" },
   { id: "io_mapping", label: "Generate IO Mapping" },
