@@ -1,18 +1,25 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ComponentType } from "react";
 import {
   Activity,
+  AlertTriangle,
   Boxes,
   ChevronDown,
   ChevronRight,
   CircleDot,
+  Cog,
+  Cpu,
   Database,
+  GitBranch,
   Folder,
   FolderOpen,
   Gauge,
+  Network,
+  Radar,
   Plus,
   SlidersHorizontal,
   Trash2,
 } from "lucide-react";
+import type { WorkspaceModuleId } from "../types/workspace";
 
 type ProjectItem = {
   id: string;
@@ -33,7 +40,20 @@ type ProjectNavigatorProps = {
   onSelectProject: (projectId: string) => void;
   selectedNode: string;
   onSelectNode: (nodeId: string) => void;
+  activeModule: WorkspaceModuleId;
+  onSelectModule: (moduleId: WorkspaceModuleId) => void;
 };
+
+const MODULES: Array<{ id: WorkspaceModuleId; label: string; icon: ComponentType<{ size?: number; className?: string }> }> = [
+  { id: "plant_model", label: "Plant Model", icon: Network },
+  { id: "control_loops", label: "Control Loops", icon: GitBranch },
+  { id: "io_mapping", label: "IO Mapping", icon: SlidersHorizontal },
+  { id: "control_logic", label: "Control Logic", icon: Cpu },
+  { id: "simulation", label: "Simulation", icon: Activity },
+  { id: "runtime", label: "Runtime", icon: Cog },
+  { id: "monitoring", label: "Monitoring", icon: Radar },
+  { id: "diagnostics", label: "Diagnostics", icon: AlertTriangle },
+];
 
 export default function ProjectNavigator({
   projects,
@@ -44,8 +64,11 @@ export default function ProjectNavigator({
   onSelectProject,
   selectedNode,
   onSelectNode,
+  activeModule,
+  onSelectModule,
 }: ProjectNavigatorProps) {
   const [projectsExpanded, setProjectsExpanded] = useState(true);
+  const [modulesExpanded, setModulesExpanded] = useState(true);
   const [equipmentExpanded, setEquipmentExpanded] = useState(true);
   const [groupExpanded, setGroupExpanded] = useState<Record<string, boolean>>({});
 
@@ -161,6 +184,32 @@ export default function ProjectNavigator({
           ))}
         </ul>
       ) : null}
+
+      <ul className="tree-group">
+        <li>
+          <button className="tree-parent-btn subheading" onClick={() => setModulesExpanded((value) => !value)} type="button">
+            <span className="tree-arrow-icon">{modulesExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</span>
+            <span className="tree-group-icon-wrap">
+              <Boxes size={13} />
+            </span>
+            <span className="tree-parent">Workspace Modules</span>
+          </button>
+        </li>
+
+        {modulesExpanded
+          ? MODULES.map((module) => {
+              const Icon = module.icon;
+              return (
+                <li key={module.id}>
+                  <button className={`tree-item ${activeModule === module.id ? "active" : ""}`} onClick={() => onSelectModule(module.id)} type="button">
+                    <Icon size={11} className="tree-node-icon" />
+                    {module.label}
+                  </button>
+                </li>
+              );
+            })
+          : null}
+      </ul>
 
       <ul className="tree-group">
         <li>

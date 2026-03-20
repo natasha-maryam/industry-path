@@ -1,15 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import type { TopToolbarActionId } from "../types/workspace";
 
-export type ToolbarAction =
-  | "upload"
-  | "parse"
-  | "generate_st"
-  | "io_mapping"
-  | "verify_st"
-  | "versions"
-  | "export_logic"
-  | "simulate"
-  | "deploy";
+export type ToolbarAction = TopToolbarActionId;
 
 type CommandBarProps = {
   activeAction: ToolbarAction;
@@ -19,14 +11,15 @@ type CommandBarProps = {
 };
 
 const ACTIONS: Array<{ id: ToolbarAction; label: string; primary?: boolean }> = [
-  { id: "upload", label: "Upload Documents" },
-  { id: "parse", label: "Parse System" },
-  { id: "generate_st", label: "Generate ST" },
-  { id: "verify_st", label: "Verify ST" },
-  { id: "io_mapping", label: "Generate IO Mapping" },
-  { id: "deploy", label: "Deploy Runtime" },
-  { id: "versions", label: "Versions" },
-  { id: "export_logic", label: "Export Logic" },
+  { id: "upload_documents", label: "Upload Documents" },
+  { id: "parse_plant_model", label: "Parse Plant Model" },
+  { id: "detect_control_loops", label: "Detect Control Loops" },
+  { id: "generate_logic", label: "Generate Logic" },
+  { id: "generate_io_mapping", label: "Generate IO Mapping" },
+  { id: "deploy_runtime", label: "Deploy Runtime" },
+  { id: "start_monitoring", label: "Start Monitoring" },
+  { id: "analyze_fault", label: "Analyze Fault" },
+  { id: "replay_event", label: "Replay Event" },
 ];
 
 export default function CommandBar({

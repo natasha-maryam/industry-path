@@ -134,6 +134,7 @@ export default function CodeExplorerPanel({
   const editorMountRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const diffEditorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
+  const jumpTimerRef = useRef<number | null>(null);
   const modelByPathRef = useRef<Map<string, monaco.editor.ITextModel>>(new Map());
   const originalModelByPathRef = useRef<Map<string, monaco.editor.ITextModel>>(new Map());
 
@@ -212,13 +213,26 @@ export default function CodeExplorerPanel({
     const normalized = normalizePath(filePath);
     const existing = modelByPathRef.current.get(normalized);
     if (existing) {
-      if (existing.getValue() !== content) {
-        existing.setValue(content);
+      if (existing.isDisposed()) {
+        modelByPathRef.current.delete(normalized);
+      } else {
+        if (existing.getValue() !== content) {
+          existing.setValue(content);
+        }
+        return existing;
       }
-      return existing;
     }
 
     const uri = monaco.Uri.parse(`inmemory://crosslayerx/${encodeURIComponent(normalized)}`);
+    const cached = monaco.editor.getModel(uri);
+    if (cached && !cached.isDisposed()) {
+      if (cached.getValue() !== content) {
+        cached.setValue(content);
+      }
+      modelByPathRef.current.set(normalized, cached);
+      return cached;
+    }
+
     const model = monaco.editor.createModel(content, "pascal", uri);
     modelByPathRef.current.set(normalized, model);
     return model;
@@ -228,17 +242,35 @@ export default function CodeExplorerPanel({
     const normalized = normalizePath(filePath);
     const existing = originalModelByPathRef.current.get(normalized);
     if (existing) {
-      return existing;
+      if (existing.isDisposed()) {
+        originalModelByPathRef.current.delete(normalized);
+      } else {
+        return existing;
+      }
     }
 
     const uri = monaco.Uri.parse(`inmemory://crosslayerx-original/${encodeURIComponent(normalized)}`);
+    const cached = monaco.editor.getModel(uri);
+    if (cached && !cached.isDisposed()) {
+      originalModelByPathRef.current.set(normalized, cached);
+      return cached;
+    }
+
     const model = monaco.editor.createModel(content, "pascal", uri);
     originalModelByPathRef.current.set(normalized, model);
     return model;
   };
 
+  const disposeEditors = (): void => {
+    editorRef.current?.dispose();
+    editorRef.current = null;
+    diffEditorRef.current?.dispose();
+    diffEditorRef.current = null;
+  };
+
   useEffect(() => {
     if (!editorMountRef.current || loading || error || !hasFiles) {
+      disposeEditors();
       return;
     }
 
@@ -344,7 +376,11 @@ export default function CodeExplorerPanel({
     const lineNumber = Math.max(1, jumpToLocation.line || 1);
     const column = Math.max(1, jumpToLocation.column || 1);
 
-    window.setTimeout(() => {
+    if (jumpTimerRef.current) {
+      window.clearTimeout(jumpTimerRef.current);
+    }
+
+    jumpTimerRef.current = window.setTimeout(() => {
       const activeEditor = editorRef.current ?? diffEditorRef.current?.getModifiedEditor();
       if (!activeEditor) {
         return;
@@ -359,12 +395,22 @@ export default function CodeExplorerPanel({
         endColumn: column + 1,
       });
     }, 0);
+
+    return () => {
+      if (jumpTimerRef.current) {
+        window.clearTimeout(jumpTimerRef.current);
+        jumpTimerRef.current = null;
+      }
+    };
   }, [jumpToLocation, onSelectFile, resolvedFiles]);
 
   useEffect(() => {
     return () => {
-      editorRef.current?.dispose();
-      diffEditorRef.current?.dispose();
+      if (jumpTimerRef.current) {
+        window.clearTimeout(jumpTimerRef.current);
+        jumpTimerRef.current = null;
+      }
+      disposeEditors();
       for (const model of modelByPathRef.current.values()) {
         model.dispose();
       }

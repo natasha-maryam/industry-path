@@ -1,7 +1,12 @@
 import Dashboard from "./pages/Dashboard"
+import { WorkspaceProvider } from "./context/WorkspaceContext"
 
 function App() {
-  return <Dashboard />
+  return (
+    <WorkspaceProvider>
+      <Dashboard />
+    </WorkspaceProvider>
+  )
 }
 
 export default App

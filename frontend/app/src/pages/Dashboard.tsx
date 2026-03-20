@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Cpu,
-  FileCog,
   FolderPlus,
   LoaderCircle,
   Trash2,
@@ -23,27 +22,31 @@ import ProjectNavigator from "../components/ProjectNavigator";
 import type { RuntimeValidationPanelData } from "../components/RuntimeValidationPanel";
 import SnapshotManagerModal, { type SnapshotRecord } from "../components/SnapshotManagerModal";
 import type { STVerificationIssueItem } from "../components/STVerificationPanel";
+import { useWorkspaceContext } from "../context/WorkspaceContext";
 import {
   applySnapshotTrigger,
   applyRuntimeInputForce,
-  canRunStage,
   clearRuntimeInputForce,
-  createVersionSnapshotWithRetry,
   createProject,
   createInitialPipelineStatuses,
   deleteProject,
-  deployRuntimeControlWithRetry,
+  deployRuntimeControl,
   detectControlLoops,
-  exportGeneratedLogicWithRetry,
+  analyzeFault,
+  getControlLoop,
+  getControlLoops,
+  getMonitoring,
+  getReplay,
   getRuntimeTags,
+  getRuntimeState,
+  getLatestRuntimeDeployment,
   generateLogic,
-  generateIOMappingWithRetry,
+  generateIOMapping,
   getLatestIOMapping,
   getRuntimeDiagnostics,
   getRuntimeForcedInputs,
   getSimulationAnalysis,
   getSimulationTrace,
-  getMissingStagePrerequisites,
   getLogic,
   getPlantSignals,
   getGraph,
@@ -56,26 +59,28 @@ import {
   stopRuntimeControl,
   uploadDocuments,
   verifySTWorkspaceWithRetry,
-  type GraphEdge,
-  type GraphNode,
   type IOMappingIssue,
   type IOMappingSummaryByType,
   type IOMappingTableRow,
   type PipelineStageKey,
   type RuntimeControlDeployResponse,
+  type RuntimeStateResponse,
   type RuntimeEvaluationCycle,
   type RuntimeInputCatalogItem,
   type RuntimeSignalType,
   type SimulationTraceIssue,
   type SimulationTracePoint,
   type SimulationValidationPanelResponse,
-  type DiscoveredControlLoop,
+  type ControlLoopRecord,
+  type FaultAnalysisResult,
   type STWorkspaceVerificationResponse,
   type PipelineStageStatusMap,
   type PlantSignalRow,
   type Project,
 } from "../services/api";
 import "../styles/dashboard.css";
+import type { ModuleState, WorkspaceModuleId, WorkspacePanelState } from "../types/workspace";
+import { MODULE_DEFAULT_STATE } from "../types/workspace";
 
 type EquipmentType = "Tank" | "Pump" | "Sensor" | "Valve";
 type BottomView = "simulation" | "monitoring" | "logic";
@@ -206,12 +211,43 @@ const PIPELINE_STAGE_LABELS: Record<PipelineStageKey, string> = {
 };
 
 export default function Dashboard() {
-  const [activeAction, setActiveAction] = useState<ToolbarAction>("upload");
+  const { activeProjectId: selectedProjectId, setActiveProjectId: setSelectedProjectId, plantGraph, setPlantGraph } = useWorkspaceContext();
+  const graphNodes = plantGraph.nodes;
+  const graphEdges = plantGraph.edges;
+
+  const [activeAction, setActiveAction] = useState<ToolbarAction>("upload_documents");
   const [selectedNode, setSelectedNode] = useState<string>("");
-  const [activeTab, setActiveTab] = useState<RightTab>("Details");
-  const [activeBottomView, setActiveBottomView] = useState<BottomView>("simulation");
-  const [codePanelMode, setCodePanelMode] = useState<CodePanelMode>("control_logic");
-  const [monitoringPanelMode, setMonitoringPanelMode] = useState<MonitoringPanelMode>("io_mapping");
+  const [panelState, setPanelState] = useState<WorkspacePanelState>({
+    activeModule: "plant_model",
+    activeRightTab: "Details",
+    activeBottomView: "simulation",
+    codePanelMode: "control_logic",
+    monitoringPanelMode: "io_mapping",
+  });
+  const activeTab = panelState.activeRightTab;
+  const activeBottomView = panelState.activeBottomView;
+  const codePanelMode = panelState.codePanelMode;
+  const monitoringPanelMode = panelState.monitoringPanelMode;
+
+  const setActiveTab = (tab: RightTab): void => {
+    setPanelState((previous) => ({ ...previous, activeRightTab: tab }));
+  };
+
+  const setActiveBottomView = (view: BottomView): void => {
+    setPanelState((previous) => ({ ...previous, activeBottomView: view }));
+  };
+
+  const setCodePanelMode = (mode: CodePanelMode): void => {
+    setPanelState((previous) => ({ ...previous, codePanelMode: mode }));
+  };
+
+  const setMonitoringPanelMode = (mode: MonitoringPanelMode): void => {
+    setPanelState((previous) => ({ ...previous, monitoringPanelMode: mode }));
+  };
+
+  const setActiveModule = (moduleId: WorkspaceModuleId): void => {
+    setPanelState((previous) => ({ ...previous, activeModule: moduleId }));
+  };
   const [tracePath, setTracePath] = useState<string[]>([]);
   const [replayMode] = useState<boolean>(false);
   const [replayPoint, setReplayPoint] = useState<number>(64);
@@ -235,19 +271,27 @@ export default function Dashboard() {
   const [isExportingLogic, setIsExportingLogic] = useState<boolean>(false);
   const [ioMappingFailedMessage, setIOMappingFailedMessage] = useState<string | null>(null);
   const [pipelineStatuses, setPipelineStatuses] = useState<PipelineStageStatusMap>(() => createInitialPipelineStatuses());
+  const [moduleStates, setModuleStates] = useState<Record<WorkspaceModuleId, ModuleState>>(MODULE_DEFAULT_STATE);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
-  const [graphNodes, setGraphNodes] = useState<GraphNode[]>([]);
-  const [graphEdges, setGraphEdges] = useState<GraphEdge[]>([]);
+  const [controlLoops, setControlLoops] = useState<ControlLoopRecord[]>([]);
+  const [isControlLoopsLoading, setIsControlLoopsLoading] = useState<boolean>(false);
+  const [controlLoopsError, setControlLoopsError] = useState<string | null>(null);
+  const [selectedControlLoopTag, setSelectedControlLoopTag] = useState<string | null>(null);
   const [graphWorkspaceView, setGraphWorkspaceView] = useState<"graph" | "table">("graph");
   const [plantSignalRows, setPlantSignalRows] = useState<PlantSignalRow[]>([]);
   const [runtimeValidationData, setRuntimeValidationData] = useState<RuntimeValidationPanelData | null>(null);
+  const [isRuntimeStateLoading, setIsRuntimeStateLoading] = useState<boolean>(false);
   const [runtimeFailedMessage, setRuntimeFailedMessage] = useState<string | null>(null);
   const [isRuntimeActionBusy, setIsRuntimeActionBusy] = useState<boolean>(false);
   const [runtimeTelemetryTags, setRuntimeTelemetryTags] = useState<Record<string, unknown>>({});
   const [runtimeForceableInputs, setRuntimeForceableInputs] = useState<RuntimeInputCatalogItem[]>([]);
   const [forcedTagNames, setForcedTagNames] = useState<string[]>([]);
   const [runtimeDiagnostics, setRuntimeDiagnostics] = useState<RuntimeEvaluationCycle | null>(null);
+  const [faultAnalysis, setFaultAnalysis] = useState<FaultAnalysisResult | null>(null);
+  const [faultAnalysisTag, setFaultAnalysisTag] = useState<string | null>(null);
+  const [faultAnalysisInputMessage, setFaultAnalysisInputMessage] = useState<string | null>(null);
+  const [isFaultAnalysisLoading, setIsFaultAnalysisLoading] = useState<boolean>(false);
+  const [faultAnalysisError, setFaultAnalysisError] = useState<string | null>(null);
   const [simulationValidationData, setSimulationValidationData] = useState<SimulationValidationPanelResponse | null>(null);
   const [simulationFailedMessage, setSimulationFailedMessage] = useState<string | null>(null);
   const [simulationTrace, setSimulationTrace] = useState<SimulationTracePoint[]>([]);
@@ -259,6 +303,16 @@ export default function Dashboard() {
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState<boolean>(false);
   const [isRightPanelExpanded, setIsRightPanelExpanded] = useState<boolean>(false);
+  const [rightPanelWidth, setRightPanelWidth] = useState<number>(() => {
+    if (typeof window === "undefined") {
+      return 300;
+    }
+    const parsed = Number.parseInt(window.localStorage.getItem("crosslayerx-right-panel-width") || "", 10);
+    if (Number.isFinite(parsed)) {
+      return Math.min(760, Math.max(260, parsed));
+    }
+    return 300;
+  });
   const [showCreateProjectModal, setShowCreateProjectModal] = useState<boolean>(false);
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
   const [showSnapshotManagerModal, setShowSnapshotManagerModal] = useState<boolean>(false);
@@ -283,6 +337,73 @@ export default function Dashboard() {
   });
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const previousPipelineStatusesRef = useRef<PipelineStageStatusMap>(pipelineStatuses);
+  const rightResizeStartRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const setModuleState = (moduleId: WorkspaceModuleId, state: ModuleState): void => {
+    setModuleStates((previous) => ({ ...previous, [moduleId]: state }));
+  };
+
+  const refreshControlLoops = useCallback(
+    async (projectId: string, options?: { showLoading?: boolean }): Promise<ControlLoopRecord[]> => {
+      const showLoading = options?.showLoading ?? true;
+      if (showLoading) {
+        setIsControlLoopsLoading(true);
+      }
+      setControlLoopsError(null);
+      try {
+        const loops = await getControlLoops(projectId);
+        setControlLoops(loops);
+        setSelectedControlLoopTag((current) => {
+          if (current && loops.some((loop) => loop.loop_tag === current)) {
+            return current;
+          }
+          return loops[0]?.loop_tag ?? null;
+        });
+        return loops;
+      } catch {
+        setControlLoops([]);
+        setSelectedControlLoopTag(null);
+        setControlLoopsError("Control loops could not be loaded.");
+        return [];
+      } finally {
+        if (showLoading) {
+          setIsControlLoopsLoading(false);
+        }
+      }
+    },
+    []
+  );
+
+  const runControlLoopDetection = useCallback(async (): Promise<void> => {
+    if (!selectedProjectId) {
+      setStatusText("Select or create a project first.");
+      return;
+    }
+
+    setIsControlLoopsLoading(true);
+    setControlLoopsError(null);
+    setModuleState("control_loops", { state: "running", message: "Detecting control loops", updatedAt: new Date().toISOString() });
+    setStatusText("Detecting control loops...");
+
+    try {
+      await detectControlLoops(selectedProjectId);
+      const loops = await refreshControlLoops(selectedProjectId, { showLoading: false });
+      const message = loops.length > 0 ? `Detected ${loops.length} control loop(s)` : "No control loops detected in the current graph";
+      setModuleState("control_loops", {
+        state: "success",
+        message,
+        updatedAt: new Date().toISOString(),
+      });
+      setPanelState((previous) => ({ ...previous, activeModule: "control_loops", activeRightTab: "Control Loops" }));
+      setStatusText(`${message}.`);
+    } catch {
+      setControlLoopsError("Control loop detection failed.");
+      setModuleState("control_loops", { state: "failed", message: "Control loop detection failed", updatedAt: new Date().toISOString() });
+      setStatusText("Control loop detection failed.");
+    } finally {
+      setIsControlLoopsLoading(false);
+    }
+  }, [refreshControlLoops, selectedProjectId]);
 
   const withDerivedPipelineStatuses = (statuses: PipelineStageStatusMap): PipelineStageStatusMap => {
     const nextStatuses = { ...statuses };
@@ -338,7 +459,7 @@ export default function Dashboard() {
     if (stage === "version_snapshot") {
       setMonitoringPanelMode("versions");
       setActiveBottomView("monitoring");
-      setActiveTab("Versions");
+      setActiveTab("Diagnostics");
       setIsRightPanelExpanded(true);
     }
   };
@@ -398,91 +519,45 @@ export default function Dashboard() {
     previousPipelineStatusesRef.current = pipelineStatuses;
   }, [pipelineStatuses]);
 
-  const ensurePrerequisites = (stage: PipelineStageKey): boolean => {
-    if (canRunStage(pipelineStatuses, stage)) {
-      return true;
-    }
-
-    const missingStages = getMissingStagePrerequisites(pipelineStatuses, stage);
-    const missingLabels = missingStages.map((missingStage) => PIPELINE_STAGE_LABELS[missingStage]).join(", ");
-    const blockedLabel = PIPELINE_STAGE_LABELS[stage];
-    setStatusText(`${blockedLabel} blocked. Complete: ${missingLabels}.`);
-    toast.error(`${blockedLabel} blocked: ${missingLabels}`, {
-      className: "industrial-toast industrial-toast-error",
-      icon: <AlertTriangle size={14} className="toast-icon toast-icon-error" />,
-    });
-    return false;
-  };
-
-  const isActionBlockedByPrerequisites = (action: ToolbarAction): boolean => {
-    if (!selectedProjectId) {
-      return action !== "upload";
-    }
-
-    if (action === "generate_st") {
-      return !canRunStage(pipelineStatuses, "st_generation");
-    }
-    if (action === "io_mapping") {
-      return !canRunStage(pipelineStatuses, "io_mapping");
-    }
-    if (action === "verify_st") {
-      return !canRunStage(pipelineStatuses, "st_verification");
-    }
-    if (action === "deploy") {
-      return !canRunStage(pipelineStatuses, "runtime_validation");
-    }
-    if (action === "simulate") {
-      return !canRunStage(pipelineStatuses, "simulation_validation");
-    }
-    if (action === "versions") {
-      return !canRunStage(pipelineStatuses, "version_snapshot");
-    }
-    if (action === "export_logic") {
-      return !canRunStage(pipelineStatuses, "st_generation");
-    }
-
-    return false;
-  };
-
   const disabledActions = useMemo<Partial<Record<ToolbarAction, boolean>>>(
     () => ({
-      upload: false,
-      parse: isActionBlockedByPrerequisites("parse"),
-      generate_st: isActionBlockedByPrerequisites("generate_st"),
-      io_mapping: isActionBlockedByPrerequisites("io_mapping"),
-      verify_st: isActionBlockedByPrerequisites("verify_st"),
-      versions: isActionBlockedByPrerequisites("versions"),
-      export_logic: isActionBlockedByPrerequisites("export_logic"),
-      simulate: isActionBlockedByPrerequisites("simulate"),
-      deploy: isActionBlockedByPrerequisites("deploy"),
+      upload_documents: false,
+      parse_plant_model: !selectedProjectId,
+      detect_control_loops: !selectedProjectId,
+      generate_logic: !selectedProjectId,
+      generate_io_mapping: !selectedProjectId,
+      deploy_runtime: !selectedProjectId,
+      start_monitoring: !selectedProjectId,
+      analyze_fault: !selectedProjectId,
+      replay_event: !selectedProjectId,
     }),
-    [pipelineStatuses, selectedProjectId]
+    [selectedProjectId]
   );
 
   const loadingAction = useMemo<ToolbarAction | null>(() => {
     if (isParsing) {
-      return "parse";
+      return "parse_plant_model";
     }
     if (isUploading) {
-      return "upload";
+      return "upload_documents";
     }
     if (pipelineStatuses.st_generation === "running" && !isExportingLogic) {
-      return "generate_st";
+      return "generate_logic";
     }
     if (pipelineStatuses.io_mapping === "running") {
-      return "io_mapping";
+      return "generate_io_mapping";
     }
-    if (pipelineStatuses.st_verification === "running") {
-      return "verify_st";
+    if (pipelineStatuses.runtime_validation === "running") {
+      return "deploy_runtime";
     }
-    if (pipelineStatuses.version_snapshot === "running") {
-      return "versions";
+    if (isRuntimeActionBusy) {
+      return "start_monitoring";
     }
     if (isExportingLogic) {
-      return "export_logic";
+      return "replay_event";
     }
     return null;
-  }, [activeAction, isExportingLogic, isParsing, isUploading, pipelineStatuses.io_mapping, pipelineStatuses.st_generation, pipelineStatuses.st_verification, pipelineStatuses.version_snapshot]);
+  }, [isExportingLogic, isParsing, isRuntimeActionBusy, isUploading, pipelineStatuses.io_mapping, pipelineStatuses.runtime_validation, pipelineStatuses.st_generation]);
 
   const runSTVerification = async (projectId: string, options: { silent?: boolean } = {}): Promise<void> => {
     setIsVerifyingST(true);
@@ -681,8 +756,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!selectedProjectId) {
-      setGraphNodes([]);
-      setGraphEdges([]);
+      setPlantGraph({ nodes: [], edges: [] });
       setPlantSignalRows([]);
       setSelectedNode("");
       setControlLogicCode("");
@@ -708,10 +782,19 @@ export default function Dashboard() {
       setRuntimeForceableInputs([]);
       setForcedTagNames([]);
       setRuntimeDiagnostics(null);
+      setFaultAnalysis(null);
+      setFaultAnalysisTag(null);
+      setFaultAnalysisInputMessage(null);
+      setIsFaultAnalysisLoading(false);
+      setFaultAnalysisError(null);
       setSimulationValidationData(null);
       setSimulationFailedMessage(null);
       setSimulationTrace([]);
       setSimulationIssues([]);
+      setControlLoops([]);
+      setIsControlLoopsLoading(false);
+      setControlLoopsError(null);
+      setSelectedControlLoopTag(null);
       setSelectedReplayTag("");
       setPipelineStatuses(createInitialPipelineStatuses());
       setShowLogic(false);
@@ -719,12 +802,56 @@ export default function Dashboard() {
     }
 
     setPipelineStatuses(createInitialPipelineStatuses());
+    setRuntimeValidationData(null);
+    setRuntimeFailedMessage(null);
+    setRuntimeTelemetryTags({});
+    setRuntimeForceableInputs([]);
+    setForcedTagNames([]);
+    setRuntimeDiagnostics(null);
+
+    const loadPersistedRuntimeState = async (): Promise<void> => {
+      // Runtime panel React state is transient UI state; durable engineering runtime state is rehydrated from backend persistence per project.
+      setIsRuntimeStateLoading(true);
+      setRuntimeFailedMessage(null);
+      try {
+        const [runtimeState, latestDeployment, tags, forcedInputs, diagnosticsPayload] = await Promise.all([
+          getRuntimeState(selectedProjectId),
+          getLatestRuntimeDeployment(selectedProjectId),
+          getRuntimeTags().catch(() => ({} as Record<string, unknown>)),
+          getRuntimeForcedInputs(selectedProjectId).catch(() => null),
+          getRuntimeDiagnostics(selectedProjectId).catch(() => null),
+        ]);
+
+        const merged = {
+          ...runtimeState,
+          deployment: runtimeState.deployment ?? latestDeployment.deployment ?? null,
+        };
+
+        setRuntimeTelemetryTags(tags);
+        setRuntimeValidationData(mapPersistedRuntimeState(merged, tags));
+
+        if (forcedInputs) {
+          setRuntimeForceableInputs(forcedInputs.input_catalog ?? []);
+          setForcedTagNames((forcedInputs.forced_inputs ?? []).map((item) => item.tag));
+          if (forcedInputs.diagnostics) {
+            setRuntimeDiagnostics(forcedInputs.diagnostics);
+          }
+        }
+        if (diagnosticsPayload?.diagnostics) {
+          setRuntimeDiagnostics(diagnosticsPayload.diagnostics);
+        }
+      } catch {
+        setRuntimeValidationData(null);
+        setRuntimeFailedMessage("Runtime state could not be rehydrated for this project.");
+      } finally {
+        setIsRuntimeStateLoading(false);
+      }
+    };
 
     const loadGraph = async (): Promise<void> => {
       try {
         const graph = await getGraph(selectedProjectId);
-        setGraphNodes(graph.nodes);
-        setGraphEdges(graph.edges);
+        setPlantGraph({ nodes: graph.nodes, edges: graph.edges });
         setSelectedNode(graph.nodes[0]?.id ?? "");
         if (graph.nodes.length > 0 || graph.edges.length > 0) {
           updatePipelineStage("plant_graph", "success");
@@ -782,7 +909,9 @@ export default function Dashboard() {
     void loadPlantSignals();
     void loadLatestIOMapping();
     void loadLatestSimulationTrace();
-  }, [selectedProjectId]);
+    void refreshControlLoops(selectedProjectId);
+    void loadPersistedRuntimeState();
+  }, [refreshControlLoops, selectedProjectId]);
 
   useEffect(() => {
     if (!selectedProjectId || (activeTab !== "Replay" && activeTab !== "Diagnostics")) {
@@ -891,7 +1020,7 @@ export default function Dashboard() {
   const handleToolbarAction = async (action: ToolbarAction): Promise<void> => {
     setActiveAction(action);
 
-    if (action === "upload") {
+    if (action === "upload_documents") {
       if (!selectedProjectId) {
         setStatusText("Select or create a project first.");
         toast.error("No active project selected", {
@@ -902,6 +1031,7 @@ export default function Dashboard() {
       }
       uploadInputRef.current?.click();
       setStatusText("Select one or more project documents to upload.");
+      setModuleState("plant_model", { state: "running", message: "Awaiting file selection", updatedAt: new Date().toISOString() });
       return;
     }
 
@@ -915,28 +1045,25 @@ export default function Dashboard() {
     }
 
     try {
-      if (action === "parse") {
+      if (action === "parse_plant_model") {
         setIsParsing(true);
-        updatePipelineStage("extraction", "running");
-        setStatusText("Parsing batch in progress. Combining P&ID and control narrative...");
+        setModuleState("plant_model", { state: "running", message: "Parsing plant model", updatedAt: new Date().toISOString() });
+        setStatusText("Parsing plant model...");
         await parseProject(selectedProjectId);
-        const graph = await getGraph(selectedProjectId);
-        const signals = await getPlantSignals(selectedProjectId);
-        setGraphNodes(graph.nodes);
-        setGraphEdges(graph.edges);
-        setPlantSignalRows(signals);
-        setPipelineStatuses((previous) =>
-          withDerivedPipelineStatuses({
-            ...previous,
-            extraction: "success",
-            normalization: "success",
-            plant_graph: "success",
-            control_loop_discovery: "success",
-            engineering_validation: "success",
-            logic_completion: "success",
-          })
-        );
-        setStatusText("Project parse complete.");
+
+        try {
+          const graph = await getGraph(selectedProjectId);
+          setPlantGraph({ nodes: graph.nodes, edges: graph.edges });
+          setSelectedNode(graph.nodes[0]?.id ?? "");
+          if (graph.nodes.length > 0 || graph.edges.length > 0) {
+            updatePipelineStage("plant_graph", "success");
+          }
+        } catch {
+          setStatusText("Parse completed, but graph reload failed. Try refreshing the project view.");
+        }
+
+        setModuleState("plant_model", { state: "success", message: "Plant model parsed", updatedAt: new Date().toISOString() });
+        setStatusText("Plant model parse complete.");
         toast.success("Parse batch completed", {
           className: "industrial-toast",
           icon: <Cpu size={14} className="toast-icon" />,
@@ -944,12 +1071,14 @@ export default function Dashboard() {
         setIsParsing(false);
       }
 
-      if (action === "generate_st") {
-        if (!ensurePrerequisites("st_generation")) {
-          return;
-        }
+      if (action === "detect_control_loops") {
+        await runControlLoopDetection();
+      }
+
+      if (action === "generate_logic") {
+        setModuleState("control_logic", { state: "running", message: "Generating control logic", updatedAt: new Date().toISOString() });
         updatePipelineStage("st_generation", "running");
-        setStatusText("Generating ST code...");
+        setStatusText("Generating logic...");
         try {
           const artifact = await generateLogic(selectedProjectId);
           const generatedCode = artifact.code || artifact.st_preview || "";
@@ -969,6 +1098,11 @@ export default function Dashboard() {
           setLogicValidationIssues(validationIssues);
           updatePipelineStage("logic_completion", "success");
           updatePipelineStage("st_generation", hasGeneratedCode ? "success" : "failed");
+          setModuleState("control_logic", {
+            state: hasGeneratedCode ? "success" : "failed",
+            message: hasGeneratedCode ? "Logic generated" : "No logic returned",
+            updatedAt: new Date().toISOString(),
+          });
           if (!hasGeneratedCode) {
             setSTVerificationData(null);
             setSTDiagnosticsByFile({});
@@ -984,31 +1118,28 @@ export default function Dashboard() {
           }
         } catch {
           updatePipelineStage("st_generation", "failed");
+          setModuleState("control_logic", { state: "failed", message: "Logic generation failed", updatedAt: new Date().toISOString() });
           throw new Error("ST generation failed");
         }
       }
 
-      if (action === "io_mapping") {
-        if (!ensurePrerequisites("io_mapping")) {
-          return;
-        }
+      if (action === "generate_io_mapping") {
         setIsGeneratingIOMapping(true);
         setIOMappingFailedMessage(null);
+        setModuleState("io_mapping", { state: "running", message: "Generating IO mapping", updatedAt: new Date().toISOString() });
         updatePipelineStage("io_mapping", "running");
         setStatusText("Generating IO mapping...");
         try {
-          const mappingResult = await generateIOMappingWithRetry(selectedProjectId, {
-            maxAttempts: 3,
-            initialDelayMs: 700,
-            backoffFactor: 2,
-          });
+          const mappingResult = await generateIOMapping(selectedProjectId);
           setIOMappingRows(mappingResult.rows);
           setIOMappingIssues(mappingResult.issues ?? []);
           setSelectedIOMappingTag(null);
           setIOMappingSummary(mappingResult.summary);
           setMonitoringPanelMode("io_mapping");
           setActiveBottomView("monitoring");
+          setActiveModule("io_mapping");
           updatePipelineStage("io_mapping", "success");
+          setModuleState("io_mapping", { state: "success", message: `Mapped ${mappingResult.total} channels`, updatedAt: new Date().toISOString() });
           setStatusText(`IO mapping generated (${mappingResult.total} channel mappings).`);
         } catch {
           updatePipelineStage("io_mapping", "failed");
@@ -1017,137 +1148,132 @@ export default function Dashboard() {
           setSelectedIOMappingTag(null);
           setIOMappingSummary(null);
           setIOMappingFailedMessage("IO mapping generation failed after retries.");
+          setModuleState("io_mapping", { state: "failed", message: "IO mapping generation failed", updatedAt: new Date().toISOString() });
           setStatusText("IO mapping generation failed. Ensure backend endpoint is available.");
         } finally {
           setIsGeneratingIOMapping(false);
         }
       }
 
-      if (action === "verify_st") {
-        if (!ensurePrerequisites("st_verification")) {
-          return;
-        }
-        setCodePanelMode("verification");
-        setActiveBottomView("logic");
-        updatePipelineStage("st_verification", "running");
-        await runSTVerification(selectedProjectId);
-      }
-
-      if (action === "versions") {
-        if (!ensurePrerequisites("version_snapshot")) {
-          return;
-        }
-        setMonitoringPanelMode("versions");
-        setActiveBottomView("monitoring");
-        updatePipelineStage("version_snapshot", "running");
-        setStatusText("Creating version snapshot...");
-        try {
-          const snapshot = await createVersionSnapshotWithRetry(selectedProjectId, {
-            maxAttempts: 3,
-            initialDelayMs: 700,
-            backoffFactor: 2,
-          });
-          updatePipelineStage("version_snapshot", "success");
-          setStatusText(`Version snapshot created: ${snapshot.snapshot_id}`);
-        } catch {
-          updatePipelineStage("version_snapshot", "failed");
-          setStatusText("Version snapshot failed. Ensure backend endpoint is available.");
-        }
-      }
-
-      if (action === "export_logic") {
-        if (!ensurePrerequisites("st_generation")) {
-          return;
-        }
-        setIsExportingLogic(true);
-        setStatusText("Exporting generated logic files...");
-        try {
-          const exportResult = await exportGeneratedLogicWithRetry(selectedProjectId, {
-            maxAttempts: 3,
-            initialDelayMs: 700,
-            backoffFactor: 2,
-          });
-          setStatusText(`Export ready: ${exportResult.files.length} file(s) from ${exportResult.output_root}`);
-          toast.success(`Logic export ready (${exportResult.files.length} files)`, {
-            className: "industrial-toast",
-            icon: <FileCog size={14} className="toast-icon" />,
-          });
-        } catch {
-          setStatusText("Logic export failed. Ensure backend logic-files endpoint is available.");
-          toast.error("Logic export failed", {
-            className: "industrial-toast industrial-toast-error",
-            icon: <AlertTriangle size={14} className="toast-icon toast-icon-error" />,
-          });
-        } finally {
-          setIsExportingLogic(false);
-        }
-      }
-
-      if (action === "simulate") {
-        if (!ensurePrerequisites("simulation_validation")) {
-          return;
-        }
-        setSimulationFailedMessage(null);
-        setActiveBottomView("simulation");
-        updatePipelineStage("simulation_validation", "running");
-        const simulation = await runSimulation(selectedProjectId);
-        await refreshSimulationTraceData(selectedProjectId);
-        const metrics = simulation.metrics;
-        const scenarioValue = typeof metrics === "object" && metrics && Array.isArray((metrics as { scenarios?: unknown[] }).scenarios)
-          ? ((metrics as { scenarios?: SimulationValidationPanelResponse["scenarios"] }).scenarios ?? [])
-          : [];
-        const passed = scenarioValue.filter((item) => item.status === "success").length;
-        const failed = scenarioValue.filter((item) => item.status === "failed").length;
-        const warning = scenarioValue.filter((item) => item.status === "warning").length;
-        setSimulationValidationData({
-          project_id: selectedProjectId,
-          simulation_run_id: `sim-${Date.now()}`,
-          validated_at: new Date().toISOString(),
-          overall_status: failed > 0 ? "failed" : warning > 0 ? "warning" : "success",
-          scenarios_passed: passed,
-          scenarios_failed: failed,
-          scenarios_warning: warning,
-          scenarios: scenarioValue,
-        });
-        updatePipelineStage("simulation_validation", "success");
-        setStatusText("Simulation started for active project.");
-      }
-
-      if (action === "deploy") {
-        if (!ensurePrerequisites("runtime_validation")) {
-          return;
-        }
+      if (action === "deploy_runtime") {
+        setModuleState("runtime", { state: "running", message: "Deploying runtime", updatedAt: new Date().toISOString() });
         setMonitoringPanelMode("runtime");
         setActiveBottomView("monitoring");
+        setActiveModule("runtime");
         setStatusText("Deploying project runtime...");
-        await handleConfirmRuntimeDeploy();
+        const result = await deployRuntimeControl({ project_id: selectedProjectId });
+        const panelData = mapRuntimeControlResult(result, runtimeTelemetryTags);
+        setRuntimeValidationData(panelData);
+        const failedChecks = panelData.checks_failed > 0 || panelData.overall_status === "failed";
+        setModuleState("runtime", {
+          state: failedChecks ? "failed" : "success",
+          message: failedChecks ? "Runtime deployment failed" : "Runtime deployed",
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
+      if (action === "start_monitoring") {
+        setModuleState("monitoring", { state: "running", message: "Starting monitoring", updatedAt: new Date().toISOString() });
+        const monitoringSummary = await getMonitoring(selectedProjectId);
+        setModuleState("monitoring", { state: "success", message: "Monitoring started", updatedAt: new Date().toISOString() });
+        setActiveModule("monitoring");
+        setMonitoringPanelMode("runtime");
+        setActiveBottomView("monitoring");
+        setStatusText(`Monitoring started (${Object.keys(monitoringSummary).length} signals summarized).`);
+      }
+
+      if (action === "analyze_fault") {
+        const selectedTag = (selectedNode || selectedReplayTag || "").trim();
+        const activeAlarms = Object.entries(runtimeDiagnostics?.alarms || {})
+          .filter(([, active]) => Boolean(active))
+          .map(([alarm]) => alarm)
+          .filter((alarm) => Boolean((alarm || "").trim()));
+        const recentChangedAlarm = [...(runtimeDiagnostics?.changed_alarms || [])]
+          .reverse()
+          .find((item) => Boolean((item?.tag || "").trim()));
+        const mostRecentAlarmTag = (recentChangedAlarm?.tag || activeAlarms[0] || "").trim();
+
+        let resolvedTag = "";
+        let contextMessage = "";
+
+        if (selectedTag) {
+          resolvedTag = selectedTag;
+          contextMessage = `Analyzing fault for ${resolvedTag}`;
+        } else if (mostRecentAlarmTag) {
+          resolvedTag = mostRecentAlarmTag;
+          contextMessage = `No alarm selected. Analyzing most recent alarm: ${resolvedTag}`;
+        }
+
+        if (!resolvedTag) {
+          setFaultAnalysis(null);
+          setFaultAnalysisTag(null);
+          setFaultAnalysisInputMessage(null);
+          setFaultAnalysisError("No alarm tag available. Select a signal or ensure an active alarm exists.");
+          setStatusText("Analyze Fault requires an alarm tag context.");
+          return;
+        }
+
+        setIsFaultAnalysisLoading(true);
+        setFaultAnalysisError(null);
+        setFaultAnalysisTag(resolvedTag);
+        setFaultAnalysisInputMessage(contextMessage);
+        setModuleState("diagnostics", { state: "running", message: "Analyzing runtime faults", updatedAt: new Date().toISOString() });
+        setStatusText(contextMessage);
+        const analysis = await analyzeFault(resolvedTag, selectedProjectId, resolvedTag);
+        setFaultAnalysis(analysis);
+        setFaultAnalysisTag(analysis.alarm || resolvedTag);
+        setTracePath(analysis.path || []);
+        setSelectedNode(analysis.path?.[0] || selectedNode);
+        setModuleState("diagnostics", { state: "success", message: "Fault analysis complete", updatedAt: new Date().toISOString() });
+        setPanelState((previous) => ({ ...previous, activeModule: "diagnostics", activeRightTab: "Diagnostics" }));
+        setStatusText(`Fault analysis complete for ${analysis.alarm || resolvedTag}.`);
+        setIsFaultAnalysisLoading(false);
+      }
+
+      if (action === "replay_event") {
+        setIsExportingLogic(true);
+        setModuleState("simulation", { state: "running", message: "Loading replay event", updatedAt: new Date().toISOString() });
+        const replay = await getReplay(selectedProjectId);
+        setModuleState("simulation", { state: "success", message: "Replay data refreshed", updatedAt: new Date().toISOString() });
+        setPanelState((previous) => ({ ...previous, activeModule: "simulation", activeRightTab: "Replay" }));
+        setStatusText(`Replay event loaded (${Object.keys(replay).length} fields).`);
+        setIsExportingLogic(false);
       }
 
     } catch {
-      if (action === "generate_st") {
-        updatePipelineStage("st_generation", "failed");
+      const actionToModule: Partial<Record<ToolbarAction, WorkspaceModuleId>> = {
+        parse_plant_model: "plant_model",
+        detect_control_loops: "control_loops",
+        generate_logic: "control_logic",
+        generate_io_mapping: "io_mapping",
+        deploy_runtime: "runtime",
+        start_monitoring: "monitoring",
+        analyze_fault: "diagnostics",
+        replay_event: "simulation",
+      };
+      const targetModule = actionToModule[action];
+      if (targetModule) {
+        setModuleState(targetModule, { state: "failed", message: `Action failed: ${action}`, updatedAt: new Date().toISOString() });
       }
-      if (action === "io_mapping") {
-        updatePipelineStage("io_mapping", "failed");
+      if (action === "analyze_fault") {
+        setFaultAnalysis(null);
+        setFaultAnalysisError("Fault analysis failed.");
+        setIsFaultAnalysisLoading(false);
       }
-      if (action === "versions") {
-        updatePipelineStage("version_snapshot", "failed");
-      }
-      if (action === "deploy") {
-        updatePipelineStage("runtime_validation", "failed");
-        setRuntimeFailedMessage("Runtime validation failed for this deployment.");
-      }
-      if (action === "simulate") {
-        updatePipelineStage("simulation_validation", "failed");
-        setSimulationFailedMessage("Simulation validation failed for this run.");
+      if (action === "detect_control_loops") {
+        setControlLoopsError("Control loop detection failed.");
+        setIsControlLoopsLoading(false);
       }
       setStatusText(`Action failed: ${action}. Ensure backend API is running.`);
       toast.error(`Action failed: ${action}`, {
         className: "industrial-toast industrial-toast-error",
         icon: <AlertTriangle size={14} className="toast-icon toast-icon-error" />,
       });
-      if (action === "parse") {
+      if (action === "parse_plant_model") {
         setIsParsing(false);
+      }
+      if (action === "replay_event") {
+        setIsExportingLogic(false);
       }
     }
   };
@@ -1230,11 +1356,96 @@ export default function Dashboard() {
   };
 
   const currentProject = projects.find((project) => project.id === selectedProjectId);
+  const activeModuleState = moduleStates[panelState.activeModule];
   const layoutStorage = typeof window === "undefined" ? undefined : window.localStorage;
   const workspaceRowsLayout = useDefaultLayout({ id: "crosslayerx-workspace-rows", storage: layoutStorage });
 
   const handleLeftPanelToggle = (): void => {
     setIsLeftPanelCollapsed((value) => !value);
+  };
+
+  const handleRightPanelResizeStart = (event: React.MouseEvent<HTMLDivElement>): void => {
+    if (!isRightPanelExpanded) {
+      return;
+    }
+
+    rightResizeStartRef.current = { startX: event.clientX, startWidth: rightPanelWidth };
+    let latestWidth = rightPanelWidth;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    const onMouseMove = (moveEvent: MouseEvent): void => {
+      const active = rightResizeStartRef.current;
+      if (!active) {
+        return;
+      }
+      const delta = active.startX - moveEvent.clientX;
+      const viewportBound = Math.max(360, Math.floor(window.innerWidth * 0.55));
+      const nextWidth = Math.min(Math.min(760, viewportBound), Math.max(260, active.startWidth + delta));
+      latestWidth = nextWidth;
+      setRightPanelWidth(nextWidth);
+    };
+
+    const onMouseUp = (): void => {
+      rightResizeStartRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.localStorage.setItem("crosslayerx-right-panel-width", String(latestWidth));
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  };
+
+  const handleModuleSelect = (moduleId: WorkspaceModuleId): void => {
+    setActiveModule(moduleId);
+    if (moduleId === "plant_model") {
+      setActiveTab("Details");
+      setIsRightPanelExpanded(true);
+      return;
+    }
+    if (moduleId === "control_loops") {
+      setActiveTab("Control Loops");
+      setIsRightPanelExpanded(true);
+      return;
+    }
+    if (moduleId === "io_mapping") {
+      setMonitoringPanelMode("io_mapping");
+      setActiveBottomView("monitoring");
+      setActiveTab("IO Mapping");
+      setIsRightPanelExpanded(true);
+      return;
+    }
+    if (moduleId === "control_logic") {
+      setCodePanelMode("control_logic");
+      setActiveBottomView("logic");
+      setIsRightPanelExpanded(true);
+      return;
+    }
+    if (moduleId === "simulation") {
+      setActiveBottomView("simulation");
+      setActiveTab("Replay");
+      setIsRightPanelExpanded(true);
+      return;
+    }
+    if (moduleId === "runtime") {
+      setMonitoringPanelMode("runtime");
+      setActiveBottomView("monitoring");
+      setActiveTab("Diagnostics");
+      setIsRightPanelExpanded(true);
+      return;
+    }
+    if (moduleId === "monitoring") {
+      setMonitoringPanelMode("runtime");
+      setActiveBottomView("monitoring");
+      setActiveTab("Signals");
+      setIsRightPanelExpanded(true);
+      return;
+    }
+    setActiveTab("Diagnostics");
+    setIsRightPanelExpanded(true);
   };
 
   const handleAutoAssignIOMappingChannels = (): void => {
@@ -1366,6 +1577,82 @@ export default function Dashboard() {
     };
   };
 
+  const mapPersistedRuntimeState = (runtimeState: RuntimeStateResponse, tags: Record<string, unknown>): RuntimeValidationPanelData | null => {
+    const deployment = runtimeState.deployment ?? null;
+    if (!deployment) {
+      return null;
+    }
+
+    const deployPassed = deployment.validation_status === "passed";
+    const startStatus: "idle" | "running" | "success" | "failed" | "warning" =
+      runtimeState.runtime_state === "running" ? "success" : runtimeState.runtime_state === "failed" ? "failed" : "warning";
+
+    const checks = [
+      {
+        check_name: "compile_st",
+        status: deployPassed ? "success" : "failed",
+        message: deployPassed ? "Compiled ST metadata restored from persisted deployment state." : "Compilation previously failed.",
+      },
+      {
+        check_name: "build_runtime",
+        status: deployPassed ? "success" : "failed",
+        message: deployPassed ? "Build metadata restored from persisted deployment state." : "Runtime build previously failed.",
+      },
+      {
+        check_name: "apply_io",
+        status: deployPassed ? "success" : "failed",
+        message: deployPassed ? "IO bindings restored from persisted deployment state." : "IO apply previously failed.",
+      },
+      {
+        check_name: "start_runtime",
+        status: startStatus,
+        message:
+          runtimeState.runtime_state === "running"
+            ? "Live runtime process is active."
+            : runtimeState.runtime_state === "failed"
+              ? "Live runtime process is in failed state."
+              : "Deployment is persisted; runtime is currently not active.",
+      },
+    ] as const;
+
+    return {
+      project_id: runtimeState.project_id,
+      run_id: `runtime-persisted-${deployment.id}`,
+      validated_at: deployment.updated_at,
+      overall_status: runtimeState.runtime_state === "failed" || !deployPassed ? "failed" : "success",
+      checks_passed: checks.filter((item) => item.status === "success").length,
+      checks_failed: checks.filter((item) => item.status === "failed").length,
+      checks_warning: checks.filter((item) => item.status === "warning").length,
+      checks: checks.map((item, index) => ({
+        check_id: `runtime-persisted-check-${index + 1}`,
+        check_name: item.check_name,
+        status: item.status,
+        expected_value: "success",
+        actual_value: item.status,
+        tolerance: null,
+        message: item.message,
+      })),
+      runtime_state: runtimeState.runtime_state,
+      deployed_at: deployment.updated_at,
+      active_project: runtimeState.project_id,
+      runtime_project_dir: deployment.artifact_path || null,
+      steps_map: {
+        compile_st: checks[0].status,
+        build_runtime: checks[1].status,
+        apply_io: checks[2].status,
+        start_runtime: checks[3].status,
+      },
+      step_messages: {
+        compile_st: checks[0].message,
+        build_runtime: checks[1].message,
+        apply_io: checks[2].message,
+        start_runtime: checks[3].message,
+      },
+      telemetry_tags: tags,
+      errors: deployment.last_error ? [deployment.last_error] : [],
+    };
+  };
+
   const refreshRuntimeTags = async (): Promise<void> => {
     try {
       const tags = await getRuntimeTags();
@@ -1470,14 +1757,7 @@ export default function Dashboard() {
     setActiveBottomView("monitoring");
 
     try {
-      const result = await deployRuntimeControlWithRetry(
-        { project_id: selectedProjectId },
-        {
-          maxAttempts: 2,
-          initialDelayMs: 800,
-          backoffFactor: 2,
-        }
-      );
+      const result = await deployRuntimeControl({ project_id: selectedProjectId });
 
       let tags: Record<string, unknown> = {};
       try {
@@ -1562,9 +1842,14 @@ export default function Dashboard() {
     };
   }, [monitoringPanelMode, selectedProjectId]);
 
-  const openControlLoopModal = (loop: DiscoveredControlLoop): void => {
+  const traceControlLoopPath = (loop: ControlLoopRecord): void => {
+    const path = [loop.sensor_tag, loop.controller_tag || "", loop.actuator_tag, loop.process_unit || ""].filter((item) => item.trim().length > 0);
+    setTracePath(path);
+  };
+
+  const openControlLoopModal = (loop: ControlLoopRecord): void => {
     const processTag = loop.process_unit || "";
-    const controlPath = [loop.sensor_tag, processTag, loop.actuator_tag].filter((item) => item.length > 0).join(" -> ");
+    const controlPath = [loop.sensor_tag, loop.controller_tag || "", loop.actuator_tag, processTag].filter((item) => item.length > 0).join(" -> ");
     setControlLoopModal({
       open: true,
       noLoop: false,
@@ -1573,7 +1858,7 @@ export default function Dashboard() {
       process: processTag,
       actuator: loop.actuator_tag,
       controlPath,
-      source: loop.source_reference || "",
+      source: loop.status || "",
       confidence: typeof loop.confidence === "number" ? loop.confidence : null,
     });
   };
@@ -1592,7 +1877,7 @@ export default function Dashboard() {
     });
   };
 
-  const selectBestLoopForRow = (row: PlantSignalRow, loops: DiscoveredControlLoop[]): DiscoveredControlLoop | null => {
+  const selectBestLoopForRow = (row: PlantSignalRow, loops: ControlLoopRecord[]): ControlLoopRecord | null => {
     const normalizedTag = (row.tag || "").trim().toUpperCase();
     const targetLoopIds = new Set<string>([
       ...(row.loop_ids ?? []).map((item) => (item || "").trim().toUpperCase()),
@@ -1623,6 +1908,61 @@ export default function Dashboard() {
     return null;
   };
 
+  const handleControlLoopSelect = (loop: ControlLoopRecord): void => {
+    setSelectedControlLoopTag(loop.loop_tag);
+    setSelectedNode(loop.sensor_tag);
+    traceControlLoopPath(loop);
+  };
+
+  const handleControlLoopView = async (loop: ControlLoopRecord): Promise<void> => {
+    try {
+      const details = await getControlLoop(loop.loop_tag, selectedProjectId || undefined);
+      setSelectedControlLoopTag(details.loop_tag);
+      openControlLoopModal(details);
+      traceControlLoopPath(details);
+      setActiveTab("Control Loops");
+      setIsRightPanelExpanded(true);
+    } catch {
+      setStatusText(`Unable to load loop details for ${loop.loop_tag}.`);
+    }
+  };
+
+  const handleControlLoopEditStrategy = (loop: ControlLoopRecord): void => {
+    const nextStrategy = window.prompt("Update control strategy", loop.control_strategy || "PID");
+    if (!nextStrategy) {
+      return;
+    }
+    setControlLoops((previous) =>
+      previous.map((item) => (item.id === loop.id ? { ...item, control_strategy: nextStrategy.trim() || item.control_strategy } : item))
+    );
+    setStatusText(`Strategy updated locally for ${loop.loop_tag}.`);
+  };
+
+  const handleControlLoopGenerateLogic = async (_loop: ControlLoopRecord): Promise<void> => {
+    await handleToolbarAction("generate_logic");
+  };
+
+  const handleControlLoopTrace = (loop: ControlLoopRecord): void => {
+    handleControlLoopSelect(loop);
+    setActiveTab("Trace");
+    setIsRightPanelExpanded(true);
+  };
+
+  const handleControlLoopSimulate = async (_loop: ControlLoopRecord): Promise<void> => {
+    if (!selectedProjectId) {
+      return;
+    }
+    try {
+      await runSimulation(selectedProjectId);
+      await refreshSimulationTraceData(selectedProjectId);
+      setActiveTab("Replay");
+      setActiveBottomView("simulation");
+      setStatusText("Simulation completed for selected loop context.");
+    } catch {
+      setStatusText("Simulation failed for selected loop context.");
+    }
+  };
+
   return (
     <div className="dashboard">
       <Toaster
@@ -1651,6 +1991,7 @@ export default function Dashboard() {
             </span>
           ) : null}
           <span>{statusText}</span>
+          {activeModuleState?.message ? <span className="selected-files-inline">{`${activeModuleState.state.toUpperCase()}: ${activeModuleState.message}`}</span> : null}
           {selectedUploadFiles.length > 0 ? (
             <span className="selected-files-inline" title={selectedUploadFiles.join(", ")}>
               Selected: {selectedUploadFiles.join(", ")}
@@ -1848,8 +2189,10 @@ export default function Dashboard() {
           });
 
           setIsUploading(true);
+          setModuleState("plant_model", { state: "running", message: "Uploading documents", updatedAt: new Date().toISOString() });
           void uploadDocuments(selectedProjectId, files, inferredTypes)
             .then(() => {
+              setModuleState("plant_model", { state: "success", message: `Uploaded ${files.length} file(s)`, updatedAt: new Date().toISOString() });
               setStatusText(`Uploaded ${files.length} file(s) to active project.`);
               toast.success(`Uploaded ${files.length} file(s)`, {
                 className: "industrial-toast",
@@ -1857,6 +2200,7 @@ export default function Dashboard() {
               });
             })
             .catch(() => {
+              setModuleState("plant_model", { state: "failed", message: "Document upload failed", updatedAt: new Date().toISOString() });
               setStatusText("Upload failed. Ensure backend server is running and accepts multipart uploads.");
               toast.error("Upload failed", {
                 className: "industrial-toast industrial-toast-error",
@@ -1878,7 +2222,12 @@ export default function Dashboard() {
           onLayoutChanged={workspaceRowsLayout.onLayoutChanged}
         >
           <Panel id="workspace-top" defaultSize="74%" minSize="42%">
-            <div className={`main-shell ${isLeftPanelCollapsed ? "left-collapsed" : ""} ${isRightPanelExpanded ? "right-expanded" : ""}`}>
+            <div
+              className={`main-shell ${isLeftPanelCollapsed ? "left-collapsed" : ""} ${isRightPanelExpanded ? "right-expanded" : ""}`}
+              style={{
+                ["--right-panel-width" as string]: `${isRightPanelExpanded ? rightPanelWidth : 38}px`,
+              }}
+            >
               <div className="main-shell-content">
                 <aside className={`left-panel ${isLeftPanelCollapsed ? "collapsed" : ""}`}>
                   <button
@@ -1905,6 +2254,8 @@ export default function Dashboard() {
                       onSelectProject={setSelectedProjectId}
                       selectedNode={selectedNode}
                       onSelectNode={setSelectedNode}
+                      activeModule={panelState.activeModule}
+                      onSelectModule={handleModuleSelect}
                     />
                   ) : null}
                 </aside>
@@ -1957,33 +2308,21 @@ export default function Dashboard() {
                       }}
                       onOpenControlLoop={(row) => {
                         setSelectedNode(row.tag);
-                        setActiveTab("Trace");
+                        setActiveTab("Control Loops");
                         setIsRightPanelExpanded(true);
                         if (!selectedProjectId) {
                           setStatusText("No active project selected.");
                           return;
                         }
-                        if (!row.loop_id && (!row.loop_ids || row.loop_ids.length === 0)) {
+                        const selectedLoop = selectBestLoopForRow(row, controlLoops);
+                        if (!selectedLoop) {
                           openNoLoopModal();
                           setStatusText("No control loop detected.");
                           return;
                         }
-                        void detectControlLoops(selectedProjectId)
-                          .then((loops) => {
-                            const selectedLoop = selectBestLoopForRow(row, loops);
-                            if (!selectedLoop) {
-                              openNoLoopModal();
-                              setStatusText("No control loop detected.");
-                              return;
-                            }
-                            setTracePath([selectedLoop.sensor_tag, selectedLoop.process_unit || "PROCESS", selectedLoop.actuator_tag]);
-                            openControlLoopModal(selectedLoop);
-                            setStatusText(`Opened ${selectedLoop.loop_tag} (${selectedLoop.control_strategy || "ON_OFF"}).`);
-                          })
-                          .catch(() => {
-                            openNoLoopModal();
-                            setStatusText("No control loop detected.");
-                          });
+                        handleControlLoopSelect(selectedLoop);
+                        openControlLoopModal(selectedLoop);
+                        setStatusText(`Opened ${selectedLoop.loop_tag} (${selectedLoop.control_strategy || "PID"}).`);
                       }}
                       onOpenIOMapping={(row) => {
                         setActiveBottomView("monitoring");
@@ -1997,6 +2336,14 @@ export default function Dashboard() {
                   )}
                 </section>
               </div>
+
+              <div
+                className="panel-resize-handle panel-resize-handle-vertical right-panel-resize-handle"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize right panel"
+                onMouseDown={handleRightPanelResizeStart}
+              />
 
               <aside className={`right-panel ${isRightPanelExpanded ? "expanded" : "collapsed"}`}>
                 <button
@@ -2015,6 +2362,10 @@ export default function Dashboard() {
                     selectedReplayTag={selectedReplayTag}
                     replayTrace={simulationTrace}
                     replayIssues={simulationIssues}
+                    controlLoops={controlLoops}
+                    controlLoopsLoading={isControlLoopsLoading}
+                    controlLoopsError={controlLoopsError}
+                    selectedControlLoopTag={selectedControlLoopTag}
                     selectedEquipment={selectedEquipment}
                     selectedNodeId={selectedNode}
                     tracePath={tracePath}
@@ -2024,6 +2375,11 @@ export default function Dashboard() {
                     runtimeTelemetryTags={runtimeTelemetryTags}
                     forcedTagNames={forcedTagNames}
                     runtimeDiagnostics={runtimeDiagnostics}
+                    faultAnalysis={faultAnalysis}
+                    faultAnalysisTag={faultAnalysisTag}
+                    faultAnalysisInputMessage={faultAnalysisInputMessage}
+                    faultAnalysisLoading={isFaultAnalysisLoading}
+                    faultAnalysisError={faultAnalysisError}
                     onSelectIOMappingTag={(tag) => {
                       setSelectedIOMappingTag(tag);
                       setActiveBottomView("monitoring");
@@ -2032,6 +2388,21 @@ export default function Dashboard() {
                     }}
                     onReplayPointChange={setReplayPoint}
                     onSelectedReplayTagChange={setSelectedReplayTag}
+                    onSelectControlLoop={handleControlLoopSelect}
+                    onDetectControlLoops={() => {
+                      void runControlLoopDetection();
+                    }}
+                    onViewControlLoop={(loop) => {
+                      void handleControlLoopView(loop);
+                    }}
+                    onEditControlLoopStrategy={handleControlLoopEditStrategy}
+                    onGenerateControlLoopLogic={(loop) => {
+                      void handleControlLoopGenerateLogic(loop);
+                    }}
+                    onTraceControlLoop={handleControlLoopTrace}
+                    onSimulateControlLoop={(loop) => {
+                      void handleControlLoopSimulate(loop);
+                    }}
                     onTabChange={setActiveTab}
                   />
                 ) : null}
@@ -2079,6 +2450,7 @@ export default function Dashboard() {
               isGeneratingIOMapping={isGeneratingIOMapping}
               ioMappingFailedMessage={ioMappingFailedMessage}
               runtimeValidationData={runtimeValidationData}
+              runtimeLoading={isRuntimeStateLoading}
               runtimeFailedMessage={runtimeFailedMessage}
               runtimeActionLoading={isRuntimeActionBusy}
               runtimeForceableInputs={runtimeForceableInputs}
@@ -2086,16 +2458,16 @@ export default function Dashboard() {
               simulationValidationData={simulationValidationData}
               simulationFailedMessage={simulationFailedMessage}
               onRetryIOMapping={() => {
-                void handleToolbarAction("io_mapping");
+                void handleToolbarAction("generate_io_mapping");
               }}
               onGenerateIOMapping={() => {
-                void handleToolbarAction("io_mapping");
+                void handleToolbarAction("generate_io_mapping");
               }}
               onAutoAssignIOMappingChannels={handleAutoAssignIOMappingChannels}
               onExportIOMappingCsv={handleExportIOMappingCsv}
               onValidateIOMapping={handleValidateIOMapping}
               onRetrySTVerification={() => {
-                void handleToolbarAction("verify_st");
+                void handleToolbarAction("generate_logic");
               }}
               onRetryRuntime={() => {
                 void handleConfirmRuntimeDeploy();
@@ -2111,10 +2483,10 @@ export default function Dashboard() {
               onRuntimeRefreshForceState={refreshRuntimeForceState}
               onRuntimeRunEvaluationCycle={handleRunRuntimeEvaluationCycle}
               onRetrySimulation={() => {
-                void handleToolbarAction("simulate");
+                void handleToolbarAction("replay_event");
               }}
               showControlLogic={showLogic}
-              isGeneratingST={pipelineStatuses.st_generation === "running" && activeAction === "generate_st"}
+              isGeneratingST={pipelineStatuses.st_generation === "running" && activeAction === "generate_logic"}
               isGenerating={pipelineStatuses.logic_completion === "running"}
               onViewChange={(view) => {
                 setActiveBottomView(view);

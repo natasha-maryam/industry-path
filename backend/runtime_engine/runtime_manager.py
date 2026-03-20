@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -119,6 +120,17 @@ class RuntimeManager:
             payload = json.loads(fallback.read_text())
             return list(payload.get("rows", []))
         return []
+
+    @staticmethod
+    def _write_runtime_artifacts(project_id: str, payload: dict[str, Any], io_rows: list[dict[str, Any]]) -> str:
+        runtime_dir = project_service.workspace_paths(project_id).runtime
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        deploy_payload_path = runtime_dir / "latest_deploy.json"
+        io_payload_path = runtime_dir / "io_config.json"
+
+        deploy_payload_path.write_text(json.dumps(payload, indent=2, default=str))
+        io_payload_path.write_text(json.dumps(io_rows, indent=2, default=str))
+        return str(runtime_dir)
 
     def deploy(
         self,
@@ -245,7 +257,7 @@ class RuntimeManager:
         else:
             steps.append({"name": "start_runtime", "status": "failed", "message": "Skipped because apply_io failed."})
 
-        return {
+        response_payload = {
             "success": len(errors) == 0,
             "status": "passed" if not errors else "failed",
             "project_id": project_id,
@@ -256,7 +268,16 @@ class RuntimeManager:
             "engineering_errors": engineering_errors,
             "dependency_report": dependency_report,
             "runtime_status": self.runtime.runtime_status(),
+            "target_runtime": "headless-matiec",
+            "protocol": "BEREMIZ",
+            "plc_address": None,
+            "io_rows": merged_catalog_rows,
+            "deployed_version": datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S"),
         }
+
+        artifact_root = self._write_runtime_artifacts(project_id, response_payload, merged_catalog_rows)
+        response_payload["artifact_path"] = artifact_root
+        return response_payload
 
     def start(self) -> dict[str, Any]:
         if not self._active_project_dir:

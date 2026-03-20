@@ -98,14 +98,38 @@ export type SimulationAnalysisResponse = {
 };
 
 export type DiscoveredControlLoop = {
+  id?: string;
+  project_id?: string;
   loop_tag: string;
   sensor_tag: string;
   actuator_tag: string;
   process_unit?: string | null;
+  controller_tag?: string | null;
   control_strategy?: string;
   loop_type?: string;
+  setpoint_tag?: string | null;
+  output_tag?: string | null;
+  status?: string;
   confidence: number;
   source_reference?: string | null;
+  created_at?: string;
+};
+
+export type ControlLoopRecord = {
+  id: string;
+  project_id: string;
+  loop_tag: string;
+  sensor_tag: string;
+  actuator_tag: string;
+  process_unit?: string | null;
+  controller_tag?: string | null;
+  loop_type: string;
+  control_strategy: string;
+  setpoint_tag?: string | null;
+  output_tag?: string | null;
+  status: string;
+  confidence: number;
+  created_at: string;
 };
 
 export type ControlRule = {
@@ -439,6 +463,35 @@ export type RuntimeControlActionResponse = {
   };
 };
 
+export type RuntimeDeploymentRecord = {
+  id: string;
+  project_id: string;
+  target_runtime: string;
+  protocol: string;
+  plc_address?: string | null;
+  io_config_json: Array<Record<string, unknown>>;
+  deploy_status: string;
+  validation_status: string;
+  deployed_version?: string | null;
+  artifact_path?: string | null;
+  last_error?: string | null;
+  started_at: string;
+  updated_at: string;
+};
+
+export type RuntimeStateResponse = {
+  project_id: string;
+  runtime_state: "running" | "stopped" | "failed" | "idle";
+  deployment?: RuntimeDeploymentRecord | null;
+  live_runtime?: Record<string, unknown>;
+};
+
+export type RuntimeDeploymentLatestResponse = {
+  project_id: string;
+  deployment?: RuntimeDeploymentRecord | null;
+  timestamp: string;
+};
+
 export type RuntimeTelemetryTagsResponse = Record<string, unknown>;
 
 export type RuntimeSignalType = "BOOL" | "INT" | "REAL" | "STRING";
@@ -504,6 +557,25 @@ export type RuntimeDiagnosticsResponse = {
   project_id: string;
   diagnostics: RuntimeEvaluationCycle;
   timestamp: string;
+};
+
+export type FaultTimelinePoint = {
+  tag: string;
+  timestamp: string;
+  value: number | string | boolean;
+  source: string;
+};
+
+export type FaultAnalysisResult = {
+  alarm: string;
+  root_cause: string;
+  path: string[];
+  timeline: FaultTimelinePoint[];
+  confidence: number;
+  affected_devices: string[];
+  loop_id?: string | null;
+  actuator_tag?: string | null;
+  control_strategy?: string | null;
 };
 
 export type RuntimeForcedInputsResponse = {
@@ -914,8 +986,22 @@ export async function getTrace(projectId: string, nodeId: string): Promise<Trace
   return response.data;
 }
 
-export async function detectControlLoops(projectId: string): Promise<DiscoveredControlLoop[]> {
-  const response = await api.post<DiscoveredControlLoop[]>(`/projects/${projectId}/logic/detect-control-loops`);
+export async function detectControlLoops(projectId: string): Promise<ControlLoopRecord[]> {
+  const response = await api.post<ControlLoopRecord[]>(`/control-loops/detect`, { project_id: projectId });
+  return response.data;
+}
+
+export async function getControlLoops(projectId?: string): Promise<ControlLoopRecord[]> {
+  const response = await api.get<ControlLoopRecord[]>(`/control-loops`, {
+    params: projectId ? { project_id: projectId } : undefined,
+  });
+  return response.data;
+}
+
+export async function getControlLoop(loopTag: string, projectId?: string): Promise<ControlLoopRecord> {
+  const response = await api.get<ControlLoopRecord>(`/control-loops/${encodeURIComponent(loopTag)}`, {
+    params: projectId ? { project_id: projectId } : undefined,
+  });
   return response.data;
 }
 
@@ -1243,6 +1329,20 @@ export async function getRuntimeTags(): Promise<RuntimeTelemetryTagsResponse> {
   return response.data;
 }
 
+export async function getRuntimeState(projectId: string): Promise<RuntimeStateResponse> {
+  const response = await api.get<RuntimeStateResponse>("/runtime/state", {
+    params: { project_id: projectId },
+  });
+  return response.data;
+}
+
+export async function getLatestRuntimeDeployment(projectId: string): Promise<RuntimeDeploymentLatestResponse> {
+  const response = await api.get<RuntimeDeploymentLatestResponse>("/runtime/deployments/latest", {
+    params: { project_id: projectId },
+  });
+  return response.data;
+}
+
 export async function applyRuntimeInputForce(projectId: string, payload: RuntimeForceInputRequest): Promise<RuntimeForceInputResponse> {
   const response = await api.post<RuntimeForceInputResponse>(`/runtime/${projectId}/force-input`, payload);
   return response.data;
@@ -1265,6 +1365,15 @@ export async function runRuntimeEvaluationCycle(projectId: string, reason = "man
 
 export async function getRuntimeDiagnostics(projectId: string): Promise<RuntimeDiagnosticsResponse> {
   const response = await api.get<RuntimeDiagnosticsResponse>(`/runtime/${projectId}/diagnostics`);
+  return response.data;
+}
+
+export async function analyzeFault(alarmTag: string, projectId?: string, selectedTag?: string): Promise<FaultAnalysisResult> {
+  const response = await api.post<FaultAnalysisResult>("/analyze_fault", {
+    alarm_tag: alarmTag,
+    project_id: projectId,
+    selected_tag: selectedTag,
+  });
   return response.data;
 }
 

@@ -375,8 +375,9 @@
   min-height: 0;
   display: grid;
   --right-panel-width: 38px;
+  --right-resize-handle-width: 0px;
   --left-panel-width: 220px;
-  grid-template-columns: minmax(0, 1fr) var(--right-panel-width);
+  grid-template-columns: minmax(0, 1fr) var(--right-resize-handle-width) var(--right-panel-width);
 }
 
 .main-shell.left-collapsed {
@@ -384,7 +385,7 @@
 }
 
 .main-shell.right-expanded {
-  --right-panel-width: 300px;
+  --right-resize-handle-width: 5px;
 }
 
 .main-shell-content {
@@ -420,6 +421,16 @@
 
 .right-panel.collapsed {
   overflow: hidden;
+}
+
+.right-panel-resize-handle {
+  width: 100%;
+  height: 100%;
+}
+
+.main-shell:not(.right-expanded) .right-panel-resize-handle {
+  pointer-events: none;
+  border: 0;
 }
 
 .panel-resize-handle {

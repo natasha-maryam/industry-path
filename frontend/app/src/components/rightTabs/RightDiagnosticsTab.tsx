@@ -1,12 +1,26 @@
 import type { RuntimeEvaluationCycle } from "../../services/api";
 import type { SimulationTraceIssue } from "../../services/api";
+import type { FaultAnalysisResult } from "../../services/api";
 
 type RightDiagnosticsTabProps = {
   diagnostics: RuntimeEvaluationCycle | null;
   simulationIssues?: SimulationTraceIssue[];
+  faultAnalysis?: FaultAnalysisResult | null;
+  analyzedTag?: string | null;
+  inputMessage?: string | null;
+  loading?: boolean;
+  error?: string | null;
 };
 
-export default function RightDiagnosticsTab({ diagnostics, simulationIssues = [] }: RightDiagnosticsTabProps) {
+export default function RightDiagnosticsTab({
+  diagnostics,
+  simulationIssues = [],
+  faultAnalysis = null,
+  analyzedTag = null,
+  inputMessage = null,
+  loading = false,
+  error = null,
+}: RightDiagnosticsTabProps) {
   if (!diagnostics) {
     return (
       <>
@@ -22,6 +36,13 @@ export default function RightDiagnosticsTab({ diagnostics, simulationIssues = []
         <div className="panel-subtitle">Health Checks</div>
         <ul className="trace-chain">
           <li>No evaluated diagnostics available yet.</li>
+        </ul>
+
+        <div className="panel-subtitle">Fault Analysis</div>
+        <ul className="trace-chain">
+          {analyzedTag ? <li>Analyzed Tag: {analyzedTag}</li> : null}
+          {inputMessage ? <li>{inputMessage}</li> : null}
+          {loading ? <li>Analyzing fault...</li> : error ? <li>{error}</li> : <li>No fault analysis run yet.</li>}
         </ul>
       </>
     );
@@ -67,6 +88,35 @@ export default function RightDiagnosticsTab({ diagnostics, simulationIssues = []
         <li>Evaluated blocks: {(diagnostics.evaluated_blocks || []).join(", ") || "none"}</li>
         <li>Signal updates: {diagnostics.signal_state_updated ? "yes" : "no"}</li>
       </ul>
+
+      <div className="panel-subtitle" style={{ marginTop: "0.6rem" }}>
+        Fault Analysis{analyzedTag ? ` (${analyzedTag})` : ""}
+      </div>
+      {inputMessage ? <ul className="trace-chain"><li>{inputMessage}</li></ul> : null}
+      {loading ? (
+        <ul className="trace-chain">
+          <li>{analyzedTag ? `Analyzing fault for ${analyzedTag}...` : "Analyzing fault..."}</li>
+        </ul>
+      ) : error ? (
+        <ul className="trace-chain">
+          <li>{error}</li>
+        </ul>
+      ) : !faultAnalysis ? (
+        <ul className="trace-chain">
+          <li>No fault analysis run yet.</li>
+        </ul>
+      ) : (
+        <ul className="trace-chain">
+          <li>Alarm: {faultAnalysis.alarm}</li>
+          {faultAnalysis.loop_id ? <li>Loop ID: {faultAnalysis.loop_id}</li> : null}
+          {faultAnalysis.actuator_tag ? <li>Actuator Tag: {faultAnalysis.actuator_tag}</li> : null}
+          {faultAnalysis.control_strategy ? <li>Control Strategy: {faultAnalysis.control_strategy}</li> : null}
+          <li>Root Cause: {faultAnalysis.root_cause}</li>
+          <li>Confidence: {Number(faultAnalysis.confidence || 0).toFixed(2)}</li>
+          <li>Affected Devices: {(faultAnalysis.affected_devices || []).join(", ") || "none"}</li>
+          <li>Timeline: {(faultAnalysis.timeline || []).length} sample(s)</li>
+        </ul>
+      )}
     </>
   );
 }

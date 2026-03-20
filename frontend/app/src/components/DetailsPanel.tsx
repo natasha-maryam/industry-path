@@ -1,16 +1,25 @@
 import { Suspense, lazy } from "react";
-import type { IOMappingIssue, IOMappingTableRow, RuntimeEvaluationCycle, SimulationTraceIssue, SimulationTracePoint } from "../services/api";
+import type {
+  ControlLoopRecord,
+  FaultAnalysisResult,
+  IOMappingIssue,
+  IOMappingTableRow,
+  RuntimeEvaluationCycle,
+  SimulationTraceIssue,
+  SimulationTracePoint,
+} from "../services/api";
 import type { Equipment } from "./rightTabs/types";
+import type { RightPanelTabId } from "../types/workspace";
 
 const RightDetailsTab = lazy(() => import("./rightTabs/RightDetailsTab"));
 const RightSignalsTab = lazy(() => import("./rightTabs/RightSignalsTab"));
 const RightTraceTab = lazy(() => import("./rightTabs/RightTraceTab"));
 const RightReplayTab = lazy(() => import("./rightTabs/RightReplayTab"));
 const RightIOMappingTab = lazy(() => import("./rightTabs/RightIOMappingTab"));
-const RightVersionsTab = lazy(() => import("./rightTabs/RightVersionsTab"));
+const RightControlLoopsTab = lazy(() => import("./rightTabs/RightControlLoopsTab"));
 const RightDiagnosticsTab = lazy(() => import("./rightTabs/RightDiagnosticsTab"));
 
-export type RightTab = "Details" | "Signals" | "Trace" | "Replay" | "IO Mapping" | "Versions" | "Diagnostics";
+export type RightTab = RightPanelTabId;
 
 type DetailsPanelProps = {
   activeTab: RightTab;
@@ -25,15 +34,31 @@ type DetailsPanelProps = {
   runtimeTelemetryTags?: Record<string, unknown>;
   forcedTagNames?: string[];
   runtimeDiagnostics?: RuntimeEvaluationCycle | null;
+  faultAnalysis?: FaultAnalysisResult | null;
+  faultAnalysisTag?: string | null;
+  faultAnalysisInputMessage?: string | null;
+  faultAnalysisLoading?: boolean;
+  faultAnalysisError?: string | null;
   replayTrace?: SimulationTracePoint[];
   replayIssues?: SimulationTraceIssue[];
+  controlLoops?: ControlLoopRecord[];
+  controlLoopsLoading?: boolean;
+  controlLoopsError?: string | null;
+  selectedControlLoopTag?: string | null;
   onSelectedReplayTagChange?: (tag: string) => void;
   onSelectIOMappingTag?: (tag: string) => void;
+  onSelectControlLoop?: (loop: ControlLoopRecord) => void;
+  onDetectControlLoops?: () => void;
+  onViewControlLoop?: (loop: ControlLoopRecord) => void;
+  onEditControlLoopStrategy?: (loop: ControlLoopRecord) => void;
+  onGenerateControlLoopLogic?: (loop: ControlLoopRecord) => void;
+  onTraceControlLoop?: (loop: ControlLoopRecord) => void;
+  onSimulateControlLoop?: (loop: ControlLoopRecord) => void;
   onReplayPointChange?: (point: number) => void;
   onTabChange: (tab: RightTab) => void;
 };
 
-const TABS: RightTab[] = ["Details", "Signals", "Trace", "Replay", "IO Mapping", "Versions", "Diagnostics"];
+const TABS: RightTab[] = ["Details", "Signals", "Trace", "Replay", "IO Mapping", "Control Loops", "Diagnostics"];
 
 export default function DetailsPanel({
   activeTab,
@@ -48,10 +73,26 @@ export default function DetailsPanel({
   runtimeTelemetryTags = {},
   forcedTagNames = [],
   runtimeDiagnostics = null,
+  faultAnalysis = null,
+  faultAnalysisTag = null,
+  faultAnalysisInputMessage = null,
+  faultAnalysisLoading = false,
+  faultAnalysisError = null,
   replayTrace = [],
   replayIssues = [],
+  controlLoops = [],
+  controlLoopsLoading = false,
+  controlLoopsError = null,
+  selectedControlLoopTag = null,
   onSelectedReplayTagChange,
   onSelectIOMappingTag,
+  onSelectControlLoop,
+  onDetectControlLoops,
+  onViewControlLoop,
+  onEditControlLoopStrategy,
+  onGenerateControlLoopLogic,
+  onTraceControlLoop,
+  onSimulateControlLoop,
   onReplayPointChange,
   onTabChange,
 }: DetailsPanelProps) {
@@ -88,10 +129,34 @@ export default function DetailsPanel({
         />
       );
     }
-    if (activeTab === "Versions") {
-      return <RightVersionsTab />;
+    if (activeTab === "Control Loops") {
+      return (
+        <RightControlLoopsTab
+          loops={controlLoops}
+          loading={controlLoopsLoading}
+          error={controlLoopsError}
+          selectedLoopTag={selectedControlLoopTag}
+          onSelectLoop={(loop) => onSelectControlLoop?.(loop)}
+          onDetectLoops={onDetectControlLoops}
+          onViewLoop={(loop) => onViewControlLoop?.(loop)}
+          onEditStrategy={(loop) => onEditControlLoopStrategy?.(loop)}
+          onGenerateLogic={(loop) => onGenerateControlLoopLogic?.(loop)}
+          onTraceLoop={(loop) => onTraceControlLoop?.(loop)}
+          onSimulate={(loop) => onSimulateControlLoop?.(loop)}
+        />
+      );
     }
-    return <RightDiagnosticsTab diagnostics={runtimeDiagnostics} simulationIssues={replayIssues} />;
+    return (
+      <RightDiagnosticsTab
+        diagnostics={runtimeDiagnostics}
+        simulationIssues={replayIssues}
+        faultAnalysis={faultAnalysis}
+        analyzedTag={faultAnalysisTag}
+        inputMessage={faultAnalysisInputMessage}
+        loading={faultAnalysisLoading}
+        error={faultAnalysisError}
+      />
+    );
   };
 
   return (

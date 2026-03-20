@@ -40,6 +40,7 @@ type BottomPanelsProps = {
   isGeneratingIOMapping?: boolean;
   ioMappingFailedMessage?: string | null;
   runtimeValidationData?: RuntimeValidationPanelData | null;
+  runtimeLoading?: boolean;
   runtimeFailedMessage?: string | null;
   runtimeActionLoading?: boolean;
   simulationValidationData?: SimulationValidationPanelData | null;
@@ -90,6 +91,7 @@ export default function BottomPanels({
   isGeneratingIOMapping = false,
   ioMappingFailedMessage = null,
   runtimeValidationData = null,
+  runtimeLoading = false,
   runtimeFailedMessage = null,
   runtimeActionLoading = false,
   simulationValidationData = null,
@@ -216,6 +218,7 @@ export default function BottomPanels({
         {activeView === "monitoring" && monitoringPanelMode === "runtime" ? (
           <RuntimeValidationPanel
             data={runtimeValidationData}
+            loading={runtimeLoading}
             actionLoading={runtimeActionLoading}
             failedMessage={runtimeFailedMessage}
             onDeploy={onRetryRuntime}

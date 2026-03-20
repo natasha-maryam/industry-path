@@ -3,14 +3,17 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, WebSocket
+from fastapi import APIRouter, HTTPException, Query, WebSocket
 from pydantic import BaseModel
 
+from models.runtime_deployment import RuntimeStateResponse
 from runtime_engine.runtime_manager import runtime_manager
 from runtime_engine.runtime_evaluator import runtime_evaluator
 from runtime_engine.runtime_signal_state import runtime_signal_state
 from runtime_engine.runtime_state_server import runtime_stream
 from runtime_engine.runtime_telemetry import runtime_telemetry
+from services.project_service import project_service
+from services.runtime_deployment_store import runtime_deployment_store
 from services.simulation_service import simulation_service
 
 router = APIRouter(prefix="/runtime", tags=["runtime"])
@@ -46,17 +49,67 @@ def _runtime_project_guard(project_id: str) -> None:
 
 @router.post("/deploy")
 def deploy_runtime(payload: RuntimeDeployRequest) -> dict[str, Any]:
-    return runtime_manager.deploy(payload.project_id)
+    project_service.ensure_project(payload.project_id)
+    result = runtime_manager.deploy(payload.project_id)
+    runtime_deployment_store.upsert_project_deployment(
+        project_id=payload.project_id,
+        target_runtime=str(result.get("target_runtime") or "headless-matiec"),
+        protocol=str(result.get("protocol") or "BEREMIZ"),
+        plc_address=result.get("plc_address"),
+        io_config_json=result.get("io_rows") or [],
+        deploy_status="deployed" if result.get("status") == "passed" else "failed",
+        validation_status=str(result.get("status") or "failed"),
+        deployed_version=result.get("deployed_version"),
+        artifact_path=result.get("artifact_path"),
+        last_error="\n".join(result.get("errors", [])) if result.get("errors") else None,
+    )
+    return result
 
 
 @router.post("/start")
 def start_runtime() -> dict[str, Any]:
-    return runtime_manager.start()
+    result = runtime_manager.start()
+    status = runtime_manager.status()
+    project_id = status.get("project_id")
+    if project_id:
+        current = runtime_deployment_store.get_latest(project_id)
+        if current:
+            runtime_deployment_store.upsert_project_deployment(
+                project_id=project_id,
+                target_runtime=current.target_runtime,
+                protocol=current.protocol,
+                plc_address=current.plc_address,
+                io_config_json=current.io_config_json,
+                deploy_status="running" if result.get("status") == "passed" else current.deploy_status,
+                validation_status=current.validation_status,
+                deployed_version=current.deployed_version,
+                artifact_path=current.artifact_path,
+                last_error=result.get("message") if result.get("status") == "failed" else current.last_error,
+            )
+    return result
 
 
 @router.post("/stop")
 def stop_runtime() -> dict[str, Any]:
-    return runtime_manager.stop()
+    result = runtime_manager.stop()
+    status = runtime_manager.status()
+    project_id = status.get("project_id")
+    if project_id:
+        current = runtime_deployment_store.get_latest(project_id)
+        if current:
+            runtime_deployment_store.upsert_project_deployment(
+                project_id=project_id,
+                target_runtime=current.target_runtime,
+                protocol=current.protocol,
+                plc_address=current.plc_address,
+                io_config_json=current.io_config_json,
+                deploy_status="stopped" if result.get("status") == "passed" else current.deploy_status,
+                validation_status=current.validation_status,
+                deployed_version=current.deployed_version,
+                artifact_path=current.artifact_path,
+                last_error=result.get("message") if result.get("status") == "failed" else current.last_error,
+            )
+    return result
 
 
 @router.post("/restart")
@@ -67,6 +120,45 @@ def restart_runtime() -> dict[str, Any]:
 @router.get("/tags")
 def get_runtime_tags() -> dict[str, Any]:
     return runtime_telemetry.get_all_tags()
+
+
+@router.get("/deployments/latest")
+def get_latest_runtime_deployment(project_id: str = Query(...)) -> dict[str, Any]:
+    project_service.ensure_project(project_id)
+    deployment = runtime_deployment_store.get_latest(project_id)
+    return {
+        "project_id": project_id,
+        "deployment": deployment.model_dump() if deployment else None,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.get("/state", response_model=RuntimeStateResponse)
+def get_runtime_state(project_id: str = Query(...)) -> RuntimeStateResponse:
+    project_service.ensure_project(project_id)
+    deployment = runtime_deployment_store.get_latest(project_id)
+    manager_state = runtime_manager.status()
+    live_runtime = manager_state.get("runtime") if isinstance(manager_state.get("runtime"), dict) else {}
+    active_project = manager_state.get("project_id")
+    live_status = str(live_runtime.get("status") or "stopped")
+
+    # Persisted deployment metadata is engineering state-of-record; live runtime process info is transient and reconciled on each request.
+
+    if active_project == project_id and live_status == "running":
+        runtime_state = "running"
+    elif deployment and deployment.deploy_status == "failed":
+        runtime_state = "failed"
+    elif deployment and deployment.deploy_status in {"deployed", "running", "stopped"}:
+        runtime_state = "stopped"
+    else:
+        runtime_state = "idle"
+
+    return RuntimeStateResponse(
+        project_id=project_id,
+        runtime_state=runtime_state,
+        deployment=deployment,
+        live_runtime=live_runtime,
+    )
 
 
 @router.post("/{project_id}/force-input")

@@ -451,6 +451,68 @@ class PostgresClient:
           ON io_mapping_issues(project_id, version_id);
         """
 
+        create_control_loops_sql = """
+        CREATE TABLE IF NOT EXISTS control_loops (
+          id UUID PRIMARY KEY,
+          project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+          loop_tag VARCHAR NOT NULL,
+          sensor_tag VARCHAR NOT NULL,
+          actuator_tag VARCHAR NOT NULL,
+          process_unit VARCHAR NULL,
+          controller_tag VARCHAR NULL,
+          loop_type VARCHAR NOT NULL,
+          control_strategy VARCHAR NOT NULL,
+          setpoint_tag VARCHAR NULL,
+          output_tag VARCHAR NULL,
+          status VARCHAR NOT NULL,
+          confidence NUMERIC NOT NULL,
+          created_at TIMESTAMP NOT NULL
+        );
+        """
+
+        create_control_loops_project_idx_sql = """
+        CREATE INDEX IF NOT EXISTS idx_control_loops_project_created
+          ON control_loops(project_id, created_at DESC);
+        """
+
+        create_control_loops_tag_idx_sql = """
+        CREATE INDEX IF NOT EXISTS idx_control_loops_tag
+          ON control_loops(loop_tag);
+        """
+
+        create_control_loops_project_loop_unique_sql = """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_control_loops_project_loop_unique
+          ON control_loops(project_id, loop_tag);
+        """
+
+        create_runtime_deployments_sql = """
+        CREATE TABLE IF NOT EXISTS runtime_deployments (
+          id UUID PRIMARY KEY,
+          project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+          target_runtime VARCHAR NOT NULL,
+          protocol VARCHAR NOT NULL,
+          plc_address VARCHAR NULL,
+          io_config_json JSONB DEFAULT '[]'::jsonb,
+          deploy_status VARCHAR NOT NULL,
+          validation_status VARCHAR NOT NULL,
+          deployed_version VARCHAR NULL,
+          artifact_path TEXT NULL,
+          last_error TEXT NULL,
+          started_at TIMESTAMP NOT NULL,
+          updated_at TIMESTAMP NOT NULL
+        );
+        """
+
+        create_runtime_deployments_project_idx_sql = """
+        CREATE INDEX IF NOT EXISTS idx_runtime_deployments_project_updated
+          ON runtime_deployments(project_id, updated_at DESC);
+        """
+
+        create_runtime_deployments_project_unique_sql = """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_deployments_project_unique
+          ON runtime_deployments(project_id);
+        """
+
         with self.connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(create_projects_sql)
@@ -500,6 +562,13 @@ class PostgresClient:
                 cursor.execute(create_io_mapping_versions_active_unique_sql)
                 cursor.execute(create_io_mappings_project_version_idx_sql)
                 cursor.execute(create_io_mapping_issues_project_version_idx_sql)
+                cursor.execute(create_control_loops_sql)
+                cursor.execute(create_control_loops_project_idx_sql)
+                cursor.execute(create_control_loops_tag_idx_sql)
+                cursor.execute(create_control_loops_project_loop_unique_sql)
+                cursor.execute(create_runtime_deployments_sql)
+                cursor.execute(create_runtime_deployments_project_idx_sql)
+                cursor.execute(create_runtime_deployments_project_unique_sql)
 
     def fetch_all(self, sql: str, params: tuple | None = None) -> list[dict]:
         with self.connection() as conn:
