@@ -20,16 +20,26 @@ import GraphWorkspace from "../components/GraphWorkspace";
 import PlantGraphTable from "../components/PlantGraphTable";
 import ProjectNavigator from "../components/ProjectNavigator";
 import type { RuntimeValidationPanelData } from "../components/RuntimeValidationPanel";
-import SnapshotManagerModal, { type SnapshotRecord } from "../components/SnapshotManagerModal";
 import type { STVerificationIssueItem } from "../components/STVerificationPanel";
 import { useWorkspaceContext } from "../context/WorkspaceContext";
+import {
+  createSnapshot,
+  diffVersions,
+  exportVersion,
+  getVersionHistory,
+  rollbackVersion,
+  getVersionById,
+} from "../services/versioningApi";
+import type { VersionDiffResponse, VersionRecord } from "../types/versioning";
 import {
   applySnapshotTrigger,
   applyRuntimeInputForce,
   clearRuntimeInputForce,
   createProject,
+  createPLCExport,
   createInitialPipelineStatuses,
   deleteProject,
+  deployDirectPLC,
   deployRuntimeControl,
   detectControlLoops,
   analyzeFault,
@@ -42,7 +52,9 @@ import {
   getLatestRuntimeDeployment,
   generateLogic,
   generateIOMapping,
+  getActiveProject,
   getLatestIOMapping,
+  getPIDChanges,
   getRuntimeDiagnostics,
   getRuntimeForcedInputs,
   getSimulationAnalysis,
@@ -53,12 +65,15 @@ import {
   getTrace,
   listProjects,
   parseProject,
+  applyPIDUpdate,
   runSimulation,
   runRuntimeEvaluationCycle,
+  setActiveProject,
   startRuntimeControl,
   stopRuntimeControl,
   uploadDocuments,
   verifySTWorkspaceWithRetry,
+  buildExportDownloadUrl,
   type IOMappingIssue,
   type IOMappingSummaryByType,
   type IOMappingTableRow,
@@ -72,9 +87,14 @@ import {
   type SimulationTracePoint,
   type SimulationValidationPanelResponse,
   type ControlLoopRecord,
+  type DirectPLCProtocol,
+  type DirectPLCTargetRuntime,
   type FaultAnalysisResult,
   type STWorkspaceVerificationResponse,
   type PipelineStageStatusMap,
+  type PIDReconcileSummary,
+  type PLCExportResponse,
+  type PLCExportVendor,
   type PlantSignalRow,
   type Project,
 } from "../services/api";
@@ -84,7 +104,7 @@ import { MODULE_DEFAULT_STATE } from "../types/workspace";
 
 type EquipmentType = "Tank" | "Pump" | "Sensor" | "Valve";
 type BottomView = "simulation" | "monitoring" | "logic";
-type CodePanelMode = "control_logic" | "generated_st" | "verification";
+type CodePanelMode = "control_logic" | "generated_st" | "verification" | "version_diff";
 type MonitoringPanelMode = "io_mapping" | "runtime" | "versions";
 
 type ControlLoopModalState = {
@@ -231,6 +251,16 @@ export default function Dashboard() {
 
   const setActiveTab = (tab: RightTab): void => {
     setPanelState((previous) => ({ ...previous, activeRightTab: tab }));
+    if (tab === "Versions") {
+      setMonitoringPanelMode("versions");
+      setActiveBottomView("monitoring");
+      if (selectedProjectId) {
+        void refreshVersionHistory(selectedProjectId);
+      }
+    }
+    if (tab === "P&ID Changes" && selectedProjectId) {
+      void refreshPIDChanges();
+    }
   };
 
   const setActiveBottomView = (view: BottomView): void => {
@@ -269,6 +299,29 @@ export default function Dashboard() {
   const [ioMappingSummary, setIOMappingSummary] = useState<IOMappingSummaryByType | null>(null);
   const [isGeneratingIOMapping, setIsGeneratingIOMapping] = useState<boolean>(false);
   const [isExportingLogic, setIsExportingLogic] = useState<boolean>(false);
+  const [pidChanges, setPIDChanges] = useState<PIDReconcileSummary | null>(null);
+  const [pidChangesLoading, setPIDChangesLoading] = useState<boolean>(false);
+  const [pidChangesError, setPIDChangesError] = useState<string | null>(null);
+  const [pidApplying, setPIDApplying] = useState<boolean>(false);
+  const [pidAcceptedConflicts, setPIDAcceptedConflicts] = useState<boolean>(false);
+  const [pidCreatingSnapshot, setPIDCreatingSnapshot] = useState<boolean>(false);
+  const [showExportDialog, setShowExportDialog] = useState<boolean>(false);
+  const [showDirectPLCDeployDialog, setShowDirectPLCDeployDialog] = useState<boolean>(false);
+  const [exportVendor, setExportVendor] = useState<PLCExportVendor>("siemens");
+  const [exportResult, setExportResult] = useState<PLCExportResponse | null>(null);
+  const [directDeployBusy, setDirectDeployBusy] = useState<boolean>(false);
+  const [directDeployResult, setDirectDeployResult] = useState<string>("");
+  const [directDeployForm, setDirectDeployForm] = useState<{
+    plcAddress: string;
+    protocol: DirectPLCProtocol;
+    targetRuntime: DirectPLCTargetRuntime;
+    ioConfiguration: string;
+  }>({
+    plcAddress: "",
+    protocol: "opc_ua",
+    targetRuntime: "openplc",
+    ioConfiguration: "",
+  });
   const [ioMappingFailedMessage, setIOMappingFailedMessage] = useState<string | null>(null);
   const [pipelineStatuses, setPipelineStatuses] = useState<PipelineStageStatusMap>(() => createInitialPipelineStatuses());
   const [moduleStates, setModuleStates] = useState<Record<WorkspaceModuleId, ModuleState>>(MODULE_DEFAULT_STATE);
@@ -315,7 +368,6 @@ export default function Dashboard() {
   });
   const [showCreateProjectModal, setShowCreateProjectModal] = useState<boolean>(false);
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
-  const [showSnapshotManagerModal, setShowSnapshotManagerModal] = useState<boolean>(false);
   const [controlLoopModal, setControlLoopModal] = useState<ControlLoopModalState>({
     open: false,
     noLoop: false,
@@ -327,13 +379,37 @@ export default function Dashboard() {
     source: "",
     confidence: null,
   });
-  const [snapshotRecords, setSnapshotRecords] = useState<SnapshotRecord[]>([]);
-  const [isLoadingSnapshots, setIsLoadingSnapshots] = useState<boolean>(false);
-  const [snapshotErrorMessage, setSnapshotErrorMessage] = useState<string | null>(null);
-  const [projectForm, setProjectForm] = useState<{ name: string; description: string; status: "draft" | "active" | "archived" }>({
+  const [versions, setVersions] = useState<VersionRecord[]>([]);
+  const [selectedVersion, setSelectedVersion] = useState<VersionRecord | null>(null);
+  const [selectedVersionTags, setSelectedVersionTags] = useState<string[]>([]);
+  const [versionDiff, setVersionDiff] = useState<VersionDiffResponse | null>(null);
+  const [versioningLoading, setVersioningLoading] = useState<boolean>(false);
+  const [versioningError, setVersioningError] = useState<string | null>(null);
+  const [versionBusyAction, setVersionBusyAction] = useState<"snapshot" | "rollback" | "compare" | "export" | null>(null);
+  const [versioningSettings, setVersioningSettings] = useState({
+    enableAutoVersioning: true,
+    autoSnapshotOnDeploy: true,
+    enableDatabaseVersioning: true,
+    maxSnapshotsStored: 100,
+    snapshotRetentionDays: 90,
+    gitRepositoryLocation: "backend-controlled",
+  });
+  const [projectForm, setProjectForm] = useState<{
+    name: string;
+    industry: string;
+    description: string;
+    plcRuntime: "beremiz" | "codesys" | "siemens" | "other";
+    owner: string;
+    status: "draft" | "active" | "archived";
+    importFiles: File[];
+  }>({
     name: "",
+    industry: "Process Manufacturing",
     description: "",
+    plcRuntime: "beremiz",
+    owner: "system",
     status: "draft",
+    importFiles: [],
   });
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const previousPipelineStatusesRef = useRef<PipelineStageStatusMap>(pipelineStatuses);
@@ -526,6 +602,7 @@ export default function Dashboard() {
       detect_control_loops: !selectedProjectId,
       generate_logic: !selectedProjectId,
       generate_io_mapping: !selectedProjectId,
+      export_logic: !selectedProjectId,
       deploy_runtime: !selectedProjectId,
       start_monitoring: !selectedProjectId,
       analyze_fault: !selectedProjectId,
@@ -544,6 +621,9 @@ export default function Dashboard() {
     if (pipelineStatuses.st_generation === "running" && !isExportingLogic) {
       return "generate_logic";
     }
+    if (isExportingLogic) {
+      return "export_logic";
+    }
     if (pipelineStatuses.io_mapping === "running") {
       return "generate_io_mapping";
     }
@@ -553,11 +633,33 @@ export default function Dashboard() {
     if (isRuntimeActionBusy) {
       return "start_monitoring";
     }
-    if (isExportingLogic) {
-      return "replay_event";
-    }
     return null;
   }, [isExportingLogic, isParsing, isRuntimeActionBusy, isUploading, pipelineStatuses.io_mapping, pipelineStatuses.runtime_validation, pipelineStatuses.st_generation]);
+
+  const directPLCFeatureEnabled = useMemo<boolean>(() => {
+    const flag = String(import.meta.env.VITE_DIRECT_PLC_DEPLOYMENT_ENABLED || "false").toLowerCase();
+    return ["1", "true", "yes", "on"].includes(flag);
+  }, []);
+
+  const directPLCSafetyGates = useMemo(
+    () => ({
+      syntax_validation_passed: pipelineStatuses.st_verification === "success",
+      logic_verification_passed: pipelineStatuses.logic_completion === "success",
+      io_validation_passed: pipelineStatuses.io_mapping === "success",
+      simulation_test_passed: pipelineStatuses.simulation_validation === "success",
+    }),
+    [pipelineStatuses.io_mapping, pipelineStatuses.logic_completion, pipelineStatuses.simulation_validation, pipelineStatuses.st_verification]
+  );
+
+  const directPLCCanSubmit = useMemo(
+    () =>
+      directPLCFeatureEnabled &&
+      directPLCSafetyGates.syntax_validation_passed &&
+      directPLCSafetyGates.logic_verification_passed &&
+      directPLCSafetyGates.io_validation_passed &&
+      directPLCSafetyGates.simulation_test_passed,
+    [directPLCFeatureEnabled, directPLCSafetyGates]
+  );
 
   const runSTVerification = async (projectId: string, options: { silent?: boolean } = {}): Promise<void> => {
     setIsVerifyingST(true);
@@ -637,43 +739,176 @@ export default function Dashboard() {
     }
   };
 
-  const loadSnapshots = async (projectId: string | null): Promise<void> => {
-    setIsLoadingSnapshots(true);
-    setSnapshotErrorMessage(null);
-    try {
+  const refreshVersionHistory = useCallback(
+    async (projectId: string | null): Promise<void> => {
       if (!projectId) {
-        setSnapshotRecords([]);
+        setVersions([]);
+        setSelectedVersion(null);
+        setSelectedVersionTags([]);
+        setVersionDiff(null);
         return;
       }
 
-      const now = Date.now();
-      setSnapshotRecords([
-        {
-          id: `${projectId}-snap-1`,
-          name: "Pre-Deploy Snapshot",
-          trigger_source: "deployment",
-          timestamp: new Date(now - 5 * 60 * 1000).toISOString(),
-        },
-        {
-          id: `${projectId}-snap-2`,
-          name: "Post-Simulation Snapshot",
-          trigger_source: "simulation",
-          timestamp: new Date(now - 22 * 60 * 1000).toISOString(),
-        },
-        {
-          id: `${projectId}-snap-3`,
-          name: "Validation Auto Snapshot",
-          trigger_source: "auto_validation",
-          timestamp: new Date(now - 48 * 60 * 1000).toISOString(),
-        },
-      ]);
+      setVersioningLoading(true);
+      setVersioningError(null);
+      try {
+        const history = await getVersionHistory(projectId);
+        setVersions(history);
+        setSelectedVersion((current) => {
+          if (current && history.some((item) => item.version_tag === current.version_tag)) {
+            return history.find((item) => item.version_tag === current.version_tag) || history[0] || null;
+          }
+          return history[0] || null;
+        });
+      } catch {
+        setVersions([]);
+        setSelectedVersion(null);
+        setVersioningError("Version history could not be loaded.");
+      } finally {
+        setVersioningLoading(false);
+      }
+    },
+    []
+  );
+
+  const refreshPIDChanges = useCallback(async (): Promise<void> => {
+    setPIDChangesLoading(true);
+    setPIDChangesError(null);
+    try {
+      const changes = await getPIDChanges();
+      setPIDChanges(changes);
+      setPIDAcceptedConflicts(false);
     } catch {
-      setSnapshotErrorMessage("Snapshot list could not be loaded.");
-      setSnapshotRecords([]);
+      setPIDChanges(null);
+      setPIDChangesError("P&ID changes could not be loaded for the active project.");
     } finally {
-      setIsLoadingSnapshots(false);
+      setPIDChangesLoading(false);
     }
-  };
+  }, []);
+
+  const handleVersionCreateSnapshot = useCallback(async (): Promise<void> => {
+    if (!selectedProjectId) {
+      return;
+    }
+    setVersionBusyAction("snapshot");
+    try {
+      await createSnapshot({
+        project_id: selectedProjectId,
+        trigger_source: "Manual Snapshot",
+        summary: "Manual snapshot requested from Versions workspace.",
+      });
+      toast.success("Snapshot created", { className: "industrial-toast" });
+      await refreshVersionHistory(selectedProjectId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Snapshot creation failed.";
+      toast.error(message, { className: "industrial-toast industrial-toast-error" });
+    } finally {
+      setVersionBusyAction(null);
+    }
+  }, [refreshVersionHistory, selectedProjectId]);
+
+  const handleVersionLoadSnapshot = useCallback(async (version: VersionRecord): Promise<void> => {
+    if (!selectedProjectId) {
+      return;
+    }
+    try {
+      const loaded = await getVersionById(selectedProjectId, version.version_tag);
+      setSelectedVersion(loaded);
+      setMonitoringPanelMode("versions");
+      setActiveBottomView("monitoring");
+      setStatusText(`Loaded snapshot metadata ${loaded.version_tag}.`);
+      toast.success(`Loaded ${loaded.version_tag}`, { className: "industrial-toast" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Load snapshot failed.";
+      toast.error(message, { className: "industrial-toast industrial-toast-error" });
+    }
+  }, [selectedProjectId]);
+
+  const handleVersionRollback = useCallback(async (version: VersionRecord): Promise<void> => {
+    if (!selectedProjectId) {
+      return;
+    }
+    if (!version.rollback_available) {
+      return;
+    }
+
+    const confirmed = window.confirm(`Rollback project to ${version.version_tag}? This creates a new rollback commit event.`);
+    if (!confirmed) {
+      return;
+    }
+
+    setVersionBusyAction("rollback");
+    try {
+      await rollbackVersion({ project_id: selectedProjectId, version_tag: version.version_tag });
+      toast.success(`Rollback completed: ${version.version_tag}`, { className: "industrial-toast" });
+      await refreshVersionHistory(selectedProjectId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Rollback failed.";
+      toast.error(message, { className: "industrial-toast industrial-toast-error" });
+    } finally {
+      setVersionBusyAction(null);
+    }
+  }, [refreshVersionHistory, selectedProjectId]);
+
+  const handleVersionCompare = useCallback(async (): Promise<void> => {
+    if (!selectedProjectId) {
+      return;
+    }
+    if (selectedVersionTags.length !== 2) {
+      toast("Select exactly 2 versions to compare.", { className: "industrial-toast" });
+      return;
+    }
+
+    const [versionA, versionB] = selectedVersionTags;
+    setVersionBusyAction("compare");
+    try {
+      const diff = await diffVersions(selectedProjectId, versionA, versionB);
+      setVersionDiff(diff);
+      setCodePanelMode("version_diff");
+      setActiveBottomView("logic");
+      toast.success(`Compared ${versionA} vs ${versionB}`, { className: "industrial-toast" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Version compare failed.";
+      toast.error(message, { className: "industrial-toast industrial-toast-error" });
+    } finally {
+      setVersionBusyAction(null);
+    }
+  }, [selectedProjectId, selectedVersionTags]);
+
+  const handleVersionExport = useCallback(async (version: VersionRecord): Promise<void> => {
+    if (!selectedProjectId) {
+      return;
+    }
+    setVersionBusyAction("export");
+    try {
+      const blob = await exportVersion(selectedProjectId, version.version_tag);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${selectedProjectId}_${version.version_tag}_metadata.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      toast.success(`Exported ${version.version_tag}`, { className: "industrial-toast" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Export failed.";
+      toast.error(message, { className: "industrial-toast industrial-toast-error" });
+    } finally {
+      setVersionBusyAction(null);
+    }
+  }, [selectedProjectId]);
+
+  const handleVersionToggleCompareSelection = useCallback((versionTag: string): void => {
+    setSelectedVersionTags((current) => {
+      const has = current.includes(versionTag);
+      if (has) {
+        return current.filter((item) => item !== versionTag);
+      }
+      if (current.length >= 2) {
+        return [current[1], versionTag];
+      }
+      return [...current, versionTag];
+    });
+  }, []);
 
   const selectedEquipment = useMemo<Equipment>(() => {
     const node = graphNodes.find((item) => item.id === selectedNode);
@@ -736,12 +971,14 @@ export default function Dashboard() {
   useEffect(() => {
     const initProjects = async (): Promise<void> => {
       try {
-        const projectList = await listProjects();
+        const [projectList, activeProject] = await Promise.all([listProjects(), getActiveProject().catch(() => null)]);
 
         setProjects(projectList);
         if (projectList.length > 0) {
-          setSelectedProjectId(projectList[0].id);
-          setStatusText(`Active project: ${projectList[0].name}`);
+          const activeId = activeProject?.id && projectList.some((item) => item.id === activeProject.id) ? activeProject.id : projectList[0].id;
+          const active = projectList.find((item) => item.id === activeId) ?? projectList[0];
+          setSelectedProjectId(active.id);
+          setStatusText(`Active project: ${active.name}`);
         } else {
           setSelectedProjectId("");
           setStatusText("No projects yet. Click + New to create one.");
@@ -796,6 +1033,14 @@ export default function Dashboard() {
       setControlLoopsError(null);
       setSelectedControlLoopTag(null);
       setSelectedReplayTag("");
+      setVersions([]);
+      setSelectedVersion(null);
+      setSelectedVersionTags([]);
+      setVersionDiff(null);
+      setVersioningError(null);
+      setPIDChanges(null);
+      setPIDChangesError(null);
+      setPIDAcceptedConflicts(false);
       setPipelineStatuses(createInitialPipelineStatuses());
       setShowLogic(false);
       return;
@@ -911,7 +1156,9 @@ export default function Dashboard() {
     void loadLatestSimulationTrace();
     void refreshControlLoops(selectedProjectId);
     void loadPersistedRuntimeState();
-  }, [refreshControlLoops, selectedProjectId]);
+    void refreshVersionHistory(selectedProjectId);
+    void refreshPIDChanges();
+  }, [refreshControlLoops, refreshPIDChanges, refreshVersionHistory, selectedProjectId]);
 
   useEffect(() => {
     if (!selectedProjectId || (activeTab !== "Replay" && activeTab !== "Diagnostics")) {
@@ -1064,6 +1311,7 @@ export default function Dashboard() {
 
         setModuleState("plant_model", { state: "success", message: "Plant model parsed", updatedAt: new Date().toISOString() });
         setStatusText("Plant model parse complete.");
+        await refreshVersionHistory(selectedProjectId);
         toast.success("Parse batch completed", {
           className: "industrial-toast",
           icon: <Cpu size={14} className="toast-icon" />,
@@ -1111,6 +1359,7 @@ export default function Dashboard() {
           setShowLogic(true);
           setCodePanelMode("generated_st");
           setActiveBottomView("logic");
+          await refreshVersionHistory(selectedProjectId);
           if (hasGeneratedCode) {
             setStatusText("ST code generated. Review files in Generated ST panel.");
           } else {
@@ -1141,6 +1390,7 @@ export default function Dashboard() {
           updatePipelineStage("io_mapping", "success");
           setModuleState("io_mapping", { state: "success", message: `Mapped ${mappingResult.total} channels`, updatedAt: new Date().toISOString() });
           setStatusText(`IO mapping generated (${mappingResult.total} channel mappings).`);
+          await refreshVersionHistory(selectedProjectId);
         } catch {
           updatePipelineStage("io_mapping", "failed");
           setIOMappingRows([]);
@@ -1155,21 +1405,16 @@ export default function Dashboard() {
         }
       }
 
+      if (action === "export_logic") {
+        setShowExportDialog(true);
+        setExportResult(null);
+        setStatusText("Select PLC vendor target to export active project logic.");
+      }
+
       if (action === "deploy_runtime") {
-        setModuleState("runtime", { state: "running", message: "Deploying runtime", updatedAt: new Date().toISOString() });
-        setMonitoringPanelMode("runtime");
-        setActiveBottomView("monitoring");
-        setActiveModule("runtime");
-        setStatusText("Deploying project runtime...");
-        const result = await deployRuntimeControl({ project_id: selectedProjectId });
-        const panelData = mapRuntimeControlResult(result, runtimeTelemetryTags);
-        setRuntimeValidationData(panelData);
-        const failedChecks = panelData.checks_failed > 0 || panelData.overall_status === "failed";
-        setModuleState("runtime", {
-          state: failedChecks ? "failed" : "success",
-          message: failedChecks ? "Runtime deployment failed" : "Runtime deployed",
-          updatedAt: new Date().toISOString(),
-        });
+        setShowDirectPLCDeployDialog(true);
+        setDirectDeployResult("");
+        setStatusText("Configure Deploy PLC request and pass all safety gates before submitting.");
       }
 
       if (action === "start_monitoring") {
@@ -1246,6 +1491,7 @@ export default function Dashboard() {
         detect_control_loops: "control_loops",
         generate_logic: "control_logic",
         generate_io_mapping: "io_mapping",
+        export_logic: "control_logic",
         deploy_runtime: "runtime",
         start_monitoring: "monitoring",
         analyze_fault: "diagnostics",
@@ -1278,6 +1524,112 @@ export default function Dashboard() {
     }
   };
 
+  const handleGeneratePLCExport = async (): Promise<void> => {
+    if (!selectedProjectId) {
+      return;
+    }
+    setIsExportingLogic(true);
+    setExportResult(null);
+    try {
+      const result = await createPLCExport(selectedProjectId, exportVendor);
+      setExportResult(result);
+      setStatusText(`Export created for ${result.project_name} (${result.vendor}).`);
+      toast.success(`Export ready: ${result.vendor}`, { className: "industrial-toast" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Export failed";
+      setStatusText("PLC export generation failed.");
+      toast.error(message, { className: "industrial-toast industrial-toast-error" });
+    } finally {
+      setIsExportingLogic(false);
+    }
+  };
+
+  const handlePIDReviewConflicts = (): void => {
+    const count = pidChanges?.possible_conflicts.length ?? 0;
+    setStatusText(count > 0 ? `Review ${count} possible tag conflicts before apply.` : "No conflicts detected.");
+  };
+
+  const handlePIDApplyUpdate = async (): Promise<void> => {
+    setPIDApplying(true);
+    try {
+      await applyPIDUpdate({ allow_conflicts: pidAcceptedConflicts });
+      if (selectedProjectId) {
+        try {
+          const graph = await getGraph(selectedProjectId);
+          setPlantGraph({ nodes: graph.nodes, edges: graph.edges });
+        } catch {
+          // graph refresh best-effort
+        }
+        await refreshVersionHistory(selectedProjectId);
+      }
+      await refreshPIDChanges();
+      setStatusText("P&ID reconciliation update applied.");
+      toast.success("P&ID update applied", { className: "industrial-toast" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "P&ID apply failed";
+      setStatusText("P&ID reconciliation apply failed.");
+      toast.error(message, { className: "industrial-toast industrial-toast-error" });
+    } finally {
+      setPIDApplying(false);
+    }
+  };
+
+  const handlePIDCreateSnapshot = async (): Promise<void> => {
+    if (!selectedProjectId) {
+      return;
+    }
+    setPIDCreatingSnapshot(true);
+    try {
+      await createSnapshot({
+        project_id: selectedProjectId,
+        trigger_source: "P&ID Reconciliation",
+        summary: "Manual snapshot after P&ID reconciliation review.",
+      });
+      await refreshVersionHistory(selectedProjectId);
+      toast.success("Version snapshot created", { className: "industrial-toast" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Snapshot creation failed";
+      toast.error(message, { className: "industrial-toast industrial-toast-error" });
+    } finally {
+      setPIDCreatingSnapshot(false);
+    }
+  };
+
+  const handleDirectPLCDeploy = async (): Promise<void> => {
+    if (!selectedProjectId) {
+      return;
+    }
+
+    setDirectDeployBusy(true);
+    setDirectDeployResult("");
+    try {
+      const response = await deployDirectPLC({
+        project_id: selectedProjectId,
+        connection: {
+          plc_address: directDeployForm.plcAddress,
+          protocol: directDeployForm.protocol,
+          target_runtime: directDeployForm.targetRuntime,
+          io_configuration: directDeployForm.ioConfiguration,
+        },
+        safety: directPLCSafetyGates,
+      });
+      setDirectDeployResult(response.message);
+      if (response.status === "accepted") {
+        toast.success("Direct PLC deployment scaffold accepted", { className: "industrial-toast" });
+      } else if (response.status === "blocked") {
+        toast("Direct PLC deployment blocked by safety gates", { className: "industrial-toast" });
+      } else {
+        toast("Direct PLC deployment scaffold is disabled", { className: "industrial-toast" });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Direct PLC deployment request failed";
+      setDirectDeployResult(message);
+      toast.error(message, { className: "industrial-toast industrial-toast-error" });
+    } finally {
+      setDirectDeployBusy(false);
+    }
+  };
+
   const handleCreateProject = async (): Promise<void> => {
     if (!projectForm.name.trim()) {
       setStatusText("Project name is required.");
@@ -1287,13 +1639,48 @@ export default function Dashboard() {
     try {
       const created = await createProject({
         name: projectForm.name.trim(),
+        industry: projectForm.industry.trim() || "general",
         description: projectForm.description.trim() || undefined,
+        plc_runtime: projectForm.plcRuntime,
+        owner: projectForm.owner.trim() || "system",
         status: projectForm.status,
+        active_version: 1,
       });
+      await setActiveProject(created.id);
+
+      if (projectForm.importFiles.length > 0) {
+        const inferredTypes = projectForm.importFiles.map((file) => {
+          const lowered = file.name.toLowerCase();
+          if (
+            lowered.includes("pid") ||
+            lowered.includes("p&id") ||
+            lowered.includes("p_and_i") ||
+            lowered.includes("p and i") ||
+            lowered.includes("p_i_d") ||
+            lowered.includes("p-i-d")
+          ) {
+            return "pid_pdf" as const;
+          }
+          if (lowered.includes("narrative") || lowered.includes("control")) {
+            return "control_narrative" as const;
+          }
+          return "unknown_document" as const;
+        });
+        await uploadDocuments(created.id, projectForm.importFiles, inferredTypes);
+      }
+
       setProjects((value) => [...value, created]);
       setSelectedProjectId(created.id);
       setShowCreateProjectModal(false);
-      setProjectForm({ name: "", description: "", status: "draft" });
+      setProjectForm({
+        name: "",
+        industry: "Process Manufacturing",
+        description: "",
+        plcRuntime: "beremiz",
+        owner: "system",
+        status: "draft",
+        importFiles: [],
+      });
       setStatusText(`Created project: ${created.name}`);
       toast.success(`Project created: ${created.name}`, {
         className: "industrial-toast",
@@ -1337,6 +1724,9 @@ export default function Dashboard() {
 
       if (selectedProjectId === projectToDelete.id) {
         const nextProjectId = updated[0]?.id ?? "";
+        if (nextProjectId) {
+          await setActiveProject(nextProjectId).catch(() => null);
+        }
         setSelectedProjectId(nextProjectId);
       }
 
@@ -1772,6 +2162,9 @@ export default function Dashboard() {
       await Promise.all([refreshRuntimeForceState(), refreshRuntimeDiagnostics()]);
       const failedChecks = panelData.checks_failed > 0 || panelData.overall_status === "failed";
       updatePipelineStage("runtime_validation", failedChecks ? "failed" : "success");
+      if (!failedChecks) {
+        await refreshVersionHistory(selectedProjectId);
+      }
       setStatusText(failedChecks ? "Runtime deployment failed. Review runtime step diagnostics." : "Runtime deployment passed. Runtime is active.");
     } catch {
       updatePipelineStage("runtime_validation", "failed");
@@ -1955,6 +2348,7 @@ export default function Dashboard() {
     try {
       await runSimulation(selectedProjectId);
       await refreshSimulationTraceData(selectedProjectId);
+      await refreshVersionHistory(selectedProjectId);
       setActiveTab("Replay");
       setActiveBottomView("simulation");
       setStatusText("Simulation completed for selected loop context.");
@@ -2001,41 +2395,6 @@ export default function Dashboard() {
         <strong>{currentProject ? `${currentProject.name} (${currentProject.id})` : "No project selected"}</strong>
       </div>
 
-      <SnapshotManagerModal
-        open={showSnapshotManagerModal}
-        snapshots={snapshotRecords}
-        loading={isLoadingSnapshots}
-        errorMessage={snapshotErrorMessage}
-        onClose={() => setShowSnapshotManagerModal(false)}
-        onRetry={() => {
-          void loadSnapshots(selectedProjectId || null);
-        }}
-        onLoadSnapshot={(snapshot) => {
-          setStatusText(`Loaded snapshot: ${snapshot.name}`);
-          toast.success(`Loaded snapshot ${snapshot.name}`, {
-            className: "industrial-toast",
-          });
-        }}
-        onRollback={(snapshot) => {
-          setStatusText(`Rollback prepared from ${snapshot.name}`);
-          toast.success(`Rollback prepared: ${snapshot.name}`, {
-            className: "industrial-toast",
-          });
-        }}
-        onCompare={(snapshot) => {
-          setStatusText(`Compare opened for ${snapshot.name}`);
-          toast.success(`Compare opened: ${snapshot.name}`, {
-            className: "industrial-toast",
-          });
-        }}
-        onExport={(snapshot) => {
-          setStatusText(`Export started for ${snapshot.name}`);
-          toast.success(`Export started: ${snapshot.name}`, {
-            className: "industrial-toast",
-          });
-        }}
-      />
-
       {showCreateProjectModal ? (
         <div className="modal-backdrop" onClick={() => setShowCreateProjectModal(false)}>
           <div className="modal-card" onClick={(event) => event.stopPropagation()}>
@@ -2052,7 +2411,18 @@ export default function Dashboard() {
             />
 
             <label className="modal-label" htmlFor="project-description">
-              Description
+              Industry Type
+            </label>
+            <input
+              id="project-industry"
+              className="modal-input"
+              placeholder="Oil & Gas"
+              value={projectForm.industry}
+              onChange={(event) => setProjectForm((value) => ({ ...value, industry: event.target.value }))}
+            />
+
+            <label className="modal-label" htmlFor="project-description">
+              Plant Description
             </label>
             <textarea
               id="project-description"
@@ -2060,6 +2430,51 @@ export default function Dashboard() {
               placeholder="Optional project description"
               value={projectForm.description}
               onChange={(event) => setProjectForm((value) => ({ ...value, description: event.target.value }))}
+            />
+
+            <label className="modal-label" htmlFor="project-files">
+              Import Documents
+            </label>
+            <input
+              id="project-files"
+              className="modal-input"
+              type="file"
+              multiple
+              onChange={(event) => {
+                const files = event.target.files ? Array.from(event.target.files) : [];
+                setProjectForm((value) => ({ ...value, importFiles: files }));
+              }}
+            />
+
+            <label className="modal-label" htmlFor="project-runtime">
+              Select PLC Runtime
+            </label>
+            <select
+              id="project-runtime"
+              className="modal-input"
+              value={projectForm.plcRuntime}
+              onChange={(event) =>
+                setProjectForm((value) => ({
+                  ...value,
+                  plcRuntime: event.target.value as "beremiz" | "codesys" | "siemens" | "other",
+                }))
+              }
+            >
+              <option value="beremiz">Beremiz</option>
+              <option value="codesys">CODESYS</option>
+              <option value="siemens">Siemens S7</option>
+              <option value="other">Other</option>
+            </select>
+
+            <label className="modal-label" htmlFor="project-owner">
+              Project Owner
+            </label>
+            <input
+              id="project-owner"
+              className="modal-input"
+              placeholder="system"
+              value={projectForm.owner}
+              onChange={(event) => setProjectForm((value) => ({ ...value, owner: event.target.value }))}
             />
 
             <label className="modal-label" htmlFor="project-status">
@@ -2093,6 +2508,149 @@ export default function Dashboard() {
                 type="button"
               >
                 Create
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showExportDialog ? (
+        <div className="modal-backdrop" onClick={() => setShowExportDialog(false)}>
+          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+            <h3>Export Logic</h3>
+            <label className="modal-label" htmlFor="export-vendor">Target Vendor</label>
+            <select
+              id="export-vendor"
+              className="modal-input"
+              value={exportVendor}
+              onChange={(event) => setExportVendor(event.target.value as PLCExportVendor)}
+            >
+              <option value="siemens">Siemens TIA Portal</option>
+              <option value="rockwell">Rockwell Studio 5000</option>
+              <option value="codesys">Codesys</option>
+              <option value="beckhoff">TwinCAT</option>
+              <option value="openplc">OpenPLC</option>
+            </select>
+
+            {exportResult ? (
+              <div className="monitor-frame" style={{ marginTop: "0.6rem" }}>
+                <div>Export ID: <span className="value-mono">{exportResult.export_id}</span></div>
+                <div>Vendor: {exportResult.vendor}</div>
+                <div>Artifact: {exportResult.artifact_name || "Generated package"}</div>
+                <div>Generated: {new Date(exportResult.generated_at).toLocaleString()}</div>
+                <button
+                  className="command-btn primary"
+                  type="button"
+                  onClick={() => {
+                    window.open(buildExportDownloadUrl(exportResult.export_id), "_blank", "noopener,noreferrer");
+                  }}
+                >
+                  Download Export Package
+                </button>
+              </div>
+            ) : null}
+
+            <div className="modal-actions">
+              <button className="command-btn" onClick={() => setShowExportDialog(false)} type="button">
+                Close
+              </button>
+              <button className="command-btn primary" onClick={() => { void handleGeneratePLCExport(); }} type="button" disabled={isExportingLogic}>
+                {isExportingLogic ? "Generating..." : "Generate Export"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showDirectPLCDeployDialog ? (
+        <div className="modal-backdrop" onClick={() => setShowDirectPLCDeployDialog(false)}>
+          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+            <h3>Deploy PLC</h3>
+            <p className="modal-help-text">
+              Direct PLC Deployment Layer scaffold is feature-flagged and disabled by default.
+            </p>
+
+            <label className="modal-label" htmlFor="direct-plc-address">PLC Address</label>
+            <input
+              id="direct-plc-address"
+              className="modal-input"
+              placeholder="192.168.1.100"
+              value={directDeployForm.plcAddress}
+              onChange={(event) => setDirectDeployForm((value) => ({ ...value, plcAddress: event.target.value }))}
+            />
+
+            <label className="modal-label" htmlFor="direct-plc-protocol">Protocol</label>
+            <select
+              id="direct-plc-protocol"
+              className="modal-input"
+              value={directDeployForm.protocol}
+              onChange={(event) =>
+                setDirectDeployForm((value) => ({
+                  ...value,
+                  protocol: event.target.value as DirectPLCProtocol,
+                }))
+              }
+            >
+              <option value="opc_ua">OPC UA</option>
+              <option value="modbus_tcp">Modbus TCP</option>
+              <option value="ethernet_ip">EtherNet/IP</option>
+              <option value="profinet">Profinet</option>
+              <option value="mqtt_industrial">MQTT Industrial</option>
+            </select>
+
+            <label className="modal-label" htmlFor="direct-plc-runtime">Target Runtime</label>
+            <select
+              id="direct-plc-runtime"
+              className="modal-input"
+              value={directDeployForm.targetRuntime}
+              onChange={(event) =>
+                setDirectDeployForm((value) => ({
+                  ...value,
+                  targetRuntime: event.target.value as DirectPLCTargetRuntime,
+                }))
+              }
+            >
+              <option value="openplc">OpenPLC</option>
+              <option value="beremiz">Beremiz</option>
+              <option value="codesys">Codesys</option>
+              <option value="siemens_s7">Siemens S7</option>
+              <option value="beckhoff_twincat">Beckhoff TwinCAT</option>
+              <option value="custom">Custom</option>
+            </select>
+
+            <label className="modal-label" htmlFor="direct-plc-io-config">IO Configuration</label>
+            <textarea
+              id="direct-plc-io-config"
+              className="modal-textarea"
+              rows={4}
+              placeholder='{"mapping": []}'
+              value={directDeployForm.ioConfiguration}
+              onChange={(event) => setDirectDeployForm((value) => ({ ...value, ioConfiguration: event.target.value }))}
+            />
+
+            <div className="monitor-frame" style={{ marginTop: "0.5rem" }}>
+              <div>Syntax Validation: {directPLCSafetyGates.syntax_validation_passed ? "Passed" : "Required"}</div>
+              <div>Logic Verification: {directPLCSafetyGates.logic_verification_passed ? "Passed" : "Required"}</div>
+              <div>IO Validation: {directPLCSafetyGates.io_validation_passed ? "Passed" : "Required"}</div>
+              <div>Simulation Test: {directPLCSafetyGates.simulation_test_passed ? "Passed" : "Required"}</div>
+              <div>Feature Flag: {directPLCFeatureEnabled ? "Enabled" : "Disabled"}</div>
+            </div>
+
+            {directDeployResult ? <p className="modal-help-text">{directDeployResult}</p> : null}
+
+            <div className="modal-actions">
+              <button className="command-btn" onClick={() => setShowDirectPLCDeployDialog(false)} type="button">
+                Close
+              </button>
+              <button
+                className="command-btn primary"
+                type="button"
+                disabled={directDeployBusy || !directPLCCanSubmit || !directDeployForm.plcAddress.trim()}
+                onClick={() => {
+                  void handleDirectPLCDeploy();
+                }}
+              >
+                {directDeployBusy ? "Submitting..." : "Deploy PLC"}
               </button>
             </div>
           </div>
@@ -2251,7 +2809,13 @@ export default function Dashboard() {
                         const target = projects.find((project) => project.id === projectId) ?? null;
                         setProjectToDelete(target);
                       }}
-                      onSelectProject={setSelectedProjectId}
+                      onSelectProject={(projectId) => {
+                        void setActiveProject(projectId)
+                          .catch(() => null)
+                          .finally(() => {
+                            setSelectedProjectId(projectId);
+                          });
+                      }}
                       selectedNode={selectedNode}
                       onSelectNode={setSelectedNode}
                       activeModule={panelState.activeModule}
@@ -2403,6 +2967,25 @@ export default function Dashboard() {
                     onSimulateControlLoop={(loop) => {
                       void handleControlLoopSimulate(loop);
                     }}
+                    onOpenVersionsWorkspace={() => {
+                      setMonitoringPanelMode("versions");
+                      setActiveBottomView("monitoring");
+                      setActiveTab("Versions");
+                    }}
+                    pidChanges={pidChanges}
+                    pidChangesLoading={pidChangesLoading}
+                    pidChangesError={pidChangesError}
+                    pidApplying={pidApplying}
+                    pidSnapshotCreating={pidCreatingSnapshot}
+                    pidAcceptedConflicts={pidAcceptedConflicts}
+                    onPIDAcceptChanges={() => setPIDAcceptedConflicts((value) => !value)}
+                    onPIDReviewConflicts={handlePIDReviewConflicts}
+                    onPIDApplyUpdate={() => {
+                      void handlePIDApplyUpdate();
+                    }}
+                    onPIDCreateSnapshot={() => {
+                      void handlePIDCreateSnapshot();
+                    }}
                     onTabChange={setActiveTab}
                   />
                 ) : null}
@@ -2485,6 +3068,34 @@ export default function Dashboard() {
               onRetrySimulation={() => {
                 void handleToolbarAction("replay_event");
               }}
+              versions={versions}
+              selectedVersion={selectedVersion}
+              selectedVersionTags={selectedVersionTags}
+              versionDiff={versionDiff}
+              versionsLoading={versioningLoading}
+              versionsError={versioningError}
+              versionBusyAction={versionBusyAction}
+              versionSettings={versioningSettings}
+              onVersionSelect={(version) => {
+                setSelectedVersion(version);
+              }}
+              onVersionToggleCompareSelection={handleVersionToggleCompareSelection}
+              onVersionCreateSnapshot={() => {
+                void handleVersionCreateSnapshot();
+              }}
+              onVersionLoadSnapshot={(version) => {
+                void handleVersionLoadSnapshot(version);
+              }}
+              onVersionRollback={(version) => {
+                void handleVersionRollback(version);
+              }}
+              onVersionCompare={() => {
+                void handleVersionCompare();
+              }}
+              onVersionExport={(version) => {
+                void handleVersionExport(version);
+              }}
+              onVersionSettingsChange={setVersioningSettings}
               showControlLogic={showLogic}
               isGeneratingST={pipelineStatuses.st_generation === "running" && activeAction === "generate_logic"}
               isGenerating={pipelineStatuses.logic_completion === "running"}

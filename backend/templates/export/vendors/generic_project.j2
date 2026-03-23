@@ -1,0 +1,12 @@
+Vendor: {{ vendor }}
+Project: {{ project.name }}
+Industry: {{ project.industry }}
+Owner: {{ project.owner }}
+Files: {{ summary.file_count }}
+Lines: {{ summary.total_lines }}
+Units: {{ summary.unit_count }}
+
+Units:
+{% for unit in units -%}
+- {{ unit.name }} ({{ unit.kind }})
+{% endfor %}

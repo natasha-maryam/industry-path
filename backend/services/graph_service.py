@@ -6,6 +6,7 @@ from db.neo4j import neo4j_client
 from models.graph import GraphEdge, GraphNode, PlantGraph, PlantSignalRow, TraceResponse
 from services.project_service import project_service
 from services.signal_classification import classification_confidence, normalize_tag, process_role_from_node, signal_type_from_tag
+from services.versioning_trigger_service import versioning_trigger_service
 
 
 class GraphService:
@@ -43,6 +44,12 @@ class GraphService:
         except Exception:
             # Fallback cache remains available when Neo4j is offline.
             pass
+
+        versioning_trigger_service.trigger_auto_commit(
+            project_id=project_id,
+            trigger_source="Plant Graph Updated",
+            summary=f"Plant graph validated and persisted (nodes={len(node_models)}, edges={len(edge_models)}).",
+        )
 
         return PlantGraph(project_id=project_id, nodes=node_models, edges=edge_models)
 
