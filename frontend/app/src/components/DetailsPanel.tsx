@@ -7,7 +7,6 @@ import type {
   RuntimeEvaluationCycle,
   SimulationTraceIssue,
   SimulationTracePoint,
-  PIDReconcileSummary,
 } from "../services/api";
 import type { Equipment } from "./rightTabs/types";
 import type { RightPanelTabId } from "../types/workspace";
@@ -19,8 +18,6 @@ const RightReplayTab = lazy(() => import("./rightTabs/RightReplayTab"));
 const RightIOMappingTab = lazy(() => import("./rightTabs/RightIOMappingTab"));
 const RightControlLoopsTab = lazy(() => import("./rightTabs/RightControlLoopsTab"));
 const RightDiagnosticsTab = lazy(() => import("./rightTabs/RightDiagnosticsTab"));
-const RightVersionsTab = lazy(() => import("./rightTabs/RightVersionsTab"));
-const RightPIDChangesTab = lazy(() => import("./rightTabs/RightPIDChangesTab"));
 
 export type RightTab = RightPanelTabId;
 
@@ -58,21 +55,10 @@ type DetailsPanelProps = {
   onTraceControlLoop?: (loop: ControlLoopRecord) => void;
   onSimulateControlLoop?: (loop: ControlLoopRecord) => void;
   onReplayPointChange?: (point: number) => void;
-  onOpenVersionsWorkspace?: () => void;
-  pidChanges?: PIDReconcileSummary | null;
-  pidChangesLoading?: boolean;
-  pidChangesError?: string | null;
-  pidApplying?: boolean;
-  pidSnapshotCreating?: boolean;
-  pidAcceptedConflicts?: boolean;
-  onPIDAcceptChanges?: () => void;
-  onPIDReviewConflicts?: () => void;
-  onPIDApplyUpdate?: () => void;
-  onPIDCreateSnapshot?: () => void;
   onTabChange: (tab: RightTab) => void;
 };
 
-const TABS: RightTab[] = ["Details", "Signals", "Trace", "Replay", "IO Mapping", "Control Loops", "Diagnostics", "Versions", "P&ID Changes"];
+const TABS: RightTab[] = ["Details", "Signals", "Trace", "Replay", "IO Mapping", "Control Loops", "Diagnostics"];
 
 export default function DetailsPanel({
   activeTab,
@@ -108,17 +94,6 @@ export default function DetailsPanel({
   onTraceControlLoop,
   onSimulateControlLoop,
   onReplayPointChange,
-  onOpenVersionsWorkspace,
-  pidChanges = null,
-  pidChangesLoading = false,
-  pidChangesError = null,
-  pidApplying = false,
-  pidSnapshotCreating = false,
-  pidAcceptedConflicts = false,
-  onPIDAcceptChanges,
-  onPIDReviewConflicts,
-  onPIDApplyUpdate,
-  onPIDCreateSnapshot,
   onTabChange,
 }: DetailsPanelProps) {
   const renderActiveTab = () => {
@@ -168,25 +143,6 @@ export default function DetailsPanel({
           onGenerateLogic={(loop) => onGenerateControlLoopLogic?.(loop)}
           onTraceLoop={(loop) => onTraceControlLoop?.(loop)}
           onSimulate={(loop) => onSimulateControlLoop?.(loop)}
-        />
-      );
-    }
-    if (activeTab === "Versions") {
-      return <RightVersionsTab onOpenVersionsWorkspace={onOpenVersionsWorkspace} />;
-    }
-    if (activeTab === "P&ID Changes") {
-      return (
-        <RightPIDChangesTab
-          changes={pidChanges}
-          loading={pidChangesLoading}
-          error={pidChangesError}
-          applying={pidApplying}
-          creatingSnapshot={pidSnapshotCreating}
-          acceptedConflicts={pidAcceptedConflicts}
-          onAcceptChanges={() => onPIDAcceptChanges?.()}
-          onReviewConflicts={() => onPIDReviewConflicts?.()}
-          onApplyUpdate={() => onPIDApplyUpdate?.()}
-          onCreateSnapshot={() => onPIDCreateSnapshot?.()}
         />
       );
     }

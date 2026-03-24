@@ -8,31 +8,9 @@ from services.project_service import project_service
 
 
 class UploadService:
-    _ALLOWED_DOCUMENT_TYPES = {
-        "pid_pdf",
-        "control_narrative",
-        "unknown_document",
-        "plc_project_file",
-        "logic_export",
-        "tag_list",
-        "io_table",
-    }
-
     @staticmethod
     def _infer_document_type(file_name: str) -> str:
         normalized = file_name.lower()
-        if normalized.endswith((".l5x", ".acd", ".xml", ".ap16", ".project", ".tsproj")) or any(
-            token in normalized for token in ("plc", "project", "codesys", "siemens", "rockwell", "beckhoff")
-        ):
-            return "plc_project_file"
-        if normalized.endswith((".st", ".awl", ".scl")) or any(
-            token in normalized for token in ("logic", "routine", "program", "export")
-        ):
-            return "logic_export"
-        if normalized.endswith((".csv", ".txt")) and any(token in normalized for token in ("tag", "symbol", "variable")):
-            return "tag_list"
-        if normalized.endswith((".csv", ".xlsx", ".xls")) and any(token in normalized for token in ("io", "i_o", "channel", "terminal")):
-            return "io_table"
         if any(token in normalized for token in ("p&id", "pid", "p_and_i", "p and i", "p_i_d", "p-i-d")):
             return "pid_pdf"
         if any(token in normalized for token in ("control narrative", "narrative", "control")):
@@ -56,14 +34,14 @@ class UploadService:
             file_index = len(records)
             original_name = upload.filename or f"upload_{uuid4().hex[:8]}.bin"
             safe_name = f"{uuid4().hex}_{original_name}"
-            destination = paths.documents / safe_name
+            destination = paths.uploads / safe_name
             content = await upload.read()
             destination.write_bytes(content)
-            relative_path = f"storage/projects/{project_id}/documents/{safe_name}"
+            relative_path = f"storage/projects/{project_id}/uploads/{safe_name}"
 
             provided_type = document_types[file_index].strip() if document_types else ""
             document_type = provided_type or self._infer_document_type(original_name)
-            if document_type not in self._ALLOWED_DOCUMENT_TYPES:
+            if document_type not in {"pid_pdf", "control_narrative", "unknown_document"}:
                 document_type = "unknown_document"
 
             record = ProjectFile(

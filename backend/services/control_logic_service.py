@@ -34,7 +34,6 @@ from services.st_generator import st_generator
 from services.st_renderer_service import st_renderer_service
 from services.st_validator import st_validator
 from services.version_manager import version_manager
-from services.versioning_trigger_service import versioning_trigger_service
 from services.virtual_commissioning import virtual_commissioning_service
 
 
@@ -1618,12 +1617,6 @@ class ControlLogicService:
         self._store_rules(project_id, run_id, project_version, rules, warnings, [], st_preview)
         final_rendered_rules, symbolic_rendered_rules = self._split_rendered_rules(rules)
 
-        versioning_trigger_service.trigger_auto_commit(
-            project_id=project_id,
-            trigger_source="Control Logic Generated",
-            summary=f"Generated deterministic ST and artifacts for project version {project_version}.",
-        )
-
         self.logger.info(
             "Control logic generation pipeline: project=%s loops=%s rules=%s",
             project_id,
@@ -1892,14 +1885,7 @@ class ControlLogicService:
 
     def run_virtual_commissioning(self, project_id: str):
         project_service.ensure_project(project_id)
-        result = virtual_commissioning_service.run(project_id)
-        if result.overall_status == "pass":
-            versioning_trigger_service.trigger_auto_commit(
-                project_id=project_id,
-                trigger_source="Simulation Validation Passed",
-                summary="Virtual commissioning simulation validation passed.",
-            )
-        return result
+        return virtual_commissioning_service.run(project_id)
 
     def create_version_snapshot(self, project_id: str):
         project_service.ensure_project(project_id)

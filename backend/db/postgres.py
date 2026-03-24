@@ -48,35 +48,11 @@ class PostgresClient:
         CREATE TABLE IF NOT EXISTS projects (
           id UUID PRIMARY KEY,
           name VARCHAR NOT NULL,
-          industry VARCHAR DEFAULT 'general',
           description TEXT NULL,
-          plc_runtime VARCHAR DEFAULT 'beremiz',
-          owner VARCHAR DEFAULT 'system',
           status VARCHAR DEFAULT 'draft',
-          active_version INTEGER DEFAULT 1,
           created_at TIMESTAMP,
           updated_at TIMESTAMP
         );
-        """
-
-        alter_projects_plc_runtime_sql = """
-        ALTER TABLE projects
-        ADD COLUMN IF NOT EXISTS plc_runtime VARCHAR DEFAULT 'beremiz';
-        """
-
-        alter_projects_industry_sql = """
-        ALTER TABLE projects
-        ADD COLUMN IF NOT EXISTS industry VARCHAR DEFAULT 'general';
-        """
-
-        alter_projects_owner_sql = """
-        ALTER TABLE projects
-        ADD COLUMN IF NOT EXISTS owner VARCHAR DEFAULT 'system';
-        """
-
-        alter_projects_active_version_sql = """
-        ALTER TABLE projects
-        ADD COLUMN IF NOT EXISTS active_version INTEGER DEFAULT 1;
         """
 
         create_files_sql = """
@@ -537,39 +513,9 @@ class PostgresClient:
           ON runtime_deployments(project_id);
         """
 
-        create_version_records_sql = """
-        CREATE TABLE IF NOT EXISTS version_records (
-          id UUID PRIMARY KEY,
-          project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
-          version_tag VARCHAR NOT NULL,
-          commit_hash VARCHAR NOT NULL,
-          trigger_source VARCHAR NOT NULL,
-          summary TEXT DEFAULT '',
-          plant_graph_path TEXT NULL,
-          logic_path TEXT NULL,
-          io_mapping_path TEXT NULL,
-          simulation_results_path TEXT NULL,
-          runtime_state_path TEXT NULL,
-          created_at TIMESTAMP NOT NULL,
-          created_by VARCHAR DEFAULT 'system',
-          deployment_tag VARCHAR NULL,
-          rollback_available BOOLEAN DEFAULT TRUE,
-          UNIQUE (project_id, version_tag)
-        );
-        """
-
-        create_version_records_project_idx_sql = """
-        CREATE INDEX IF NOT EXISTS idx_version_records_project_created
-          ON version_records(project_id, created_at DESC);
-        """
-
         with self.connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(create_projects_sql)
-                cursor.execute(alter_projects_industry_sql)
-                cursor.execute(alter_projects_plc_runtime_sql)
-                cursor.execute(alter_projects_owner_sql)
-                cursor.execute(alter_projects_active_version_sql)
                 cursor.execute(create_files_sql)
                 cursor.execute(create_parse_jobs_sql)
                 cursor.execute(alter_project_files_document_type_sql)
@@ -623,8 +569,6 @@ class PostgresClient:
                 cursor.execute(create_runtime_deployments_sql)
                 cursor.execute(create_runtime_deployments_project_idx_sql)
                 cursor.execute(create_runtime_deployments_project_unique_sql)
-                cursor.execute(create_version_records_sql)
-                cursor.execute(create_version_records_project_idx_sql)
 
     def fetch_all(self, sql: str, params: tuple | None = None) -> list[dict]:
         with self.connection() as conn:

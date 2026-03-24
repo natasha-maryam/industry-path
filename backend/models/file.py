@@ -25,7 +25,6 @@ class UploadResult(BaseModel):
 
 class WorkspacePaths(BaseModel):
     root: Path
-    documents: Path
     uploads: Path
     plant_graph: Path
     control_logic: Path

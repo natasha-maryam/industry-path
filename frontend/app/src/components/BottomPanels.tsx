@@ -3,8 +3,7 @@ import RuntimeValidationPanel, { type RuntimeValidationPanelData } from "./Runti
 import SimulationValidationPanel, { type SimulationValidationPanelData } from "./SimulationValidationPanel";
 import STVerificationPanel, { type STVerificationIssueItem } from "./STVerificationPanel";
 import IOMappingTablePanel from "./IOMappingTablePanel";
-import VersionsWorkspace from "./versioning/VersionsWorkspace";
-import LogicDiffViewer from "./versioning/LogicDiffViewer";
+import VersionHistoryPanel from "./VersionHistoryPanel";
 import type {
   IOMappingSummaryByType,
   IOMappingTableRow,
@@ -12,20 +11,10 @@ import type {
   RuntimeSignalType,
   STWorkspaceVerificationResponse,
 } from "../services/api";
-import type { VersionDiffResponse, VersionRecord } from "../types/versioning";
 
 type BottomView = "simulation" | "monitoring" | "logic";
-type CodePanelMode = "control_logic" | "generated_st" | "verification" | "version_diff";
+type CodePanelMode = "control_logic" | "generated_st" | "verification";
 type MonitoringPanelMode = "io_mapping" | "runtime" | "versions";
-
-type VersioningSettings = {
-  enableAutoVersioning: boolean;
-  autoSnapshotOnDeploy: boolean;
-  enableDatabaseVersioning: boolean;
-  maxSnapshotsStored: number;
-  snapshotRetentionDays: number;
-  gitRepositoryLocation: string;
-};
 
 type BottomPanelsProps = {
   activeView: BottomView;
@@ -72,22 +61,6 @@ type BottomPanelsProps = {
   onRuntimeRefreshForceState?: () => Promise<void>;
   onRuntimeRunEvaluationCycle?: () => Promise<void>;
   onRetrySimulation?: () => void;
-  versions?: VersionRecord[];
-  selectedVersion?: VersionRecord | null;
-  selectedVersionTags?: string[];
-  versionDiff?: VersionDiffResponse | null;
-  versionsLoading?: boolean;
-  versionsError?: string | null;
-  versionBusyAction?: "snapshot" | "rollback" | "compare" | "export" | null;
-  versionSettings?: VersioningSettings;
-  onVersionSelect?: (version: VersionRecord) => void;
-  onVersionToggleCompareSelection?: (versionTag: string) => void;
-  onVersionCreateSnapshot?: () => void;
-  onVersionLoadSnapshot?: (version: VersionRecord) => void;
-  onVersionRollback?: (version: VersionRecord) => void;
-  onVersionCompare?: () => void;
-  onVersionExport?: (version: VersionRecord) => void;
-  onVersionSettingsChange?: (settings: VersioningSettings) => void;
   showControlLogic: boolean;
   isGeneratingST?: boolean;
   isGenerating?: boolean;
@@ -139,29 +112,6 @@ export default function BottomPanels({
   onRuntimeRefreshForceState,
   onRuntimeRunEvaluationCycle,
   onRetrySimulation,
-  versions = [],
-  selectedVersion = null,
-  selectedVersionTags = [],
-  versionDiff = null,
-  versionsLoading = false,
-  versionsError = null,
-  versionBusyAction = null,
-  versionSettings = {
-    enableAutoVersioning: true,
-    autoSnapshotOnDeploy: true,
-    enableDatabaseVersioning: true,
-    maxSnapshotsStored: 100,
-    snapshotRetentionDays: 90,
-    gitRepositoryLocation: "backend-controlled",
-  },
-  onVersionSelect,
-  onVersionToggleCompareSelection,
-  onVersionCreateSnapshot,
-  onVersionLoadSnapshot,
-  onVersionRollback,
-  onVersionCompare,
-  onVersionExport,
-  onVersionSettingsChange,
   showControlLogic,
   isGeneratingST = false,
   isGenerating = false,
@@ -228,8 +178,6 @@ export default function BottomPanels({
           />
         ) : null}
 
-        {activeView === "logic" && codePanelMode === "version_diff" ? <LogicDiffViewer diff={versionDiff} loading={versionBusyAction === "compare"} /> : null}
-
         {activeView === "monitoring" && monitoringPanelMode === "io_mapping" ? (
           <>
             <div className="stat-grid">
@@ -294,26 +242,7 @@ export default function BottomPanels({
           />
         ) : null}
 
-        {activeView === "monitoring" && monitoringPanelMode === "versions" ? (
-          <VersionsWorkspace
-            versions={versions}
-            selectedVersion={selectedVersion}
-            selectedVersionTags={selectedVersionTags}
-            diff={versionDiff}
-            loading={versionsLoading}
-            errorMessage={versionsError}
-            busyAction={versionBusyAction}
-            settings={versionSettings}
-            onSelectVersion={(version) => onVersionSelect?.(version)}
-            onToggleCompareSelection={(versionTag) => onVersionToggleCompareSelection?.(versionTag)}
-            onCreateSnapshot={() => onVersionCreateSnapshot?.()}
-            onLoadSnapshot={(version) => onVersionLoadSnapshot?.(version)}
-            onRollback={(version) => onVersionRollback?.(version)}
-            onCompare={() => onVersionCompare?.()}
-            onExport={(version) => onVersionExport?.(version)}
-            onSettingsChange={(settings) => onVersionSettingsChange?.(settings)}
-          />
-        ) : null}
+        {activeView === "monitoring" && monitoringPanelMode === "versions" ? <VersionHistoryPanel /> : null}
       </div>
     </section>
   );

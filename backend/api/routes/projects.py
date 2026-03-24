@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Response, status
 
-from models.project import ActiveProjectUpdate, Project, ProjectCreate, ProjectUpdate
+from models.project import Project, ProjectCreate, ProjectUpdate
 from services.project_service import project_service
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -14,16 +14,6 @@ def list_projects() -> list[Project]:
 @router.post("", response_model=Project)
 def create_project(payload: ProjectCreate) -> Project:
     return project_service.create_project(payload)
-
-
-@router.get("/active/current", response_model=Project | None)
-def get_active_project() -> Project | None:
-    return project_service.get_active_project()
-
-
-@router.put("/active", response_model=Project)
-def update_active_project(payload: ActiveProjectUpdate) -> Project:
-    return project_service.set_active_project(payload.project_id)
 
 
 @router.get("/{project_id}", response_model=Project)

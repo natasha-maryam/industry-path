@@ -21,7 +21,6 @@ from services.narrative_extraction_service import narrative_extraction_service
 from services.narrative_rule_extraction_service import narrative_rule_extraction_service
 from services.pid_parser import pid_parser_service
 from services.pid_extraction_service import pid_extraction_service
-from services.pid_reconciliation_service import pid_reconciliation_service
 from services.process_unit_assignment_service import process_unit_assignment_service
 from services.process_unit_detection_service import process_unit_detection_service
 from services.project_service import project_service
@@ -571,26 +570,6 @@ class ParseService:
                 process_units=process_units,
                 base_relationships=[*relationships, *engineering_relationships, *part_of_relationships],
                 rule_bundle=rule_bundle,
-            )
-
-            self._update_parse_job_stage(
-                parse_job_id,
-                status="running",
-                current_stage="pid_reconciliation",
-                stage_message="Reconciling normalized instrumentation against active plant graph",
-                progress_percent=90,
-            )
-            reconcile_summary = pid_reconciliation_service.reconcile_from_entities(
-                project_id=project_id,
-                entities=entities,
-                relationships=relationships,
-                similarity_threshold=0.9,
-            )
-            warnings.extend(
-                [
-                    f"P&ID reconcile conflict: {item.incoming_tag} vs {item.existing_tag} ({item.similarity})"
-                    for item in reconcile_summary.possible_conflicts
-                ]
             )
 
             relationships, validation_warnings, validation_low = graph_validation_service.validate(

@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes.deploy import router as deploy_router
 from api.routes.control_loops import router as control_loops_router
-from api.routes.direct_plc_deploy import router as direct_plc_deploy_router
 from api.routes.fault_analysis import router as fault_analysis_router
 from api.routes.export import router as export_router
 from api.routes.graph import router as graph_router
@@ -12,10 +11,7 @@ from api.routes.io_mapping import router as io_mapping_router
 from api.routes.logic import router as logic_router
 from api.routes.monitoring import router as monitoring_router
 from api.routes.parse import router as parse_router
-from api.routes.pid_reconcile import router as pid_reconcile_router
 from api.routes.pipeline import router as pipeline_router
-from api.routes.plc_export import router as plc_export_router
-from api.routes.plc_reverse_engineering import router as plc_reverse_engineering_router
 from api.routes.project_io_mapping import router as project_io_mapping_router
 from api.routes.projects import router as projects_router
 from api.routes.replay import router as replay_router
@@ -24,7 +20,6 @@ from api.routes.runtime_deploy import router as runtime_deploy_router
 from api.routes.simulation import router as simulation_router
 from api.routes.st_verify import router as st_verify_router
 from api.routes.uploads import router as uploads_router
-from api.routes.versions import router as versions_router
 from db.postgres import postgres_client
 
 app = FastAPI(title="CrossLayerX API", version="0.1.0")
@@ -57,7 +52,6 @@ app.include_router(health_router, prefix="/api")
 app.include_router(projects_router, prefix="/api")
 app.include_router(uploads_router, prefix="/api")
 app.include_router(parse_router, prefix="/api")
-app.include_router(pid_reconcile_router, prefix="/api")
 app.include_router(graph_router, prefix="/api")
 app.include_router(simulation_router, prefix="/api")
 app.include_router(replay_router, prefix="/api")
@@ -73,7 +67,3 @@ app.include_router(pipeline_router, prefix="/api")
 app.include_router(st_verify_router, prefix="/api")
 app.include_router(control_loops_router, prefix="/api")
 app.include_router(fault_analysis_router, prefix="/api")
-app.include_router(versions_router, prefix="/api")
-app.include_router(plc_export_router, prefix="/api")
-app.include_router(plc_reverse_engineering_router, prefix="/api")
-app.include_router(direct_plc_deploy_router, prefix="/api")

@@ -18,7 +18,6 @@ from models.runtime_deploy import RuntimeDeployResponse, RuntimeDeployStep, Runt
 from models.logic import IOMappingResult, RuntimeValidationResult, STGenerationResult
 from services.io_mapping_engine import io_mapping_engine
 from services.project_service import project_service
-from services.versioning_trigger_service import versioning_trigger_service
 
 
 class RuntimeDeployer:
@@ -768,15 +767,6 @@ class RuntimeDeployer:
 
         runtime_report = runtime_root / "runtime_validation.json"
         runtime_report.write_text(json.dumps(response.model_dump(mode="json"), indent=2))
-
-        if response.status == "passed":
-            versioning_trigger_service.trigger_auto_commit(
-                project_id=project_id,
-                trigger_source="Runtime Deployment Succeeded",
-                summary=f"Runtime deployment to {runtime_target} succeeded.",
-                deployment_success=True,
-            )
-
         self.logger.info("Runtime deployment completed: project=%s status=%s", project_id, response.status)
         return response.model_dump(mode="json")
 
