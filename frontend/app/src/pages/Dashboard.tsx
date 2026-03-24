@@ -17,7 +17,7 @@ import type { GeneratedLogicFile, STDiagnosticMarker, STJumpLocation } from "../
 import CommandBar, { type ToolbarAction } from "../components/CommandBar";
 import DetailsPanel, { type RightTab } from "../components/DetailsPanel";
 import GraphWorkspace from "../components/GraphWorkspace";
-import PlantGraphTable from "../components/PlantGraphTable";
+import EngineeringTable from "../components/plant/EngineeringTable";
 import ProjectNavigator from "../components/ProjectNavigator";
 import type { RuntimeValidationPanelData } from "../components/RuntimeValidationPanel";
 import type { STVerificationIssueItem } from "../components/STVerificationPanel";
@@ -60,7 +60,7 @@ import {
   getSimulationAnalysis,
   getSimulationTrace,
   getLogic,
-  getPlantSignals,
+  getEngineeringTable,
   getGraph,
   getTrace,
   listProjects,
@@ -95,7 +95,8 @@ import {
   type PIDReconcileSummary,
   type PLCExportResponse,
   type PLCExportVendor,
-  type PlantSignalRow,
+  type EngineeringTableResponse,
+  type EngineeringTableResponseRow,
   type Project,
 } from "../services/api";
 import "../styles/dashboard.css";
@@ -331,7 +332,9 @@ export default function Dashboard() {
   const [controlLoopsError, setControlLoopsError] = useState<string | null>(null);
   const [selectedControlLoopTag, setSelectedControlLoopTag] = useState<string | null>(null);
   const [graphWorkspaceView, setGraphWorkspaceView] = useState<"graph" | "table">("graph");
-  const [plantSignalRows, setPlantSignalRows] = useState<PlantSignalRow[]>([]);
+  const [engineeringTableData, setEngineeringTableData] = useState<EngineeringTableResponse | null>(null);
+  const [engineeringTableLoading, setEngineeringTableLoading] = useState<boolean>(false);
+  const [engineeringTableError, setEngineeringTableError] = useState<string | null>(null);
   const [runtimeValidationData, setRuntimeValidationData] = useState<RuntimeValidationPanelData | null>(null);
   const [isRuntimeStateLoading, setIsRuntimeStateLoading] = useState<boolean>(false);
   const [runtimeFailedMessage, setRuntimeFailedMessage] = useState<string | null>(null);
@@ -994,7 +997,8 @@ export default function Dashboard() {
   useEffect(() => {
     if (!selectedProjectId) {
       setPlantGraph({ nodes: [], edges: [] });
-      setPlantSignalRows([]);
+      setEngineeringTableData(null);
+      setEngineeringTableError(null);
       setSelectedNode("");
       setControlLogicCode("");
       setGeneratedLogic("");
@@ -1106,12 +1110,21 @@ export default function Dashboard() {
       }
     };
 
-    const loadPlantSignals = async (): Promise<void> => {
+    const loadEngineeringTable = async (): Promise<void> => {
+      setEngineeringTableLoading(true);
+      setEngineeringTableError(null);
       try {
-        const rows = await getPlantSignals(selectedProjectId);
-        setPlantSignalRows(rows);
+        const data = await getEngineeringTable({
+          project_id: selectedProjectId,
+          include_inferred: true,
+          max_flow_depth: 4,
+        });
+        setEngineeringTableData(data);
       } catch {
-        setPlantSignalRows([]);
+        setEngineeringTableData(null);
+        setEngineeringTableError("Engineering table endpoint unavailable for selected project.");
+      } finally {
+        setEngineeringTableLoading(false);
       }
     };
 
@@ -1151,7 +1164,7 @@ export default function Dashboard() {
     };
 
     void loadGraph();
-    void loadPlantSignals();
+    void loadEngineeringTable();
     void loadLatestIOMapping();
     void loadLatestSimulationTrace();
     void refreshControlLoops(selectedProjectId);
@@ -1712,6 +1725,39 @@ export default function Dashboard() {
     setActiveTab("Trace");
   };
 
+  const handleEngineeringTraceSignal = (row: EngineeringTableResponseRow): void => {
+    void handleTrace(row.tag);
+    setIsRightPanelExpanded(true);
+  };
+
+  const handleEngineeringOpenControlLoop = (row: EngineeringTableResponseRow): void => {
+    const loopMatch = controlLoops.find(
+      (loop) => loop.loop_tag === row.tag || loop.sensor_tag === row.tag || loop.controller_tag === row.tag || loop.actuator_tag === row.tag
+    );
+
+    setActiveTab("Control Loops");
+    setIsRightPanelExpanded(true);
+
+    if (loopMatch) {
+      setSelectedControlLoopTag(loopMatch.loop_tag);
+      setSelectedNode(loopMatch.sensor_tag || row.tag);
+      return;
+    }
+
+    setSelectedControlLoopTag(row.tag);
+    setSelectedNode(row.tag);
+    setStatusText(`No explicit control loop found for ${row.tag}.`);
+  };
+
+  const handleEngineeringOpenIOMapping = (row: EngineeringTableResponseRow): void => {
+    setSelectedIOMappingTag(row.tag);
+    setSelectedNode(row.tag);
+    setMonitoringPanelMode("io_mapping");
+    setActiveBottomView("monitoring");
+    setActiveTab("IO Mapping");
+    setIsRightPanelExpanded(true);
+  };
+
   const confirmDeleteProject = async (): Promise<void> => {
     if (!projectToDelete) {
       return;
@@ -2254,51 +2300,6 @@ export default function Dashboard() {
       source: loop.status || "",
       confidence: typeof loop.confidence === "number" ? loop.confidence : null,
     });
-  };
-
-  const openNoLoopModal = (): void => {
-    setControlLoopModal({
-      open: true,
-      noLoop: true,
-      loopId: "",
-      sensor: "",
-      process: "",
-      actuator: "",
-      controlPath: "",
-      source: "",
-      confidence: null,
-    });
-  };
-
-  const selectBestLoopForRow = (row: PlantSignalRow, loops: ControlLoopRecord[]): ControlLoopRecord | null => {
-    const normalizedTag = (row.tag || "").trim().toUpperCase();
-    const targetLoopIds = new Set<string>([
-      ...(row.loop_ids ?? []).map((item) => (item || "").trim().toUpperCase()),
-      ...((row.loop_id ? [row.loop_id] : []).map((item) => (item || "").trim().toUpperCase())),
-    ]);
-
-    const exactTagLoops = loops.filter((loop) => {
-      const sensor = (loop.sensor_tag || "").trim().toUpperCase();
-      const actuator = (loop.actuator_tag || "").trim().toUpperCase();
-      return sensor === normalizedTag || actuator === normalizedTag;
-    });
-    if (exactTagLoops.length > 0) {
-      return exactTagLoops[0];
-    }
-
-    if (targetLoopIds.size > 0) {
-      const idMatched = loops.filter((loop) => targetLoopIds.has((loop.loop_tag || "").trim().toUpperCase()));
-      if (idMatched.length > 0) {
-        return idMatched[0];
-      }
-    }
-
-    const processMatched = loops.filter((loop) => (loop.process_unit || "").trim().toUpperCase() === normalizedTag);
-    if (processMatched.length > 0) {
-      return processMatched[0];
-    }
-
-    return null;
   };
 
   const handleControlLoopSelect = (loop: ControlLoopRecord): void => {
@@ -2857,44 +2858,18 @@ export default function Dashboard() {
                       }}
                     />
                   ) : (
-                    <PlantGraphTable
-                      rows={plantSignalRows}
-                      selectedTag={selectedNode}
-                      onSelectTag={(tag) => {
-                        setSelectedNode(tag);
-                        if (activeTab === "Trace") {
-                          void handleTrace(tag);
-                        }
-                      }}
-                      onTraceSignal={(row) => {
-                        void handleTrace(row.tag);
-                        setIsRightPanelExpanded(true);
-                      }}
-                      onOpenControlLoop={(row) => {
+                    <EngineeringTable
+                      rows={engineeringTableData?.rows ?? []}
+                      loading={engineeringTableLoading}
+                      error={engineeringTableError}
+                      onTraceSignal={handleEngineeringTraceSignal}
+                      onOpenControlLoop={handleEngineeringOpenControlLoop}
+                      onOpenIOMapping={handleEngineeringOpenIOMapping}
+                      onRowSelect={(row: EngineeringTableResponseRow) => {
                         setSelectedNode(row.tag);
-                        setActiveTab("Control Loops");
-                        setIsRightPanelExpanded(true);
-                        if (!selectedProjectId) {
-                          setStatusText("No active project selected.");
-                          return;
+                        if (activeTab === "Trace") {
+                          void handleTrace(row.tag);
                         }
-                        const selectedLoop = selectBestLoopForRow(row, controlLoops);
-                        if (!selectedLoop) {
-                          openNoLoopModal();
-                          setStatusText("No control loop detected.");
-                          return;
-                        }
-                        handleControlLoopSelect(selectedLoop);
-                        openControlLoopModal(selectedLoop);
-                        setStatusText(`Opened ${selectedLoop.loop_tag} (${selectedLoop.control_strategy || "PID"}).`);
-                      }}
-                      onOpenIOMapping={(row) => {
-                        setActiveBottomView("monitoring");
-                        setMonitoringPanelMode("io_mapping");
-                        setActiveTab("IO Mapping");
-                        setIsRightPanelExpanded(true);
-                        setSelectedIOMappingTag(row.tag);
-                        setStatusText(`IO mapping focused on ${row.tag}${row.signal_type ? ` (${row.signal_type})` : ""}.`);
                       }}
                     />
                   )}

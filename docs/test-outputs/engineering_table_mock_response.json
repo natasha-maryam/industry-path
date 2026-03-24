@@ -1,0 +1,87 @@
+{
+  "project_id": "d14a1fcb-5ef9-4bc8-a74e-c8410db1de6d",
+  "rows": [
+    {
+      "id": "FIT_101",
+      "tag": "FIT_101",
+      "type": "flow_transmitter",
+      "subtype": "analog_input",
+      "description": "Influent flow transmitter",
+      "system": "InfluentTrain",
+      "equipment": "Flow Meter",
+      "process_role": "sensor",
+      "measures": ["BASIN_01"],
+      "controls": [],
+      "controlled_by": ["FIC_101"],
+      "signal_inputs": ["FIC_101"],
+      "signal_outputs": ["BASIN_01"],
+      "upstream": [],
+      "downstream": ["BASIN_01"],
+      "flow_path": ["FIT_101", "BASIN_01"],
+      "current_value": "142.8",
+      "state": "healthy",
+      "setpoint": "140.0",
+      "mode": "AUTO",
+      "unit": "m3/h",
+      "range_min": 0.0,
+      "range_max": 250.0,
+      "fail_state": "last_good",
+      "power": null,
+      "document_source": ["control_narrative_unit1.pdf", "pid_unit1.pdf"],
+      "line_reference": ["instrument_list:12", "narrative:4"],
+      "confidence": 0.932,
+      "num_connections": 2,
+      "num_upstream": 0,
+      "num_downstream": 1,
+      "control_chain": ["FIT_101->BASIN_01->FCV_101"],
+      "flow_chain": ["FIT_101", "BASIN_01"],
+      "is_orphan": false,
+      "is_controlled": true,
+      "is_actuated": false,
+      "grounded_fields": {
+        "tag": "FIT_101",
+        "type": "flow_transmitter",
+        "document_source": ["control_narrative_unit1.pdf", "pid_unit1.pdf"]
+      },
+      "derived_fields": {
+        "inferred": false,
+        "is_orphan": false,
+        "is_controlled": true,
+        "is_actuated": false
+      },
+      "traceability": [
+        {
+          "source_type": "document",
+          "source_id": "control_narrative_unit1.pdf",
+          "excerpt": "Influent flow transmitter",
+          "confidence": 0.91
+        },
+        {
+          "source_type": "relationship",
+          "source_id": "FIT_101:measures:BASIN_01",
+          "excerpt": "FIT_101 measures BASIN_01",
+          "confidence": 0.72
+        }
+      ]
+    }
+  ],
+  "warnings": [
+    {
+      "code": "sparse_graph",
+      "severity": "warning",
+      "message": "Sparse engineering graph detected: fewer than 3 normalized entities.",
+      "affected_tags": ["FIT_101"]
+    }
+  ],
+  "summary": {
+    "total_rows": 1,
+    "grounded_rows": 1,
+    "inferred_rows": 0,
+    "orphan_rows": 0,
+    "controlled_rows": 1,
+    "actuated_rows": 0,
+    "avg_confidence": 0.932,
+    "distinct_systems": 1,
+    "distinct_document_sources": 2
+  }
+}

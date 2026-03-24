@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes.deploy import router as deploy_router
+from api.engineering_table import router as engineering_table_router
 from api.routes.control_loops import router as control_loops_router
 from api.routes.direct_plc_deploy import router as direct_plc_deploy_router
 from api.routes.fault_analysis import router as fault_analysis_router
@@ -77,3 +78,4 @@ app.include_router(versions_router, prefix="/api")
 app.include_router(plc_export_router, prefix="/api")
 app.include_router(plc_reverse_engineering_router, prefix="/api")
 app.include_router(direct_plc_deploy_router, prefix="/api")
+app.include_router(engineering_table_router, prefix="/api")

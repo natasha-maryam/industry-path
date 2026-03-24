@@ -131,6 +131,82 @@ export type PlantSignalRow = {
   source_details?: string[];
 };
 
+export type EngineeringTraceabilityItem = {
+  source_type: string;
+  source_id: string;
+  excerpt?: string | null;
+  confidence?: number | null;
+};
+
+export type EngineeringTableWarning = {
+  code: string;
+  severity: string;
+  message: string;
+  affected_tags: string[];
+};
+
+export type EngineeringTableSummary = {
+  total_rows: number;
+  grounded_rows: number;
+  inferred_rows: number;
+  orphan_rows: number;
+  controlled_rows: number;
+  actuated_rows: number;
+  avg_confidence: number;
+  distinct_systems: number;
+  distinct_document_sources: number;
+};
+
+export type EngineeringTableResponseRow = {
+  id: string;
+  tag: string;
+  type: string;
+  subtype: string | null;
+  description: string | null;
+  system: string | null;
+  equipment: string | null;
+  process_role: string | null;
+  measures: string[];
+  controls: string[];
+  controlled_by: string[];
+  signal_inputs: string[];
+  signal_outputs: string[];
+  upstream: string[];
+  downstream: string[];
+  flow_path: string[];
+  current_value: string | null;
+  state: string | null;
+  setpoint: string | null;
+  mode: string | null;
+  unit: string | null;
+  range_min: number | null;
+  range_max: number | null;
+  fail_state: string | null;
+  power: string | null;
+  document_source: string[];
+  line_reference: string[];
+  confidence: number;
+  num_connections: number;
+  num_upstream: number;
+  num_downstream: number;
+  control_chain: string[];
+  flow_chain: string[];
+  is_orphan: boolean;
+  is_controlled: boolean;
+  is_actuated: boolean;
+  warnings: string[];
+  grounded_fields: Record<string, unknown>;
+  derived_fields: Record<string, unknown>;
+  traceability: EngineeringTraceabilityItem[];
+};
+
+export type EngineeringTableResponse = {
+  project_id: string;
+  rows: EngineeringTableResponseRow[];
+  warnings: EngineeringTableWarning[];
+  summary: EngineeringTableSummary;
+};
+
 export type TraceResponse = {
   project_id: string;
   node_id: string;
@@ -1130,6 +1206,16 @@ export async function getGraph(projectId: string): Promise<PlantGraph> {
 
 export async function getPlantSignals(projectId: string): Promise<PlantSignalRow[]> {
   const response = await api.get<PlantSignalRow[]>(`/projects/${projectId}/plant-signals`);
+  return response.data;
+}
+
+export async function getEngineeringTable(payload: {
+  project_id: string;
+  file_ids?: string[];
+  include_inferred?: boolean;
+  max_flow_depth?: number;
+}): Promise<EngineeringTableResponse> {
+  const response = await api.post<EngineeringTableResponse>("/plant-model/engineering-table", payload);
   return response.data;
 }
 
