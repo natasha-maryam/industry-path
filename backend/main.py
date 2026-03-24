@@ -1,6 +1,10 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app_integration_behavior_patch import register_behavior_routes
+from api.production_api import router as production_api_router
 from api.routes.deploy import router as deploy_router
 from api.engineering_table import router as engineering_table_router
 from api.routes.control_loops import router as control_loops_router
@@ -24,9 +28,18 @@ from api.routes.runtime import router as runtime_router
 from api.routes.runtime_deploy import router as runtime_deploy_router
 from api.routes.simulation import router as simulation_router
 from api.routes.st_verify import router as st_verify_router
+from api.system_layer import router as system_layer_router
+from api.system_layer_upgrade import router as system_layer_upgrade_router
+from api.tag_intelligence_api import router as tag_intelligence_router
+from api.views_api import router as views_api_router
 from api.routes.uploads import router as uploads_router
 from api.routes.versions import router as versions_router
+from core.metrics import RequestMetricsMiddleware
 from db.postgres import postgres_client
+from services.deterministic_behavior_service import deterministic_behavior_service
+
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="CrossLayerX API", version="0.1.0")
 
@@ -42,6 +55,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestMetricsMiddleware)
 
 
 @app.get("/")
@@ -52,6 +66,9 @@ def root() -> dict[str, str]:
 @app.on_event("startup")
 def startup() -> None:
     postgres_client.init_schema()
+    logger.info("backend startup complete")
+    logger.info("system router registered prefix=/api")
+    logger.info("behavior rows currently loaded count=%s", deterministic_behavior_service.get_rows_loaded_count())
 
 
 app.include_router(health_router, prefix="/api")
@@ -79,3 +96,9 @@ app.include_router(plc_export_router, prefix="/api")
 app.include_router(plc_reverse_engineering_router, prefix="/api")
 app.include_router(direct_plc_deploy_router, prefix="/api")
 app.include_router(engineering_table_router, prefix="/api")
+register_behavior_routes(app)
+app.include_router(system_layer_router, prefix="/api")
+app.include_router(system_layer_upgrade_router, prefix="/api")
+app.include_router(tag_intelligence_router, prefix="/api")
+app.include_router(views_api_router, prefix="/api")
+app.include_router(production_api_router, prefix="/api")

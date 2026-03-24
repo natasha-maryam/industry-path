@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import {
   createColumnHelper,
   flexRender,
@@ -35,6 +35,23 @@ const RELATION_KEYS: Array<
 > = ["measures", "controls", "controlled_by", "signal_inputs", "signal_outputs", "upstream", "downstream"];
 
 const CONFIDENCE_LEVELS = [0, 0.4, 0.6, 0.8] as const;
+
+const SEARCH_DEBOUNCE_MS = 180;
+
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value);
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      setDebouncedValue(value);
+    }, delayMs);
+    return () => {
+      window.clearTimeout(handle);
+    };
+  }, [value, delayMs]);
+
+  return debouncedValue;
+}
 
 const toDisplayText = (value: unknown): string => {
   if (value === null || value === undefined) {
@@ -145,7 +162,7 @@ export default function EngineeringTable({
   onOpenControlLoop,
   onOpenIOMapping,
 }: EngineeringTableProps) {
-  const [globalSearch, setGlobalSearch] = useState<string>("");
+  const [searchInput, setSearchInput] = useState<string>("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0);
@@ -153,12 +170,31 @@ export default function EngineeringTable({
   const [controlledOnly, setControlledOnly] = useState<boolean>(false);
   const [sorting, setSorting] = useState<SortingState>([{ id: "confidence", desc: true }]);
   const [selectedId, setSelectedId] = useState<string>("");
-  const [selectedRow, setSelectedRow] = useState<EngineeringTableResponseRow | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const scrollTopRef = useRef<number>(0);
 
-  const onApplySearch = (value: string): void => {
-    setGlobalSearch(value);
-  };
+  const globalSearch = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS);
+
+  const onApplySearch = useCallback((value: string): void => {
+    setSearchInput(value);
+  }, []);
+
+  const onScroll = useCallback((): void => {
+    if (!scrollRef.current) {
+      return;
+    }
+    scrollTopRef.current = scrollRef.current.scrollTop;
+  }, []);
+
+  useEffect(() => {
+    if (!scrollRef.current) {
+      return;
+    }
+    const nextScrollTop = scrollTopRef.current;
+    if (Math.abs(scrollRef.current.scrollTop - nextScrollTop) > 1) {
+      scrollRef.current.scrollTop = nextScrollTop;
+    }
+  }, [rows]);
 
   const rowSearchIndex = useMemo(() => {
     const index = new Map<string, string>();
@@ -203,12 +239,29 @@ export default function EngineeringTable({
     });
   }, [rows, globalSearch, typeFilter, sourceFilter, confidenceThreshold, orphanOnly, controlledOnly, rowSearchIndex]);
 
+  const rowsById = useMemo(() => {
+    const index = new Map<string, EngineeringTableResponseRow>();
+    for (const row of rows) {
+      index.set(row.id, row);
+    }
+    return index;
+  }, [rows]);
+
+  useEffect(() => {
+    if (!selectedId) {
+      return;
+    }
+    if (!rowsById.has(selectedId)) {
+      setSelectedId("");
+    }
+  }, [rowsById, selectedId]);
+
   const selectedRowResolved = useMemo(() => {
-    if (!selectedRow) {
+    if (!selectedId) {
       return null;
     }
-    return rows.find((row) => row.id === selectedRow.id) ?? selectedRow;
-  }, [rows, selectedRow]);
+    return rowsById.get(selectedId) ?? null;
+  }, [rowsById, selectedId]);
 
   const columns = useMemo(
     () => [
@@ -340,6 +393,13 @@ export default function EngineeringTable({
 
   const tableBodyRows = table.getRowModel().rows;
 
+  const selectedStatuses = useMemo(() => {
+    if (!selectedRowResolved) {
+      return [] as Array<"Connected" | "Controlled" | "Actuated" | "Orphan">;
+    }
+    return toStatusList(selectedRowResolved);
+  }, [selectedRowResolved]);
+
   const rowVirtualizer = useVirtualizer({
     count: tableBodyRows.length,
     getScrollElement: () => scrollRef.current,
@@ -347,17 +407,27 @@ export default function EngineeringTable({
     overscan: 12,
   });
 
-  if (loading) {
-    return <div className="flex h-full items-center justify-center text-sm text-slate-500">Loading engineering table…</div>;
-  }
+  const hasRows = rows.length > 0;
 
-  if (error) {
-    return <div className="flex h-full items-center justify-center text-sm text-red-600">{error}</div>;
-  }
-
-  if (rows.length === 0) {
+  if (!hasRows && loading) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-slate-500">
+      <div className="flex h-full items-center justify-center bg-white text-sm text-slate-600">
+        Loading engineering table…
+      </div>
+    );
+  }
+
+  if (!hasRows && error) {
+    return (
+      <div className="flex h-full items-center justify-center bg-white text-sm text-red-600">
+        {error}
+      </div>
+    );
+  }
+
+  if (!hasRows) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 bg-white text-sm text-slate-500">
         <p>No engineering rows found for this project.</p>
         <p className="text-xs text-slate-400">Run parse to generate entities and relationships.</p>
       </div>
@@ -369,8 +439,8 @@ export default function EngineeringTable({
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded border border-slate-300 bg-white">
         <div className="grid grid-cols-1 gap-2 border-b border-slate-200 p-2 md:grid-cols-6">
           <input
-            value={globalSearch}
-            onChange={(event) => setGlobalSearch(event.target.value)}
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
             placeholder="Search tags, types, relationships, source..."
             className="w-full rounded border border-slate-300 bg-slate-50 px-2 py-1.5 text-xs text-slate-700 outline-none ring-slate-400 focus:ring md:col-span-2"
           />
@@ -423,9 +493,16 @@ export default function EngineeringTable({
           <div className="text-xs text-slate-500">
             {filteredRows.length} / {rows.length} rows
           </div>
+
+          {(loading || error) && hasRows ? (
+            <div className="md:col-span-6">
+              {loading ? <p className="text-xs text-slate-500">Refreshing rows…</p> : null}
+              {error ? <p className="text-xs text-red-600">{error}</p> : null}
+            </div>
+          ) : null}
         </div>
 
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto" id="engineering-table-scroll">
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto" id="engineering-table-scroll" onScroll={onScroll}>
           <table className="min-w-[2100px] w-full table-fixed border-collapse text-left text-[11px] text-slate-700">
             <thead className="sticky top-0 z-10 bg-slate-100 text-[10px] uppercase tracking-wide text-slate-600">
               {table.getHeaderGroups().map((headerGroup) => (
@@ -473,14 +550,13 @@ export default function EngineeringTable({
 
                 return (
                   <tr
-                    key={row.id}
+                    key={row.original.id}
                     className={`absolute left-0 top-0 cursor-pointer border-b border-slate-200 hover:bg-gray-50 ${selected ? "bg-blue-50" : ""} ${
                       hasWarnings ? "border-l-2 border-l-red-400" : ""
                     }`}
                     style={{ transform: `translateY(${virtualRow.start}px)`, width: "100%", display: "table", tableLayout: "fixed" }}
                     onClick={() => {
                       setSelectedId(row.original.id);
-                      setSelectedRow(row.original);
                       onRowSelect?.(row.original);
                     }}
                   >
@@ -513,7 +589,6 @@ export default function EngineeringTable({
                 type="button"
                 onClick={() => {
                   setSelectedId("");
-                  setSelectedRow(null);
                 }}
                 className="rounded border border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-600 hover:bg-gray-100"
               >
@@ -565,7 +640,7 @@ export default function EngineeringTable({
 
             <DetailGroup title="Status">
               <div className="flex flex-wrap gap-1">
-                {toStatusList(selectedRowResolved).map((status) => (
+                {selectedStatuses.map((status) => (
                   <StatusBadge key={status} status={status} />
                 ))}
               </div>

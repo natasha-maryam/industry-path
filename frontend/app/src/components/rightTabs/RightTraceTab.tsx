@@ -1,8 +1,16 @@
+import RightWhyTracePanel from "./RightWhyTracePanel";
+
 type RightTraceTabProps = {
   tracePath: string[];
+  whyTraceTag?: string | null;
+  onCloseWhyTrace?: () => void;
 };
 
-export default function RightTraceTab({ tracePath }: RightTraceTabProps) {
+export default function RightTraceTab({ tracePath, whyTraceTag = null, onCloseWhyTrace }: RightTraceTabProps) {
+  if (whyTraceTag) {
+    return <RightWhyTracePanel tag={whyTraceTag} onClose={onCloseWhyTrace} />;
+  }
+
   return (
     <>
       <div className="panel-subtitle">Signal Path</div>

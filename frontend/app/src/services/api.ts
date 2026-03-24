@@ -207,6 +207,162 @@ export type EngineeringTableResponse = {
   summary: EngineeringTableSummary;
 };
 
+export type DeterministicBehaviorRow = EngineeringTableResponseRow & {
+  behavior_card: string;
+  behavior_summary: string;
+  cause_chain: string[];
+  effect_chain: string[];
+  impact_summary: string;
+  behavior_confidence: number;
+  state_snapshot_id: string;
+  why_trace_available: boolean;
+};
+
+export type DeterministicBehaviorRowsResponse = {
+  snapshot_id: string;
+  rows: DeterministicBehaviorRow[];
+  count: number;
+};
+
+export type DeterministicWhyTraceStep = {
+  depth: number;
+  direction: "self" | "upstream" | "downstream";
+  tag: string;
+  edge_type: string | null;
+  runtime_state: Record<string, unknown> | null;
+  behavior_summary: string;
+};
+
+export type DeterministicWhyTraceResponse = {
+  tag: string;
+  available: boolean;
+  snapshot_id: string;
+  behavior_card?: string;
+  behavior_summary?: string;
+  runtime_state?: Record<string, unknown> | null;
+  steps: DeterministicWhyTraceStep[];
+};
+
+export type UNSRow = {
+  tag: string;
+  type?: string;
+  subtype?: string | null;
+  equipment?: string | null;
+  current_value?: string | null;
+  state?: string | null;
+  setpoint?: string | null;
+  mode?: string | null;
+  controls?: string[];
+  upstream?: string[];
+  downstream?: string[];
+  behavior_card?: string | null;
+};
+
+export type SystemTraceStep = {
+  tag: string;
+  depth: number;
+  direction: "self" | "upstream" | "downstream";
+  edge_type: string | null;
+};
+
+export type SystemTraceResponse = {
+  tag: string;
+  project_id: string | null;
+  path: string[];
+  steps: SystemTraceStep[];
+};
+
+export type SystemBottleneck = {
+  tag: string;
+  in_degree: number;
+  out_degree: number;
+  score: number;
+};
+
+export type SavedEngineeringView = {
+  id: string;
+  project_id: string;
+  name: string;
+  query: string | null;
+  script: string | null;
+  created_at: string;
+};
+
+export type SavedEngineeringViewVersion = {
+  id: string;
+  view_id: string;
+  project_id: string;
+  notes: string | null;
+  created_at: string;
+};
+
+export type SavedEngineeringViewDiff = {
+  before_version_id: string;
+  after_version_id: string;
+  summary: {
+    added: number;
+    removed: number;
+    changed: number;
+  };
+  added: Array<{ tag: string; after: Record<string, unknown> }>;
+  removed: Array<{ tag: string; before: Record<string, unknown> }>;
+  changed: Array<{
+    tag: string;
+    fields: Array<{ field: string; before: unknown; after: unknown }>;
+    before: Record<string, unknown>;
+    after: Record<string, unknown>;
+  }>;
+};
+
+export type TagIntelligenceRow = {
+  tag: string;
+  tag_type: string | null;
+  equipment: string | null;
+  sources: string[];
+  inbound_count: number;
+  outbound_count: number;
+  relation_count: number;
+  is_unused: boolean;
+  is_orphan: boolean;
+  conflicts: string[];
+};
+
+export type TagIntelligencePayload = {
+  project_id?: string | null;
+  category: "all" | "unused" | "orphans" | "conflicts" | string;
+  search: string;
+  rows: TagIntelligenceRow[];
+  summary: {
+    total: number;
+    unused: number;
+    orphans: number;
+    conflicts: number;
+  };
+  timestamp?: string;
+};
+
+export type ProductionHealthResponse = {
+  status: string;
+  services: {
+    redis?: {
+      enabled?: boolean;
+    };
+    connectors?: {
+      healthy?: number;
+      total?: number;
+    };
+    metrics?: Record<string, unknown>;
+  };
+  timestamp: string;
+};
+
+export type ProductionAuditEvent = {
+  event_type: string;
+  actor: string;
+  details: Record<string, unknown>;
+  created_at: string;
+};
+
 export type TraceResponse = {
   project_id: string;
   node_id: string;
@@ -805,8 +961,45 @@ export type LogicArtifact = {
   st_validation?: STValidationReport | null;
 };
 
+const resolveApiBaseUrl = (): string => {
+  const explicitBase = (import.meta.env.VITE_API_BASE as string | undefined)?.trim();
+  if (explicitBase) {
+    return explicitBase.replace(/\/$/, "");
+  }
+
+  const legacyBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
+  if (legacyBase) {
+    return legacyBase.replace(/\/$/, "");
+  }
+
+  if (typeof window !== "undefined") {
+    return "/api";
+  }
+
+  return "http://127.0.0.1:8000/api";
+};
+
+const resolveWsBaseUrl = (): string => {
+  const explicitWsBase = (import.meta.env.VITE_WS_BASE as string | undefined)?.trim();
+  if (explicitWsBase) {
+    return explicitWsBase.replace(/\/$/, "");
+  }
+
+  const apiBase = resolveApiBaseUrl();
+  if (/^https?:\/\//i.test(apiBase)) {
+    return apiBase.replace(/^http:\/\//i, "ws://").replace(/^https:\/\//i, "wss://").replace(/\/$/, "");
+  }
+
+  if (typeof window !== "undefined") {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${protocol}//${window.location.host}`;
+  }
+
+  return "ws://127.0.0.1:8000";
+};
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api",
+  baseURL: resolveApiBaseUrl(),
 });
 
 const HARD_FAIL_RULES = new Set([
@@ -1624,6 +1817,290 @@ export function createRuntimeTelemetrySocket(): WebSocket {
   const base = api.defaults.baseURL ?? "http://127.0.0.1:8000/api";
   const wsBase = base.replace(/^http:\/\//i, "ws://").replace(/^https:\/\//i, "wss://").replace(/\/$/, "");
   return new WebSocket(`${wsBase}/runtime/stream`);
+}
+
+export async function getDeterministicBehaviorRows(tags?: string[]): Promise<DeterministicBehaviorRowsResponse> {
+  const response = await api.get<{ data: DeterministicBehaviorRowsResponse }>("/behavior/rows", {
+    params: tags && tags.length > 0 ? { tags: tags.join(",") } : undefined,
+  });
+  return response.data.data;
+}
+
+export async function loadDeterministicBehaviorCache(payload: {
+  rows: EngineeringTableResponseRow[];
+  edges: Array<Record<string, unknown>>;
+}): Promise<{ snapshot_id: string; rows_loaded: number; edges_loaded: number; recomputed: number }> {
+  const response = await api.post<{ data: { snapshot_id: string; rows_loaded: number; edges_loaded: number; recomputed: number } }>(
+    "/behavior/load",
+    {
+      rows: payload.rows,
+      edges: payload.edges,
+    }
+  );
+  return response.data.data;
+}
+
+export async function getDeterministicWhyTrace(tag: string, maxDepth = 4): Promise<DeterministicWhyTraceResponse> {
+  const response = await api.get<{ data: DeterministicWhyTraceResponse }>(`/behavior/why/${encodeURIComponent(tag)}`, {
+    params: { max_depth: maxDepth },
+  });
+  return response.data.data;
+}
+
+const toBehaviorSocketUrl = (wsBase: string): string => {
+  const socketPath = wsBase.endsWith("/api") ? "/ws/behavior" : "/api/ws/behavior";
+  return `${wsBase}${socketPath}`;
+};
+
+export function getBehaviorSocketCandidateUrls(): string[] {
+  const urls: string[] = [];
+
+  const primaryWsBase = resolveWsBaseUrl();
+  urls.push(toBehaviorSocketUrl(primaryWsBase));
+
+  const apiBase = resolveApiBaseUrl();
+  if (/^https?:\/\//i.test(apiBase)) {
+    const directWsBase = apiBase.replace(/^http:\/\//i, "ws://").replace(/^https:\/\//i, "wss://").replace(/\/$/, "");
+    urls.push(toBehaviorSocketUrl(directWsBase));
+  }
+
+  if (typeof window !== "undefined" && window.location.port === "5173") {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const hostFallback = `${protocol}//${window.location.hostname}:8000`;
+    urls.push(`${hostFallback}/api/ws/behavior`);
+  }
+
+  return Array.from(new Set(urls));
+}
+
+export function createBehaviorSocket(url?: string): WebSocket {
+  if (url) {
+    return new WebSocket(url);
+  }
+  const wsBase = resolveWsBaseUrl();
+  return new WebSocket(toBehaviorSocketUrl(wsBase));
+}
+
+export async function loadUNSModel(rows: UNSRow[], edges: Array<Record<string, unknown>>): Promise<Record<string, unknown>> {
+  const response = await api.post<{ data: Record<string, unknown> }>("/uns/load", { rows, edges });
+  return response.data.data;
+}
+
+export async function queryUNS(query: string): Promise<UNSRow[]> {
+  const response = await api.post<{ data: { rows: UNSRow[] } }>("/uns/query", { query });
+  return response.data.data.rows;
+}
+
+export async function runUNSScript(script: string): Promise<Record<string, unknown>> {
+  const response = await api.post<{ data: Record<string, unknown> }>("/uns/script", { script });
+  return response.data.data;
+}
+
+export async function mapUNSTag(tag: string, mapping: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const response = await api.post<{ data: Record<string, unknown> }>("/uns/map", { tag, mapping });
+  return response.data.data;
+}
+
+export async function setUNSConnector(
+  connectorType: "opcua" | "mqtt" | "api",
+  metadata: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const response = await api.post<{ data: Record<string, unknown> }>("/uns/connector", {
+    connector_type: connectorType,
+    metadata,
+  });
+  return response.data.data;
+}
+
+export async function getUNSRows(): Promise<UNSRow[]> {
+  const response = await api.get<{ data: { rows: UNSRow[] } }>("/uns/rows");
+  return response.data.data.rows;
+}
+
+export function createUNSSocket(): WebSocket {
+  const base = api.defaults.baseURL ?? "http://127.0.0.1:8000/api";
+  const wsBase = base.replace(/^http:\/\//i, "ws://").replace(/^https:\/\//i, "wss://").replace(/\/$/, "");
+  return new WebSocket(`${wsBase}/ws/uns`);
+}
+
+export async function connectAdvancedOPCUA(payload: {
+  endpoint: string;
+  security_policy?: string;
+  auth_mode?: string;
+  username?: string;
+}): Promise<Record<string, unknown>> {
+  const response = await api.post<{ data: Record<string, unknown> }>("/system-layer/connect/opcua", payload);
+  return response.data.data;
+}
+
+export async function connectAdvancedMQTT(payload: {
+  host: string;
+  port?: number;
+  client_id?: string;
+  topic?: string;
+}): Promise<Record<string, unknown>> {
+  const response = await api.post<{ data: Record<string, unknown> }>("/system-layer/connect/mqtt", payload);
+  return response.data.data;
+}
+
+export async function connectAdvancedAPI(payload: {
+  endpoint: string;
+  method?: string;
+  headers?: Record<string, string>;
+}): Promise<Record<string, unknown>> {
+  const response = await api.post<{ data: Record<string, unknown> }>("/system-layer/connect/api", payload);
+  return response.data.data;
+}
+
+export async function runAdvancedAutoMap(payload: { external_tags: string[]; threshold?: number }): Promise<Record<string, unknown>> {
+  const response = await api.post<{ data: Record<string, unknown> }>("/system-layer/auto-map", payload);
+  return response.data.data;
+}
+
+export async function getAdvancedTrace(tag: string, projectId?: string, maxDepth = 6): Promise<SystemTraceResponse> {
+  const response = await api.get<{ data: SystemTraceResponse }>(`/system-layer/trace/${encodeURIComponent(tag)}`, {
+    params: {
+      project_id: projectId,
+      max_depth: maxDepth,
+    },
+  });
+  return response.data.data;
+}
+
+export async function getAdvancedLoops(projectId?: string, limit = 20): Promise<{ loops: string[][]; count: number; note?: string }> {
+  const response = await api.get<{ data: { loops: string[][]; count: number; note?: string } }>("/system-layer/loops", {
+    params: {
+      project_id: projectId,
+      limit,
+    },
+  });
+  return response.data.data;
+}
+
+export async function getAdvancedBottlenecks(projectId?: string, limit = 10): Promise<{ bottlenecks: SystemBottleneck[]; count: number }> {
+  const response = await api.get<{ data: { bottlenecks: SystemBottleneck[]; count: number } }>("/system-layer/bottlenecks", {
+    params: {
+      project_id: projectId,
+      limit,
+    },
+  });
+  return response.data.data;
+}
+
+export async function createSavedView(payload: {
+  project_id: string;
+  name: string;
+  query?: string;
+  script?: string;
+}): Promise<SavedEngineeringView> {
+  const response = await api.post<{ data: SavedEngineeringView }>("/views", payload);
+  return response.data.data;
+}
+
+export async function listSavedViews(projectId: string): Promise<SavedEngineeringView[]> {
+  const response = await api.get<{ data: { views: SavedEngineeringView[] } }>("/views", {
+    params: { project_id: projectId },
+  });
+  return response.data.data.views;
+}
+
+export async function createSavedViewVersion(payload: {
+  view_id: string;
+  snapshot: Record<string, unknown> | Array<Record<string, unknown>>;
+  notes?: string;
+}): Promise<SavedEngineeringViewVersion> {
+  const response = await api.post<{ data: SavedEngineeringViewVersion }>(`/views/${encodeURIComponent(payload.view_id)}/versions`, {
+    snapshot: payload.snapshot,
+    notes: payload.notes,
+  });
+  return response.data.data;
+}
+
+export async function listSavedViewVersions(viewId: string): Promise<SavedEngineeringViewVersion[]> {
+  const response = await api.get<{ data: { versions: SavedEngineeringViewVersion[] } }>(`/views/${encodeURIComponent(viewId)}/versions`);
+  return response.data.data.versions;
+}
+
+export async function diffSavedViewVersions(beforeVersionId: string, afterVersionId: string): Promise<SavedEngineeringViewDiff> {
+  const response = await api.post<{ data: SavedEngineeringViewDiff }>("/views/diff", {
+    before_version_id: beforeVersionId,
+    after_version_id: afterVersionId,
+  });
+  return response.data.data;
+}
+
+const buildBearerHeader = (token?: string): Record<string, string> | undefined => {
+  const normalized = (token ?? "").trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return {
+    Authorization: `Bearer ${normalized}`,
+  };
+};
+
+export async function getProductionHealth(token?: string): Promise<ProductionHealthResponse> {
+  const response = await api.get<ProductionHealthResponse>("/production/health", {
+    headers: buildBearerHeader(token),
+  });
+  return response.data;
+}
+
+export async function getProductionAuditLogs(limit = 50, token?: string): Promise<ProductionAuditEvent[]> {
+  const response = await api.get<{ data: { events: ProductionAuditEvent[] } }>("/production/audit", {
+    params: {
+      limit,
+    },
+    headers: buildBearerHeader(token),
+  });
+  return response.data.data.events;
+}
+
+export async function getTagIntelligence(params: {
+  projectId?: string;
+  category?: "all" | "unused" | "orphans" | "conflicts";
+  search?: string;
+}): Promise<TagIntelligencePayload> {
+  const response = await api.get<{ data: TagIntelligencePayload }>("/tag-intelligence", {
+    params: {
+      project_id: params.projectId,
+      category: params.category ?? "all",
+      search: params.search ?? "",
+    },
+  });
+  return response.data.data;
+}
+
+export async function exportTagIntelligenceCsv(params: {
+  projectId?: string;
+  category?: "all" | "unused" | "orphans" | "conflicts";
+  search?: string;
+}): Promise<Blob> {
+  const response = await api.get<Blob>("/tag-intelligence/export/csv", {
+    params: {
+      project_id: params.projectId,
+      category: params.category ?? "all",
+      search: params.search ?? "",
+    },
+    responseType: "blob",
+  });
+  return response.data;
+}
+
+export async function exportTagIntelligenceJson(params: {
+  projectId?: string;
+  category?: "all" | "unused" | "orphans" | "conflicts";
+  search?: string;
+}): Promise<Blob> {
+  const response = await api.get<Blob>("/tag-intelligence/export/json", {
+    params: {
+      project_id: params.projectId,
+      category: params.category ?? "all",
+      search: params.search ?? "",
+    },
+    responseType: "blob",
+  });
+  return response.data;
 }
 
 export async function getMonitoring(projectId: string): Promise<Record<string, unknown>> {

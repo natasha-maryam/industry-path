@@ -16,8 +16,7 @@ import BottomPanels from "../components/BottomPanels";
 import type { GeneratedLogicFile, STDiagnosticMarker, STJumpLocation } from "../components/CodeExplorerPanel";
 import CommandBar, { type ToolbarAction } from "../components/CommandBar";
 import DetailsPanel, { type RightTab } from "../components/DetailsPanel";
-import GraphWorkspace from "../components/GraphWorkspace";
-import EngineeringTable from "../components/plant/EngineeringTable";
+import EngineeringDeterministicTable from "../components/plant/EngineeringDeterministicTable";
 import ProjectNavigator from "../components/ProjectNavigator";
 import type { RuntimeValidationPanelData } from "../components/RuntimeValidationPanel";
 import type { STVerificationIssueItem } from "../components/STVerificationPanel";
@@ -60,6 +59,7 @@ import {
   getSimulationAnalysis,
   getSimulationTrace,
   getLogic,
+  loadDeterministicBehaviorCache,
   getEngineeringTable,
   getGraph,
   getTrace,
@@ -216,6 +216,196 @@ const resolveTraceTag = (candidate: string, trace: SimulationTracePoint[]): stri
   return match?.tag || "";
 };
 
+const identityKeyForEngineeringRow = (row: EngineeringTableResponseRow): string => {
+  return row.id?.trim() || row.tag.trim();
+};
+
+const arrayEquals = (left: readonly string[], right: readonly string[]): boolean => {
+  if (left === right) {
+    return true;
+  }
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const shallowRecordEquals = (left: Record<string, unknown>, right: Record<string, unknown>): boolean => {
+  if (left === right) {
+    return true;
+  }
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+  for (const key of leftKeys) {
+    if (!(key in right)) {
+      return false;
+    }
+    if (left[key] !== right[key]) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const traceabilityEquals = (
+  left: EngineeringTableResponseRow["traceability"],
+  right: EngineeringTableResponseRow["traceability"]
+): boolean => {
+  if (left === right) {
+    return true;
+  }
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    const leftItem = left[index];
+    const rightItem = right[index];
+    if (!rightItem) {
+      return false;
+    }
+    if (
+      leftItem.source_type !== rightItem.source_type ||
+      leftItem.source_id !== rightItem.source_id ||
+      leftItem.excerpt !== rightItem.excerpt ||
+      leftItem.confidence !== rightItem.confidence
+    ) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const engineeringRowEquals = (left: EngineeringTableResponseRow, right: EngineeringTableResponseRow): boolean => {
+  return (
+    left.id === right.id &&
+    left.tag === right.tag &&
+    left.type === right.type &&
+    left.subtype === right.subtype &&
+    left.description === right.description &&
+    left.system === right.system &&
+    left.equipment === right.equipment &&
+    left.process_role === right.process_role &&
+    left.current_value === right.current_value &&
+    left.state === right.state &&
+    left.setpoint === right.setpoint &&
+    left.mode === right.mode &&
+    left.unit === right.unit &&
+    left.range_min === right.range_min &&
+    left.range_max === right.range_max &&
+    left.fail_state === right.fail_state &&
+    left.power === right.power &&
+    left.confidence === right.confidence &&
+    left.num_connections === right.num_connections &&
+    left.num_upstream === right.num_upstream &&
+    left.num_downstream === right.num_downstream &&
+    left.is_orphan === right.is_orphan &&
+    left.is_controlled === right.is_controlled &&
+    left.is_actuated === right.is_actuated &&
+    arrayEquals(left.measures, right.measures) &&
+    arrayEquals(left.controls, right.controls) &&
+    arrayEquals(left.controlled_by, right.controlled_by) &&
+    arrayEquals(left.signal_inputs, right.signal_inputs) &&
+    arrayEquals(left.signal_outputs, right.signal_outputs) &&
+    arrayEquals(left.upstream, right.upstream) &&
+    arrayEquals(left.downstream, right.downstream) &&
+    arrayEquals(left.flow_path, right.flow_path) &&
+    arrayEquals(left.document_source, right.document_source) &&
+    arrayEquals(left.line_reference, right.line_reference) &&
+    arrayEquals(left.control_chain, right.control_chain) &&
+    arrayEquals(left.flow_chain, right.flow_chain) &&
+    arrayEquals(left.warnings, right.warnings) &&
+    shallowRecordEquals(left.grounded_fields, right.grounded_fields) &&
+    shallowRecordEquals(left.derived_fields, right.derived_fields) &&
+    traceabilityEquals(left.traceability, right.traceability)
+  );
+};
+
+const warningEquals = (left: EngineeringTableResponse["warnings"], right: EngineeringTableResponse["warnings"]): boolean => {
+  if (left === right) {
+    return true;
+  }
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    const leftWarning = left[index];
+    const rightWarning = right[index];
+    if (!rightWarning) {
+      return false;
+    }
+    if (
+      leftWarning.code !== rightWarning.code ||
+      leftWarning.severity !== rightWarning.severity ||
+      leftWarning.message !== rightWarning.message ||
+      !arrayEquals(leftWarning.affected_tags, rightWarning.affected_tags)
+    ) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const summaryEquals = (left: EngineeringTableResponse["summary"], right: EngineeringTableResponse["summary"]): boolean => {
+  return (
+    left.total_rows === right.total_rows &&
+    left.grounded_rows === right.grounded_rows &&
+    left.inferred_rows === right.inferred_rows &&
+    left.orphan_rows === right.orphan_rows &&
+    left.controlled_rows === right.controlled_rows &&
+    left.actuated_rows === right.actuated_rows &&
+    left.avg_confidence === right.avg_confidence &&
+    left.distinct_systems === right.distinct_systems &&
+    left.distinct_document_sources === right.distinct_document_sources
+  );
+};
+
+const mergeEngineeringTableData = (
+  previous: EngineeringTableResponse | null,
+  incoming: EngineeringTableResponse
+): EngineeringTableResponse => {
+  if (!previous) {
+    return incoming;
+  }
+
+  const previousByIdentity = new Map(previous.rows.map((row) => [identityKeyForEngineeringRow(row), row]));
+  let rowRefsChanged = incoming.rows.length !== previous.rows.length;
+
+  const mergedRows = incoming.rows.map((incomingRow) => {
+    const existing = previousByIdentity.get(identityKeyForEngineeringRow(incomingRow));
+    if (!existing) {
+      rowRefsChanged = true;
+      return incomingRow;
+    }
+    if (engineeringRowEquals(existing, incomingRow)) {
+      return existing;
+    }
+    rowRefsChanged = true;
+    return incomingRow;
+  });
+
+  const hasSummaryChange = !summaryEquals(previous.summary, incoming.summary);
+  const hasWarningChange = !warningEquals(previous.warnings, incoming.warnings);
+
+  if (!rowRefsChanged && !hasSummaryChange && !hasWarningChange) {
+    return previous;
+  }
+
+  return {
+    ...incoming,
+    rows: mergedRows,
+    summary: hasSummaryChange ? incoming.summary : previous.summary,
+    warnings: hasWarningChange ? incoming.warnings : previous.warnings,
+  };
+};
+
 const PIPELINE_STAGE_LABELS: Record<PipelineStageKey, string> = {
   extraction: "Extraction",
   normalization: "Normalization",
@@ -234,7 +424,6 @@ const PIPELINE_STAGE_LABELS: Record<PipelineStageKey, string> = {
 export default function Dashboard() {
   const { activeProjectId: selectedProjectId, setActiveProjectId: setSelectedProjectId, plantGraph, setPlantGraph } = useWorkspaceContext();
   const graphNodes = plantGraph.nodes;
-  const graphEdges = plantGraph.edges;
 
   const [activeAction, setActiveAction] = useState<ToolbarAction>("upload_documents");
   const [selectedNode, setSelectedNode] = useState<string>("");
@@ -280,7 +469,6 @@ export default function Dashboard() {
     setPanelState((previous) => ({ ...previous, activeModule: moduleId }));
   };
   const [tracePath, setTracePath] = useState<string[]>([]);
-  const [replayMode] = useState<boolean>(false);
   const [replayPoint, setReplayPoint] = useState<number>(64);
   const [showLogic, setShowLogic] = useState<boolean>(false);
   const [controlLogicCode, setControlLogicCode] = useState<string>("");
@@ -331,10 +519,13 @@ export default function Dashboard() {
   const [isControlLoopsLoading, setIsControlLoopsLoading] = useState<boolean>(false);
   const [controlLoopsError, setControlLoopsError] = useState<string | null>(null);
   const [selectedControlLoopTag, setSelectedControlLoopTag] = useState<string | null>(null);
-  const [graphWorkspaceView, setGraphWorkspaceView] = useState<"graph" | "table">("graph");
   const [engineeringTableData, setEngineeringTableData] = useState<EngineeringTableResponse | null>(null);
   const [engineeringTableLoading, setEngineeringTableLoading] = useState<boolean>(false);
   const [engineeringTableError, setEngineeringTableError] = useState<string | null>(null);
+  const [behaviorRefreshKey, setBehaviorRefreshKey] = useState<number>(0);
+  const [selectedWhyTraceTag, setSelectedWhyTraceTag] = useState<string | null>(null);
+  const [unsTableRowsOverride, setUnsTableRowsOverride] = useState<EngineeringTableResponseRow[] | null>(null);
+  const [productionAuthToken, setProductionAuthToken] = useState<string>("");
   const [runtimeValidationData, setRuntimeValidationData] = useState<RuntimeValidationPanelData | null>(null);
   const [isRuntimeStateLoading, setIsRuntimeStateLoading] = useState<boolean>(false);
   const [runtimeFailedMessage, setRuntimeFailedMessage] = useState<string | null>(null);
@@ -416,6 +607,7 @@ export default function Dashboard() {
   });
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const previousPipelineStatusesRef = useRef<PipelineStageStatusMap>(pipelineStatuses);
+  const behaviorHydrationSignatureRef = useRef<string>("");
   const rightResizeStartRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
   const setModuleState = (moduleId: WorkspaceModuleId, state: ModuleState): void => {
@@ -999,6 +1191,8 @@ export default function Dashboard() {
       setPlantGraph({ nodes: [], edges: [] });
       setEngineeringTableData(null);
       setEngineeringTableError(null);
+      setSelectedWhyTraceTag(null);
+      setUnsTableRowsOverride(null);
       setSelectedNode("");
       setControlLogicCode("");
       setGeneratedLogic("");
@@ -1053,6 +1247,8 @@ export default function Dashboard() {
     setPipelineStatuses(createInitialPipelineStatuses());
     setRuntimeValidationData(null);
     setRuntimeFailedMessage(null);
+    setSelectedWhyTraceTag(null);
+    setUnsTableRowsOverride(null);
     setRuntimeTelemetryTags({});
     setRuntimeForceableInputs([]);
     setForcedTagNames([]);
@@ -1119,9 +1315,8 @@ export default function Dashboard() {
           include_inferred: true,
           max_flow_depth: 4,
         });
-        setEngineeringTableData(data);
+        setEngineeringTableData((previous) => mergeEngineeringTableData(previous, data));
       } catch {
-        setEngineeringTableData(null);
         setEngineeringTableError("Engineering table endpoint unavailable for selected project.");
       } finally {
         setEngineeringTableLoading(false);
@@ -1193,6 +1388,45 @@ export default function Dashboard() {
     };
     void refresh();
   }, [activeTab, selectedProjectId]);
+
+  useEffect(() => {
+    if (!selectedProjectId) {
+      behaviorHydrationSignatureRef.current = "";
+      return;
+    }
+
+    const rows = engineeringTableData?.rows ?? [];
+    if (rows.length === 0) {
+      return;
+    }
+
+    const signature = `${selectedProjectId}:${rows.length}:${plantGraph.edges.length}`;
+    if (behaviorHydrationSignatureRef.current === signature) {
+      return;
+    }
+    behaviorHydrationSignatureRef.current = signature;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        await loadDeterministicBehaviorCache({
+          rows,
+          edges: plantGraph.edges,
+        });
+        if (!cancelled) {
+          setBehaviorRefreshKey((value) => value + 1);
+        }
+      } catch {
+        if (!cancelled) {
+          setStatusText("Deterministic behavior cache hydration failed for this project.");
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedProjectId, engineeringTableData, plantGraph.edges]);
 
   useEffect(() => {
     if (simulationTrace.length === 0) {
@@ -1708,7 +1942,8 @@ export default function Dashboard() {
     }
   };
 
-  const handleTrace = async (nodeId: string): Promise<void> => {
+  const handleTrace = useCallback(async (nodeId: string): Promise<void> => {
+    setSelectedWhyTraceTag(null);
     setSelectedNode(nodeId);
     if (!selectedProjectId) {
       setTracePath([]);
@@ -1723,40 +1958,28 @@ export default function Dashboard() {
       setTracePath([]);
     }
     setActiveTab("Trace");
-  };
+  }, [selectedProjectId]);
 
-  const handleEngineeringTraceSignal = (row: EngineeringTableResponseRow): void => {
-    void handleTrace(row.tag);
-    setIsRightPanelExpanded(true);
-  };
+  const handleEngineeringRowSelect = useCallback(
+    (row: EngineeringTableResponseRow): void => {
+      setSelectedNode(row.tag);
+      if (activeTab === "Trace") {
+        void handleTrace(row.tag);
+      }
+    },
+    [activeTab, handleTrace]
+  );
 
-  const handleEngineeringOpenControlLoop = (row: EngineeringTableResponseRow): void => {
-    const loopMatch = controlLoops.find(
-      (loop) => loop.loop_tag === row.tag || loop.sensor_tag === row.tag || loop.controller_tag === row.tag || loop.actuator_tag === row.tag
-    );
-
-    setActiveTab("Control Loops");
-    setIsRightPanelExpanded(true);
-
-    if (loopMatch) {
-      setSelectedControlLoopTag(loopMatch.loop_tag);
-      setSelectedNode(loopMatch.sensor_tag || row.tag);
-      return;
-    }
-
-    setSelectedControlLoopTag(row.tag);
+  const handleEngineeringOpenWhyTrace = useCallback((row: EngineeringTableResponseRow): void => {
     setSelectedNode(row.tag);
-    setStatusText(`No explicit control loop found for ${row.tag}.`);
-  };
-
-  const handleEngineeringOpenIOMapping = (row: EngineeringTableResponseRow): void => {
-    setSelectedIOMappingTag(row.tag);
-    setSelectedNode(row.tag);
-    setMonitoringPanelMode("io_mapping");
-    setActiveBottomView("monitoring");
-    setActiveTab("IO Mapping");
+    setSelectedWhyTraceTag(row.tag);
+    setActiveTab("Trace");
     setIsRightPanelExpanded(true);
-  };
+  }, []);
+
+  const handleCloseWhyTrace = useCallback((): void => {
+    setSelectedWhyTraceTag(null);
+  }, []);
 
   const confirmDeleteProject = async (): Promise<void> => {
     if (!projectToDelete) {
@@ -2826,53 +3049,14 @@ export default function Dashboard() {
                 </aside>
 
                 <section className="graph-shell">
-                  <div className="plant-view-toggle">
-                    <button
-                      className={`command-btn ${graphWorkspaceView === "graph" ? "active" : ""}`}
-                      type="button"
-                      onClick={() => setGraphWorkspaceView("graph")}
-                    >
-                      Graph View
-                    </button>
-                    <button
-                      className={`command-btn ${graphWorkspaceView === "table" ? "active" : ""}`}
-                      type="button"
-                      onClick={() => setGraphWorkspaceView("table")}
-                    >
-                      Table View
-                    </button>
-                  </div>
-
-                  {graphWorkspaceView === "graph" ? (
-                    <GraphWorkspace
-                      graphEdges={graphEdges}
-                      graphNodes={graphNodes}
-                      replayMode={replayMode}
-                      replayPoint={replayPoint}
-                      selectedNode={selectedNode}
-                      tracePath={tracePath}
-                      onNodeSelect={setSelectedNode}
-                      onReplayPointChange={setReplayPoint}
-                      onTraceNode={(nodeId) => {
-                        void handleTrace(nodeId);
-                      }}
-                    />
-                  ) : (
-                    <EngineeringTable
-                      rows={engineeringTableData?.rows ?? []}
-                      loading={engineeringTableLoading}
-                      error={engineeringTableError}
-                      onTraceSignal={handleEngineeringTraceSignal}
-                      onOpenControlLoop={handleEngineeringOpenControlLoop}
-                      onOpenIOMapping={handleEngineeringOpenIOMapping}
-                      onRowSelect={(row: EngineeringTableResponseRow) => {
-                        setSelectedNode(row.tag);
-                        if (activeTab === "Trace") {
-                          void handleTrace(row.tag);
-                        }
-                      }}
-                    />
-                  )}
+                  <EngineeringDeterministicTable
+                    projectId={selectedProjectId}
+                    reloadKey={behaviorRefreshKey}
+                    loading={engineeringTableLoading}
+                    error={engineeringTableError}
+                    onRowSelect={handleEngineeringRowSelect}
+                    onOpenWhyTrace={handleEngineeringOpenWhyTrace}
+                  />
                 </section>
               </div>
 
@@ -2908,6 +3092,7 @@ export default function Dashboard() {
                     selectedEquipment={selectedEquipment}
                     selectedNodeId={selectedNode}
                     tracePath={tracePath}
+                    whyTraceTag={selectedWhyTraceTag}
                     ioMappingRows={selectedNodeIOMappingRows}
                     ioMappingIssues={ioMappingIssues}
                     selectedIOMappingTag={selectedIOMappingTag}
@@ -2926,6 +3111,7 @@ export default function Dashboard() {
                       setActiveTab("IO Mapping");
                     }}
                     onReplayPointChange={setReplayPoint}
+                    onCloseWhyTrace={handleCloseWhyTrace}
                     onSelectedReplayTagChange={setSelectedReplayTag}
                     onSelectControlLoop={handleControlLoopSelect}
                     onDetectControlLoops={() => {
@@ -2960,6 +3146,23 @@ export default function Dashboard() {
                     }}
                     onPIDCreateSnapshot={() => {
                       void handlePIDCreateSnapshot();
+                    }}
+                    projectId={selectedProjectId}
+                    engineeringRows={unsTableRowsOverride ?? engineeringTableData?.rows ?? []}
+                    productionAuthToken={productionAuthToken}
+                    onProductionAuthTokenChange={setProductionAuthToken}
+                    onWorkspaceRowsUpdate={setUnsTableRowsOverride}
+                    onWorkspaceSelectTag={(tag) => {
+                      setSelectedNode(tag);
+                    }}
+                    onWorkspaceTracePath={(path) => {
+                      setTracePath(path);
+                      if (path[0]) {
+                        setSelectedNode(path[0]);
+                      }
+                      setSelectedWhyTraceTag(null);
+                      setActiveTab("Trace");
+                      setIsRightPanelExpanded(true);
                     }}
                     onTabChange={setActiveTab}
                   />

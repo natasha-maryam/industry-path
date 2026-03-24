@@ -1,6 +1,7 @@
 import { Suspense, lazy } from "react";
 import type {
   ControlLoopRecord,
+  EngineeringTableResponseRow,
   FaultAnalysisResult,
   IOMappingIssue,
   IOMappingTableRow,
@@ -21,6 +22,7 @@ const RightControlLoopsTab = lazy(() => import("./rightTabs/RightControlLoopsTab
 const RightDiagnosticsTab = lazy(() => import("./rightTabs/RightDiagnosticsTab"));
 const RightVersionsTab = lazy(() => import("./rightTabs/RightVersionsTab"));
 const RightPIDChangesTab = lazy(() => import("./rightTabs/RightPIDChangesTab"));
+const RightWorkspaceToolsTab = lazy(() => import("./rightTabs/RightWorkspaceToolsTab"));
 
 export type RightTab = RightPanelTabId;
 
@@ -31,6 +33,7 @@ type DetailsPanelProps = {
   selectedEquipment: Equipment;
   selectedNodeId?: string;
   tracePath: string[];
+  whyTraceTag?: string | null;
   ioMappingRows?: IOMappingTableRow[];
   ioMappingIssues?: IOMappingIssue[];
   selectedIOMappingTag?: string | null;
@@ -58,6 +61,7 @@ type DetailsPanelProps = {
   onTraceControlLoop?: (loop: ControlLoopRecord) => void;
   onSimulateControlLoop?: (loop: ControlLoopRecord) => void;
   onReplayPointChange?: (point: number) => void;
+  onCloseWhyTrace?: () => void;
   onOpenVersionsWorkspace?: () => void;
   pidChanges?: PIDReconcileSummary | null;
   pidChangesLoading?: boolean;
@@ -69,10 +73,17 @@ type DetailsPanelProps = {
   onPIDReviewConflicts?: () => void;
   onPIDApplyUpdate?: () => void;
   onPIDCreateSnapshot?: () => void;
+  projectId?: string;
+  engineeringRows?: EngineeringTableResponseRow[];
+  productionAuthToken?: string;
+  onProductionAuthTokenChange?: (token: string) => void;
+  onWorkspaceRowsUpdate?: (rows: EngineeringTableResponseRow[]) => void;
+  onWorkspaceSelectTag?: (tag: string) => void;
+  onWorkspaceTracePath?: (path: string[]) => void;
   onTabChange: (tab: RightTab) => void;
 };
 
-const TABS: RightTab[] = ["Details", "Signals", "Trace", "Replay", "IO Mapping", "Control Loops", "Diagnostics", "Versions", "P&ID Changes"];
+const TABS: RightTab[] = ["Details", "Signals", "Trace", "Replay", "IO Mapping", "Control Loops", "Diagnostics", "Versions", "P&ID Changes", "Workspace"];
 
 export default function DetailsPanel({
   activeTab,
@@ -81,6 +92,7 @@ export default function DetailsPanel({
   selectedEquipment,
   selectedNodeId = "",
   tracePath,
+  whyTraceTag = null,
   ioMappingRows = [],
   ioMappingIssues = [],
   selectedIOMappingTag = null,
@@ -108,6 +120,7 @@ export default function DetailsPanel({
   onTraceControlLoop,
   onSimulateControlLoop,
   onReplayPointChange,
+  onCloseWhyTrace,
   onOpenVersionsWorkspace,
   pidChanges = null,
   pidChangesLoading = false,
@@ -119,6 +132,13 @@ export default function DetailsPanel({
   onPIDReviewConflicts,
   onPIDApplyUpdate,
   onPIDCreateSnapshot,
+  projectId,
+  engineeringRows = [],
+  productionAuthToken = "",
+  onProductionAuthTokenChange,
+  onWorkspaceRowsUpdate,
+  onWorkspaceSelectTag,
+  onWorkspaceTracePath,
   onTabChange,
 }: DetailsPanelProps) {
   const renderActiveTab = () => {
@@ -129,7 +149,7 @@ export default function DetailsPanel({
       return <RightSignalsTab selectedEquipment={selectedEquipment} runtimeTelemetryTags={runtimeTelemetryTags} forcedTags={forcedTagNames} />;
     }
     if (activeTab === "Trace") {
-      return <RightTraceTab tracePath={tracePath} />;
+      return <RightTraceTab tracePath={tracePath} whyTraceTag={whyTraceTag} onCloseWhyTrace={onCloseWhyTrace} />;
     }
     if (activeTab === "Replay") {
       return (
@@ -187,6 +207,19 @@ export default function DetailsPanel({
           onReviewConflicts={() => onPIDReviewConflicts?.()}
           onApplyUpdate={() => onPIDApplyUpdate?.()}
           onCreateSnapshot={() => onPIDCreateSnapshot?.()}
+        />
+      );
+    }
+    if (activeTab === "Workspace") {
+      return (
+        <RightWorkspaceToolsTab
+          projectId={projectId}
+          currentRows={engineeringRows}
+          authToken={productionAuthToken}
+          onAuthTokenChange={(token) => onProductionAuthTokenChange?.(token)}
+          onRowsUpdate={onWorkspaceRowsUpdate}
+          onSelectTag={onWorkspaceSelectTag}
+          onTracePath={onWorkspaceTracePath}
         />
       );
     }

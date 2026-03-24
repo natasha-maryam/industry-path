@@ -10,7 +10,17 @@ export type WorkspaceModuleId =
   | "monitoring"
   | "diagnostics";
 
-export type RightPanelTabId = "Details" | "Signals" | "Trace" | "Replay" | "IO Mapping" | "Control Loops" | "Diagnostics" | "Versions" | "P&ID Changes";
+export type RightPanelTabId =
+  | "Details"
+  | "Signals"
+  | "Trace"
+  | "Replay"
+  | "IO Mapping"
+  | "Control Loops"
+  | "Diagnostics"
+  | "Versions"
+  | "P&ID Changes"
+  | "Workspace";
 
 export type TopToolbarActionId =
   | "upload_documents"

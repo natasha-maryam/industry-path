@@ -1,0 +1,766 @@
+from __future__ import annotations
+
+from collections import defaultdict, deque
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+import logging
+from threading import RLock
+from typing import Any, Callable, Iterable, Mapping
+
+from models.engineering_table import EngineeringTableRow
+from models.graph import GraphEdge
+
+
+BehaviorListener = Callable[[str, dict[str, Any]], None]
+logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class RuntimeState:
+    tag: str
+    current_value: str | None = None
+    state: str | None = None
+    setpoint: str | None = None
+    mode: str | None = None
+    unit: str | None = None
+    updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    snapshot_id: str = "snapshot-00000000"
+    revision: int = 0
+
+    def apply_patch(self, patch: Mapping[str, Any], snapshot_id: str) -> bool:
+        changed = False
+
+        def to_string_or_none(value: Any) -> str | None:
+            if value is None:
+                return None
+            text = str(value).strip()
+            return text or None
+
+        for key in ("current_value", "state", "setpoint", "mode", "unit"):
+            if key not in patch:
+                continue
+            next_value = to_string_or_none(patch.get(key))
+            if getattr(self, key) != next_value:
+                setattr(self, key, next_value)
+                changed = True
+
+        if changed:
+            self.snapshot_id = snapshot_id
+            self.revision += 1
+            self.updated_at = datetime.now(timezone.utc).isoformat()
+
+        return changed
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "tag": self.tag,
+            "current_value": self.current_value,
+            "state": self.state,
+            "setpoint": self.setpoint,
+            "mode": self.mode,
+            "unit": self.unit,
+            "updated_at": self.updated_at,
+            "snapshot_id": self.snapshot_id,
+            "revision": self.revision,
+        }
+
+
+@dataclass(slots=True, frozen=True)
+class RelationshipEdge:
+    id: str
+    source: str
+    target: str
+    edge_type: str
+    edge_class: str | None = None
+    confidence: float | None = None
+
+
+@dataclass(slots=True)
+class RowModel:
+    id: str
+    tag: str
+    type: str
+    subtype: str | None = None
+    description: str | None = None
+    system: str | None = None
+    equipment: str | None = None
+    process_role: str | None = None
+    measures: list[str] = field(default_factory=list)
+    controls: list[str] = field(default_factory=list)
+    controlled_by: list[str] = field(default_factory=list)
+    signal_inputs: list[str] = field(default_factory=list)
+    signal_outputs: list[str] = field(default_factory=list)
+    upstream: list[str] = field(default_factory=list)
+    downstream: list[str] = field(default_factory=list)
+    flow_path: list[str] = field(default_factory=list)
+    current_value: str | None = None
+    state: str | None = None
+    setpoint: str | None = None
+    mode: str | None = None
+    unit: str | None = None
+    range_min: float | None = None
+    range_max: float | None = None
+    fail_state: str | None = None
+    power: str | None = None
+    document_source: list[str] = field(default_factory=list)
+    line_reference: list[str] = field(default_factory=list)
+    confidence: float = 0.0
+    num_connections: int = 0
+    num_upstream: int = 0
+    num_downstream: int = 0
+    control_chain: list[str] = field(default_factory=list)
+    flow_chain: list[str] = field(default_factory=list)
+    is_orphan: bool = False
+    is_controlled: bool = False
+    is_actuated: bool = False
+    warnings: list[str] = field(default_factory=list)
+    grounded_fields: dict[str, object] = field(default_factory=dict)
+    derived_fields: dict[str, object] = field(default_factory=dict)
+    traceability: list[dict[str, Any]] = field(default_factory=list)
+
+    behavior_card: str = ""
+    behavior_summary: str = ""
+    cause_chain: list[str] = field(default_factory=list)
+    effect_chain: list[str] = field(default_factory=list)
+    impact_summary: str = ""
+    behavior_confidence: float = 0.0
+    state_snapshot_id: str = "snapshot-00000000"
+    why_trace_available: bool = False
+
+    @classmethod
+    def from_engineering_row(cls, row: EngineeringTableRow | Mapping[str, Any], snapshot_id: str) -> "RowModel":
+        def get_value(field_name: str, default: Any = None) -> Any:
+            if isinstance(row, Mapping):
+                return row.get(field_name, default)
+            return getattr(row, field_name, default)
+
+        traceability_items: list[dict[str, Any]] = []
+        raw_traceability = get_value("traceability", []) or []
+        for item in raw_traceability:
+            if hasattr(item, "model_dump"):
+                traceability_items.append(item.model_dump())
+            elif isinstance(item, Mapping):
+                traceability_items.append(dict(item))
+
+        return cls(
+            id=str(get_value("id", "")).strip(),
+            tag=str(get_value("tag", "")).strip(),
+            type=str(get_value("type", "unknown")).strip() or "unknown",
+            subtype=get_value("subtype"),
+            description=get_value("description"),
+            system=get_value("system"),
+            equipment=get_value("equipment"),
+            process_role=get_value("process_role"),
+            measures=[str(item) for item in (get_value("measures", []) or []) if item],
+            controls=[str(item) for item in (get_value("controls", []) or []) if item],
+            controlled_by=[str(item) for item in (get_value("controlled_by", []) or []) if item],
+            signal_inputs=[str(item) for item in (get_value("signal_inputs", []) or []) if item],
+            signal_outputs=[str(item) for item in (get_value("signal_outputs", []) or []) if item],
+            upstream=[str(item) for item in (get_value("upstream", []) or []) if item],
+            downstream=[str(item) for item in (get_value("downstream", []) or []) if item],
+            flow_path=[str(item) for item in (get_value("flow_path", []) or []) if item],
+            current_value=(str(get_value("current_value")).strip() if get_value("current_value") is not None else None),
+            state=(str(get_value("state")).strip() if get_value("state") is not None else None),
+            setpoint=(str(get_value("setpoint")).strip() if get_value("setpoint") is not None else None),
+            mode=(str(get_value("mode")).strip() if get_value("mode") is not None else None),
+            unit=(str(get_value("unit")).strip() if get_value("unit") is not None else None),
+            range_min=get_value("range_min"),
+            range_max=get_value("range_max"),
+            fail_state=get_value("fail_state"),
+            power=get_value("power"),
+            document_source=[str(item) for item in (get_value("document_source", []) or []) if item],
+            line_reference=[str(item) for item in (get_value("line_reference", []) or []) if item],
+            confidence=float(get_value("confidence", 0.0) or 0.0),
+            num_connections=int(get_value("num_connections", 0) or 0),
+            num_upstream=int(get_value("num_upstream", 0) or 0),
+            num_downstream=int(get_value("num_downstream", 0) or 0),
+            control_chain=[str(item) for item in (get_value("control_chain", []) or []) if item],
+            flow_chain=[str(item) for item in (get_value("flow_chain", []) or []) if item],
+            is_orphan=bool(get_value("is_orphan", False)),
+            is_controlled=bool(get_value("is_controlled", False)),
+            is_actuated=bool(get_value("is_actuated", False)),
+            warnings=[str(item) for item in (get_value("warnings", []) or []) if item],
+            grounded_fields=dict(get_value("grounded_fields", {}) or {}),
+            derived_fields=dict(get_value("derived_fields", {}) or {}),
+            traceability=traceability_items,
+            state_snapshot_id=snapshot_id,
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "tag": self.tag,
+            "type": self.type,
+            "subtype": self.subtype,
+            "description": self.description,
+            "system": self.system,
+            "equipment": self.equipment,
+            "process_role": self.process_role,
+            "measures": list(self.measures),
+            "controls": list(self.controls),
+            "controlled_by": list(self.controlled_by),
+            "signal_inputs": list(self.signal_inputs),
+            "signal_outputs": list(self.signal_outputs),
+            "upstream": list(self.upstream),
+            "downstream": list(self.downstream),
+            "flow_path": list(self.flow_path),
+            "current_value": self.current_value,
+            "state": self.state,
+            "setpoint": self.setpoint,
+            "mode": self.mode,
+            "unit": self.unit,
+            "range_min": self.range_min,
+            "range_max": self.range_max,
+            "fail_state": self.fail_state,
+            "power": self.power,
+            "document_source": list(self.document_source),
+            "line_reference": list(self.line_reference),
+            "confidence": self.confidence,
+            "num_connections": self.num_connections,
+            "num_upstream": self.num_upstream,
+            "num_downstream": self.num_downstream,
+            "control_chain": list(self.control_chain),
+            "flow_chain": list(self.flow_chain),
+            "is_orphan": self.is_orphan,
+            "is_controlled": self.is_controlled,
+            "is_actuated": self.is_actuated,
+            "warnings": list(self.warnings),
+            "grounded_fields": dict(self.grounded_fields),
+            "derived_fields": dict(self.derived_fields),
+            "traceability": [dict(item) for item in self.traceability],
+            "behavior_card": self.behavior_card,
+            "behavior_summary": self.behavior_summary,
+            "cause_chain": list(self.cause_chain),
+            "effect_chain": list(self.effect_chain),
+            "impact_summary": self.impact_summary,
+            "behavior_confidence": self.behavior_confidence,
+            "state_snapshot_id": self.state_snapshot_id,
+            "why_trace_available": self.why_trace_available,
+        }
+
+
+class DeterministicBehaviorService:
+    def __init__(self, impact_radius: int = 2, default_chain_depth: int = 4) -> None:
+        self._lock = RLock()
+        self._impact_radius = max(1, impact_radius)
+        self._default_chain_depth = max(1, default_chain_depth)
+
+        self._rows_by_tag: dict[str, RowModel] = {}
+        self._runtime_by_tag: dict[str, RuntimeState] = {}
+        self._edges: list[RelationshipEdge] = []
+
+        self._outbound: dict[str, set[str]] = defaultdict(set)
+        self._inbound: dict[str, set[str]] = defaultdict(set)
+        self._neighbor_index: dict[str, set[str]] = defaultdict(set)
+        self._edge_type_pairs: dict[tuple[str, str], str] = {}
+
+        self._listeners: dict[str, BehaviorListener] = {}
+        self._listener_sequence = 0
+        self._snapshot_sequence = 0
+        self._active_snapshot_id = self._next_snapshot_id_locked()
+
+    def register_listener(self, callback: BehaviorListener) -> str:
+        with self._lock:
+            self._listener_sequence += 1
+            listener_id = f"listener-{self._listener_sequence:06d}"
+            self._listeners[listener_id] = callback
+            return listener_id
+
+    def unregister_listener(self, listener_id: str) -> None:
+        with self._lock:
+            self._listeners.pop(listener_id, None)
+
+    def get_listener_count(self) -> int:
+        with self._lock:
+            return len(self._listeners)
+
+    def get_rows_loaded_count(self) -> int:
+        with self._lock:
+            return len(self._rows_by_tag)
+
+    def has_row_tag(self, tag: str) -> bool:
+        with self._lock:
+            return tag in self._rows_by_tag
+
+    def has_runtime_tag(self, tag: str) -> bool:
+        with self._lock:
+            return tag in self._runtime_by_tag
+
+    def get_row_preview(self, tag: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._rows_by_tag.get(tag)
+            if row is None:
+                return None
+            return row.as_dict()
+
+    def get_sample_tags(self, limit: int = 10) -> list[str]:
+        with self._lock:
+            effective_limit = max(0, limit)
+            return sorted(self._rows_by_tag.keys())[:effective_limit]
+
+    def get_runtime_values_count(self) -> int:
+        with self._lock:
+            return len(self._runtime_by_tag)
+
+    def get_edges(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [
+                {
+                    "id": edge.id,
+                    "source": edge.source,
+                    "target": edge.target,
+                    "edge_type": edge.edge_type,
+                    "edge_class": edge.edge_class,
+                    "confidence": edge.confidence,
+                }
+                for edge in self._edges
+            ]
+
+    def load(
+        self,
+        rows: Iterable[EngineeringTableRow | Mapping[str, Any]],
+        edges: Iterable[GraphEdge | RelationshipEdge | Mapping[str, Any]],
+        runtime_seed: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        listeners: list[BehaviorListener]
+        payload: dict[str, Any]
+        with self._lock:
+            self._rows_by_tag.clear()
+            self._runtime_by_tag.clear()
+            self._edges = [self._coerce_edge(edge) for edge in edges]
+            self._rebuild_edge_indexes_locked()
+            self._active_snapshot_id = self._next_snapshot_id_locked()
+
+            for raw_row in rows:
+                row = RowModel.from_engineering_row(raw_row, snapshot_id=self._active_snapshot_id)
+                if not row.tag:
+                    continue
+                self._rows_by_tag[row.tag] = row
+                self._runtime_by_tag[row.tag] = RuntimeState(
+                    tag=row.tag,
+                    current_value=row.current_value,
+                    state=row.state,
+                    setpoint=row.setpoint,
+                    mode=row.mode,
+                    unit=row.unit,
+                    snapshot_id=self._active_snapshot_id,
+                )
+
+            if runtime_seed:
+                for tag, patch in runtime_seed.items():
+                    state = self._runtime_by_tag.get(tag)
+                    if state is None:
+                        continue
+                    state.apply_patch(patch, snapshot_id=self._active_snapshot_id)
+
+            recomputed = self._recompute_rows_locked(set(self._rows_by_tag.keys()), self._active_snapshot_id)
+            payload = {
+                "snapshot_id": self._active_snapshot_id,
+                "rows_loaded": len(self._rows_by_tag),
+                "edges_loaded": len(self._edges),
+                "recomputed": len(recomputed),
+            }
+            listeners = list(self._listeners.values())
+
+        self._notify_listeners(listeners, "loaded", payload)
+        return payload
+
+    def get_row(self, tag: str) -> RowModel | None:
+        with self._lock:
+            row = self._rows_by_tag.get(tag)
+            if row is None:
+                return None
+            return RowModel(**row.as_dict())
+
+    def get_rows(self, tags: Iterable[str] | None = None) -> list[dict[str, Any]]:
+        with self._lock:
+            if tags is None:
+                target_tags = sorted(self._rows_by_tag.keys())
+            else:
+                target_tags = [tag for tag in tags if tag in self._rows_by_tag]
+            return [self._rows_by_tag[tag].as_dict() for tag in target_tags]
+
+    def get_runtime_state(self, tag: str) -> dict[str, Any] | None:
+        with self._lock:
+            state = self._runtime_by_tag.get(tag)
+            return state.as_dict() if state else None
+
+    def update_runtime_values(
+        self,
+        updates: Mapping[str, Mapping[str, Any]],
+        radius: int | None = None,
+    ) -> dict[str, Any]:
+        listeners: list[BehaviorListener]
+        payload: dict[str, Any]
+        with self._lock:
+            changed_tags: set[str] = set()
+            ignored_tags: list[str] = []
+
+            if not updates:
+                logger.info("behavior_runtime_update skipped empty_updates")
+                return {
+                    "snapshot_id": self._active_snapshot_id,
+                    "changed_tags": [],
+                    "impacted_tags": [],
+                    "updated_rows": [],
+                    "ignored_tags": [],
+                }
+
+            next_snapshot_id = self._next_snapshot_id_locked()
+
+            def to_string_or_none(value: Any) -> str | None:
+                if value is None:
+                    return None
+                text = str(value).strip()
+                return text or None
+
+            for tag, patch in updates.items():
+                if tag not in self._rows_by_tag:
+                    ignored_tags.append(tag)
+                    continue
+
+                changed_tags.add(tag)
+                state = self._runtime_by_tag.get(tag)
+                if state is None:
+                    state = RuntimeState(tag=tag, snapshot_id=next_snapshot_id)
+                    self._runtime_by_tag[tag] = state
+
+                state.apply_patch(patch, snapshot_id=next_snapshot_id)
+
+                row = self._rows_by_tag.get(tag)
+                if row is not None:
+                    if "current_value" in patch:
+                        row.current_value = to_string_or_none(patch.get("current_value"))
+                    if "state" in patch:
+                        row.state = to_string_or_none(patch.get("state"))
+                    if "setpoint" in patch:
+                        row.setpoint = to_string_or_none(patch.get("setpoint"))
+                    if "mode" in patch:
+                        row.mode = to_string_or_none(patch.get("mode"))
+
+            if not changed_tags:
+                self._active_snapshot_id = next_snapshot_id
+                logger.info(
+                    "behavior_runtime_update no_matching_rows updates=%s ignored=%s",
+                    sorted(updates.keys()),
+                    sorted(ignored_tags),
+                )
+                return {
+                    "snapshot_id": self._active_snapshot_id,
+                    "changed_tags": [],
+                    "impacted_tags": [],
+                    "updated_rows": [],
+                    "ignored_tags": ignored_tags,
+                }
+
+            self._active_snapshot_id = next_snapshot_id
+            impacted_tags = self._expand_radius_locked(changed_tags, radius if radius is not None else self._impact_radius)
+            updated_row_tags = self._recompute_rows_locked(impacted_tags, self._active_snapshot_id)
+            updated_rows = [self._rows_by_tag[tag].as_dict() for tag in updated_row_tags if tag in self._rows_by_tag]
+
+            payload = {
+                "snapshot_id": self._active_snapshot_id,
+                "changed_tags": sorted(changed_tags),
+                "impacted_tags": sorted(impacted_tags),
+                "updated_rows": updated_rows,
+                "ignored_tags": sorted(ignored_tags),
+            }
+            listeners = list(self._listeners.values())
+
+            logger.info(
+                "behavior_runtime_update updated changed_tags=%s impacted_tags=%s ignored_tags=%s updated_rows=%s",
+                payload["changed_tags"],
+                payload["impacted_tags"],
+                payload["ignored_tags"],
+                len(updated_rows),
+            )
+
+        self._notify_listeners(listeners, "runtime_update", payload)
+        return payload
+
+    def explain_why(self, tag: str, max_depth: int = 3) -> dict[str, Any]:
+        with self._lock:
+            row = self._rows_by_tag.get(tag)
+            if row is None:
+                return {
+                    "tag": tag,
+                    "available": False,
+                    "snapshot_id": self._active_snapshot_id,
+                    "steps": [],
+                }
+
+            steps = self._build_why_trace_locked(tag, max_depth=max(1, max_depth))
+            runtime_state = self._runtime_by_tag.get(tag)
+
+            return {
+                "tag": tag,
+                "available": row.why_trace_available,
+                "snapshot_id": row.state_snapshot_id,
+                "behavior_card": row.behavior_card,
+                "behavior_summary": row.behavior_summary,
+                "runtime_state": runtime_state.as_dict() if runtime_state else None,
+                "steps": steps,
+            }
+
+    def _notify_listeners(self, listeners: list[BehaviorListener], event_type: str, payload: dict[str, Any]) -> None:
+        for listener in listeners:
+            try:
+                listener(event_type, payload)
+            except Exception:
+                continue
+
+    def _next_snapshot_id_locked(self) -> str:
+        self._snapshot_sequence += 1
+        return f"snapshot-{self._snapshot_sequence:08d}"
+
+    def _coerce_edge(self, edge: GraphEdge | RelationshipEdge | Mapping[str, Any]) -> RelationshipEdge:
+        if isinstance(edge, RelationshipEdge):
+            return edge
+        if hasattr(edge, "model_dump"):
+            payload = edge.model_dump()
+        elif isinstance(edge, Mapping):
+            payload = dict(edge)
+        else:
+            payload = {
+                "id": getattr(edge, "id", ""),
+                "source": getattr(edge, "source", ""),
+                "target": getattr(edge, "target", ""),
+                "edge_type": getattr(edge, "edge_type", "RELATED_TO"),
+                "edge_class": getattr(edge, "edge_class", None),
+                "confidence": getattr(edge, "confidence", None),
+            }
+
+        return RelationshipEdge(
+            id=str(payload.get("id", "")).strip(),
+            source=str(payload.get("source", "")).strip(),
+            target=str(payload.get("target", "")).strip(),
+            edge_type=str(payload.get("edge_type", "RELATED_TO")).strip() or "RELATED_TO",
+            edge_class=(str(payload.get("edge_class")).strip() if payload.get("edge_class") is not None else None),
+            confidence=(float(payload["confidence"]) if payload.get("confidence") is not None else None),
+        )
+
+    def _rebuild_edge_indexes_locked(self) -> None:
+        self._outbound.clear()
+        self._inbound.clear()
+        self._neighbor_index.clear()
+        self._edge_type_pairs.clear()
+
+        for edge in self._edges:
+            if not edge.source or not edge.target:
+                continue
+            self._outbound[edge.source].add(edge.target)
+            self._inbound[edge.target].add(edge.source)
+            self._neighbor_index[edge.source].add(edge.target)
+            self._neighbor_index[edge.target].add(edge.source)
+            self._edge_type_pairs[(edge.source, edge.target)] = edge.edge_type
+
+    def _expand_radius_locked(self, changed_tags: set[str], radius: int) -> set[str]:
+        effective_radius = max(0, radius)
+        impacted: set[str] = set(changed_tags)
+        queue: deque[tuple[str, int]] = deque((tag, 0) for tag in sorted(changed_tags))
+
+        while queue:
+            current, depth = queue.popleft()
+            if depth >= effective_radius:
+                continue
+            for neighbor in sorted(self._neighbor_index.get(current, set())):
+                if neighbor in impacted:
+                    continue
+                impacted.add(neighbor)
+                queue.append((neighbor, depth + 1))
+
+        return impacted
+
+    def _recompute_rows_locked(self, tags: set[str], snapshot_id: str) -> list[str]:
+        updated_tags: list[str] = []
+        for tag in sorted(tags):
+            row = self._rows_by_tag.get(tag)
+            if row is None:
+                continue
+
+            runtime = self._runtime_by_tag.get(tag)
+            cause_chain = self._compute_chain_locked(tag, direction="upstream", max_depth=self._default_chain_depth)
+            effect_chain = self._compute_chain_locked(tag, direction="downstream", max_depth=self._default_chain_depth)
+
+            row.current_value = runtime.current_value if runtime else row.current_value
+            row.state = runtime.state if runtime else row.state
+            row.setpoint = runtime.setpoint if runtime else row.setpoint
+            row.mode = runtime.mode if runtime else row.mode
+            row.unit = runtime.unit if runtime else row.unit
+
+            row.cause_chain = cause_chain
+            row.effect_chain = effect_chain
+            row.behavior_card = self._build_behavior_card_locked(row, runtime)
+            row.behavior_summary = self._build_behavior_summary_locked(row, runtime, cause_chain, effect_chain)
+            row.impact_summary = self._build_impact_summary_locked(cause_chain, effect_chain)
+            row.behavior_confidence = self._compute_behavior_confidence_locked(row, runtime, cause_chain, effect_chain)
+            row.state_snapshot_id = snapshot_id
+            row.why_trace_available = bool(cause_chain or effect_chain)
+            updated_tags.append(tag)
+
+        return updated_tags
+
+    def _compute_chain_locked(self, tag: str, direction: str, max_depth: int) -> list[str]:
+        if direction not in {"upstream", "downstream"}:
+            raise ValueError("direction must be 'upstream' or 'downstream'")
+
+        adjacency = self._inbound if direction == "upstream" else self._outbound
+        visited: set[str] = {tag}
+        chain: list[str] = []
+        queue: deque[tuple[str, int]] = deque([(tag, 0)])
+
+        while queue:
+            current, depth = queue.popleft()
+            if depth >= max_depth:
+                continue
+
+            for neighbor in sorted(adjacency.get(current, set())):
+                if neighbor in visited:
+                    continue
+                visited.add(neighbor)
+                chain.append(neighbor)
+                queue.append((neighbor, depth + 1))
+
+        return chain
+
+    def _build_node_phrase_locked(self, row: RowModel, runtime: RuntimeState | None) -> str:
+        role = (row.process_role or row.type or "equipment").strip().lower()
+
+        if role in {"sensor", "instrument"}:
+            target = row.measures[0] if row.measures else (row.downstream[0] if row.downstream else "process")
+            value = runtime.current_value if runtime and runtime.current_value else "latest value"
+            return f"Instrument {row.tag} measures {target} at {value}."
+
+        if role in {"controller", "control"}:
+            target = row.controls[0] if row.controls else (row.downstream[0] if row.downstream else "controlled targets")
+            mode = runtime.mode if runtime and runtime.mode else "auto"
+            return f"Control node {row.tag} regulates {target} in {mode} mode."
+
+        if role in {"actuator", "valve", "pump"} or row.is_actuated:
+            target = row.controls[0] if row.controls else (row.downstream[0] if row.downstream else "process path")
+            state = runtime.state if runtime and runtime.state else "standby"
+            return f"Actuator {row.tag} drives {target} with state {state}."
+
+        neighborhood = len(self._neighbor_index.get(row.tag, set()))
+        return f"Equipment {row.tag} interacts with {neighborhood} connected node(s)."
+
+    def _build_behavior_card_locked(self, row: RowModel, runtime: RuntimeState | None) -> str:
+        phrase = self._build_node_phrase_locked(row, runtime)
+        if runtime is None:
+            return f"{phrase} Runtime feed pending."
+
+        runtime_parts = [
+            f"state={runtime.state}" if runtime.state else None,
+            f"value={runtime.current_value}" if runtime.current_value else None,
+            f"setpoint={runtime.setpoint}" if runtime.setpoint else None,
+        ]
+        rendered = ", ".join(part for part in runtime_parts if part)
+        return f"{phrase} {rendered}".strip()
+
+    def _build_behavior_summary_locked(
+        self,
+        row: RowModel,
+        runtime: RuntimeState | None,
+        cause_chain: list[str],
+        effect_chain: list[str],
+    ) -> str:
+        phrase = self._build_node_phrase_locked(row, runtime)
+        cause_text = ", ".join(cause_chain[:3]) if cause_chain else "none"
+        effect_text = ", ".join(effect_chain[:3]) if effect_chain else "none"
+
+        runtime_text_parts = [
+            f"current={runtime.current_value}" if runtime and runtime.current_value else None,
+            f"state={runtime.state}" if runtime and runtime.state else None,
+            f"mode={runtime.mode}" if runtime and runtime.mode else None,
+        ]
+        runtime_text = ", ".join(part for part in runtime_text_parts if part) or "runtime partial"
+
+        return f"{phrase} Upstream: {cause_text}. Downstream: {effect_text}. Runtime: {runtime_text}."
+
+    def _build_impact_summary_locked(self, cause_chain: list[str], effect_chain: list[str]) -> str:
+        if effect_chain:
+            visible = ", ".join(effect_chain[:3])
+            suffix = "" if len(effect_chain) <= 3 else f" (+{len(effect_chain) - 3} more)"
+            return f"Primary impact propagates downstream to {visible}{suffix}."
+        if cause_chain:
+            visible = ", ".join(cause_chain[:3])
+            suffix = "" if len(cause_chain) <= 3 else f" (+{len(cause_chain) - 3} more)"
+            return f"Behavior is mainly driven by upstream nodes {visible}{suffix}."
+        return "No adjacent deterministic impact path found."
+
+    def _compute_behavior_confidence_locked(
+        self,
+        row: RowModel,
+        runtime: RuntimeState | None,
+        cause_chain: list[str],
+        effect_chain: list[str],
+    ) -> float:
+        base = max(0.0, min(1.0, float(row.confidence)))
+        runtime_score = 0.0
+        if runtime is not None:
+            populated = sum(1 for value in [runtime.current_value, runtime.state, runtime.setpoint, runtime.mode] if value is not None)
+            runtime_score = 0.05 * populated
+
+        topology_score = min(0.2, 0.02 * (len(cause_chain) + len(effect_chain)))
+        penalty = 0.08 if row.is_orphan else 0.0
+
+        return round(max(0.0, min(1.0, base + runtime_score + topology_score - penalty)), 4)
+
+    def _build_why_trace_locked(self, tag: str, max_depth: int) -> list[dict[str, Any]]:
+        steps: list[dict[str, Any]] = []
+
+        row = self._rows_by_tag.get(tag)
+        if row is None:
+            return steps
+
+        runtime = self._runtime_by_tag.get(tag)
+        steps.append(
+            {
+                "depth": 0,
+                "direction": "self",
+                "tag": tag,
+                "edge_type": None,
+                "runtime_state": runtime.as_dict() if runtime else None,
+                "behavior_summary": row.behavior_summary,
+            }
+        )
+
+        def traverse(direction: str) -> None:
+            adjacency = self._inbound if direction == "upstream" else self._outbound
+            queue: deque[tuple[str, int]] = deque([(tag, 0)])
+            visited: set[str] = {tag}
+
+            while queue:
+                current, depth = queue.popleft()
+                if depth >= max_depth:
+                    continue
+
+                for neighbor in sorted(adjacency.get(current, set())):
+                    if neighbor in visited:
+                        continue
+                    visited.add(neighbor)
+                    queue.append((neighbor, depth + 1))
+
+                    neighbor_row = self._rows_by_tag.get(neighbor)
+                    neighbor_runtime = self._runtime_by_tag.get(neighbor)
+                    steps.append(
+                        {
+                            "depth": depth + 1,
+                            "direction": direction,
+                            "tag": neighbor,
+                            "edge_type": self._edge_type_pairs.get((neighbor, current))
+                            if direction == "upstream"
+                            else self._edge_type_pairs.get((current, neighbor)),
+                            "runtime_state": neighbor_runtime.as_dict() if neighbor_runtime else None,
+                            "behavior_summary": neighbor_row.behavior_summary if neighbor_row else "",
+                        }
+                    )
+
+        traverse("upstream")
+        traverse("downstream")
+
+        steps.sort(key=lambda item: (item["depth"], item["direction"], item["tag"]))
+        return steps
+
+
+deterministic_behavior_service = DeterministicBehaviorService()

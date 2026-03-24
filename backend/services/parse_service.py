@@ -19,6 +19,7 @@ from services.graph_validation_service import graph_validation_service
 from services.graph_service import graph_service
 from services.narrative_extraction_service import narrative_extraction_service
 from services.narrative_rule_extraction_service import narrative_rule_extraction_service
+from services.behavior_loader_patch import load_parser_output_into_behavior_layer
 from services.pid_parser import pid_parser_service
 from services.pid_extraction_service import pid_extraction_service
 from services.pid_reconciliation_service import pid_reconciliation_service
@@ -611,6 +612,25 @@ class ParseService:
             )
             nodes, edges = graph_build_service.build(entities, relationships, deep_metadata=engineering_metadata)
             graph_service.store_graph(project_id, nodes, edges)
+
+            try:
+                behavior_load_result = load_parser_output_into_behavior_layer(
+                    project_id=project_id,
+                    rows=None,
+                    edges=[dict(edge) for edge in edges],
+                    file_ids=file_ids or [],
+                    include_inferred=True,
+                    max_flow_depth=4,
+                )
+                self.logger.info(
+                    "parse_behavior_load project_id=%s rows_loaded=%s edges_loaded=%s sample_tags=%s",
+                    project_id,
+                    behavior_load_result.get("rows"),
+                    behavior_load_result.get("edges"),
+                    behavior_load_result.get("sample_tags", []),
+                )
+            except Exception as behavior_exc:
+                warnings.append(f"Behavior layer load skipped: {behavior_exc}")
 
             self._store_batch_artifacts(
                 project_id=project_id,

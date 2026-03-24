@@ -6,6 +6,7 @@ from runtime_engine.runtime_signal_state import runtime_signal_state
 from runtime_engine.runtime_telemetry import runtime_telemetry
 from simulation.analysis import analyze_trace
 from simulation.trace_engine import SimulationTraceEngine
+from services.behavior_loader_patch import behavior_loader_patch
 from services.graph_service import graph_service
 from services.project_service import project_service
 from services.versioning_trigger_service import versioning_trigger_service
@@ -145,6 +146,7 @@ class SimulationService:
 
             self._trace_by_project[project_id] = list(normalized)
             self._save_trace(project_id, normalized)
+            behavior_loader_patch.push_trace_rows(project_id, normalized)
             return list(normalized)
 
     def reset_trace(self, project_id: str) -> list[dict[str, object]]:

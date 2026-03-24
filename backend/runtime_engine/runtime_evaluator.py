@@ -9,6 +9,7 @@ from typing import Any
 from runtime_engine.runtime_manager import runtime_manager
 from runtime_engine.runtime_signal_state import runtime_signal_state
 from runtime_engine.runtime_telemetry import runtime_telemetry
+from services.behavior_loader_patch import behavior_loader_patch
 
 
 class RuntimeEvaluator:
@@ -235,6 +236,9 @@ class RuntimeEvaluator:
             "LAST_CHANGED_SIGNAL_VALUES",
             {item.get("tag"): item.get("current") for item in changed_signals if item.get("tag")},
         )
+
+        if changed_signals:
+            behavior_loader_patch.push_changed_signals(project_id, changed_signals)
 
         self.logger.info(
             "runtime_eval force_tag=%s force_value=%s signal_state_updated=%s evaluated_blocks=%s changed_signals=%s changed_alarms=%s changed_health=%s",
