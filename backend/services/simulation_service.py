@@ -8,6 +8,7 @@ from simulation.analysis import analyze_trace
 from simulation.trace_engine import SimulationTraceEngine
 from services.graph_service import graph_service
 from services.project_service import project_service
+from services.versioning_trigger_service import versioning_trigger_service
 
 
 class SimulationService:
@@ -184,6 +185,13 @@ class SimulationService:
             "metrics": metrics,
         }
         self._latest_file(project_id).write_text(json.dumps(payload, indent=2))
+
+        if not issues:
+            versioning_trigger_service.trigger_auto_commit(
+                project_id=project_id,
+                trigger_source="Simulation Validation Passed",
+                summary="Simulation trace validation completed with zero issues.",
+            )
         return payload
 
     def latest(self, project_id: str) -> dict[str, object]:

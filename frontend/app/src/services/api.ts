@@ -6,10 +6,71 @@ import type { RuntimeValidationPanelResponse } from "./panelContracts";
 export type Project = {
   id: string;
   name: string;
+  industry: string;
   description: string | null;
+  plc_runtime: string;
+  owner: string;
   status: string;
+  active_version: number;
   created_at: string;
   updated_at: string;
+};
+
+export type PLCExportVendor = "siemens" | "rockwell" | "codesys" | "beckhoff" | "openplc";
+
+export type PLCExportResponse = {
+  export_id: string;
+  project_id: string;
+  project_name: string;
+  vendor: PLCExportVendor;
+  generated_at: string;
+  files: string[];
+  download_url: string;
+  package_path?: string;
+  artifact_name?: string;
+  logic_block_count?: number;
+  tag_count?: number;
+};
+
+export type PIDChangeEntry = {
+  tag: string;
+  details: string;
+};
+
+export type PIDTopologyChange = {
+  edge_id: string;
+  source: string;
+  target: string;
+  edge_type: string;
+  change: "added" | "removed";
+};
+
+export type PIDConflict = {
+  incoming_tag: string;
+  existing_tag: string;
+  similarity: number;
+  reason: string;
+};
+
+export type PIDReconcileSummary = {
+  project_id: string;
+  generated_at: string;
+  similarity_threshold: number;
+  new_devices: PIDChangeEntry[];
+  deprecated_devices: PIDChangeEntry[];
+  topology_changes: PIDTopologyChange[];
+  possible_conflicts: PIDConflict[];
+  apply_ready: boolean;
+};
+
+export type PIDApplyUpdateResponse = {
+  project_id: string;
+  applied_at: string;
+  nodes_count: number;
+  edges_count: number;
+  validation_status: string;
+  commit_triggered: boolean;
+  summary: string;
 };
 
 export type GraphNode = {
@@ -410,6 +471,39 @@ export type RuntimeDeployResponse = {
   }>;
   errors: string[];
   warnings: string[];
+};
+
+export type DirectPLCProtocol = "opc_ua" | "modbus_tcp" | "ethernet_ip" | "profinet" | "mqtt_industrial";
+export type DirectPLCTargetRuntime = "openplc" | "beremiz" | "codesys" | "siemens_s7" | "beckhoff_twincat" | "custom";
+
+export type DirectPLCDeployRequest = {
+  project_id: string;
+  connection: {
+    plc_address: string;
+    protocol: DirectPLCProtocol;
+    target_runtime: DirectPLCTargetRuntime;
+    io_configuration: string;
+  };
+  safety: {
+    syntax_validation_passed: boolean;
+    logic_verification_passed: boolean;
+    io_validation_passed: boolean;
+    simulation_test_passed: boolean;
+  };
+};
+
+export type DirectPLCDeployResponse = {
+  status: "disabled" | "blocked" | "accepted" | "failed";
+  message: string;
+  audit: {
+    id: string;
+    project_id: string;
+    requested_at: string;
+    feature_flag_enabled: boolean;
+    status: "disabled" | "blocked" | "accepted" | "failed";
+    warnings: string[];
+    errors: string[];
+  };
 };
 
 export type DeployRuntimeOptions = {
@@ -930,21 +1024,79 @@ export async function listProjects(): Promise<Project[]> {
   return response.data;
 }
 
-export async function createProject(payload: { name: string; description?: string; status?: string }): Promise<Project> {
+export async function createProject(payload: {
+  name: string;
+  industry: string;
+  description?: string;
+  plc_runtime?: string;
+  owner?: string;
+  status?: string;
+  active_version?: number;
+}): Promise<Project> {
   const response = await api.post<Project>("/projects", payload);
   return response.data;
 }
 
 export async function updateProject(
   projectId: string,
-  payload: { name?: string; description?: string; status?: string }
+  payload: { name?: string; industry?: string; description?: string; plc_runtime?: string; owner?: string; status?: string; active_version?: number }
 ): Promise<Project> {
   const response = await api.put<Project>(`/projects/${projectId}`, payload);
   return response.data;
 }
 
+export async function getActiveProject(): Promise<Project | null> {
+  const response = await api.get<Project | null>("/projects/active/current");
+  return response.data;
+}
+
+export async function setActiveProject(projectId: string): Promise<Project> {
+  const response = await api.put<Project>("/projects/active", { project_id: projectId });
+  return response.data;
+}
+
 export async function deleteProject(projectId: string): Promise<void> {
   await api.delete(`/projects/${projectId}`);
+}
+
+export async function createPLCExport(projectId: string, vendor: PLCExportVendor): Promise<PLCExportResponse> {
+  const response = await api.post<PLCExportResponse>("/export", { project_id: projectId, vendor });
+  return response.data;
+}
+
+export async function reconcilePID(payload: {
+  dataset: Array<{
+    tag: string;
+    label?: string;
+    node_type?: string;
+    status?: string;
+    process_unit?: string | null;
+    connected_to?: string[];
+    controls?: string[];
+    measures?: string[];
+  }>;
+  similarity_threshold?: number;
+}): Promise<PIDReconcileSummary> {
+  const response = await api.post<PIDReconcileSummary>("/pid/reconcile", payload);
+  return response.data;
+}
+
+export async function getPIDChanges(): Promise<PIDReconcileSummary> {
+  const response = await api.get<PIDReconcileSummary>("/pid/changes");
+  return response.data;
+}
+
+export async function applyPIDUpdate(payload: {
+  allow_conflicts?: boolean;
+  force_apply_on_validation_warnings?: boolean;
+} = {}): Promise<PIDApplyUpdateResponse> {
+  const response = await api.post<PIDApplyUpdateResponse>("/pid/apply-update", payload);
+  return response.data;
+}
+
+export function buildExportDownloadUrl(exportId: string): string {
+  const base = (import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api").replace(/\/$/, "");
+  return `${base}/exports/${encodeURIComponent(exportId)}/download`;
 }
 
 export async function parseProject(projectId: string, fileIds: string[] = []): Promise<Record<string, unknown>> {
@@ -1277,6 +1429,11 @@ export async function deployRuntimeWithRetry(
 
 export async function deployRuntimeControl(payload: RuntimeControlDeployRequest): Promise<RuntimeControlDeployResponse> {
   const response = await api.post<RuntimeControlDeployResponse>("/runtime/deploy", payload);
+  return response.data;
+}
+
+export async function deployDirectPLC(payload: DirectPLCDeployRequest): Promise<DirectPLCDeployResponse> {
+  const response = await api.post<DirectPLCDeployResponse>("/direct-plc/deploy", payload);
   return response.data;
 }
 

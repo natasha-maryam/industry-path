@@ -1,0 +1,22 @@
+// Siemens TIA Portal SCL export
+// Project: {{ project.name }}
+// Industry: {{ project.industry }}
+// Active Version: {{ project.active_version }}
+
+{% for unit in units -%}
+FUNCTION_BLOCK {{ unit.name }}
+VAR_INPUT
+    Enable: BOOL;
+END_VAR
+VAR_OUTPUT
+    Healthy: BOOL;
+END_VAR
+BEGIN
+    Healthy := Enable;
+END_FUNCTION_BLOCK
+
+{% endfor -%}
+// Source files included:
+{% for f in source_files -%}
+// - {{ f.path }} ({{ f.lines }} lines)
+{% endfor -%}

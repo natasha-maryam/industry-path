@@ -19,7 +19,7 @@ class ProjectService:
     def list_projects(self) -> list[Project]:
         rows = postgres_client.fetch_all(
             """
-            SELECT id, name, description, status, created_at, updated_at
+            SELECT id, name, industry, description, plc_runtime, owner, status, active_version, created_at, updated_at
             FROM projects
             ORDER BY created_at DESC
             """
@@ -31,21 +31,29 @@ class ProjectService:
         project = Project(
             id=uuid4(),
             name=payload.name,
+            industry=payload.industry,
             description=payload.description,
+            plc_runtime=payload.plc_runtime,
+            owner=payload.owner or "system",
             status=payload.status,
+            active_version=payload.active_version,
             created_at=now,
             updated_at=now,
         )
         postgres_client.execute(
             """
-            INSERT INTO projects (id, name, description, status, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO projects (id, name, industry, description, plc_runtime, owner, status, active_version, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 str(project.id),
                 project.name,
+                project.industry,
                 project.description,
+                project.plc_runtime,
+                project.owner,
                 project.status,
+                project.active_version,
                 project.created_at,
                 project.updated_at,
             ),
@@ -56,7 +64,7 @@ class ProjectService:
     def get_project(self, project_id: str) -> Project:
         row = postgres_client.fetch_one(
             """
-            SELECT id, name, description, status, created_at, updated_at
+            SELECT id, name, industry, description, plc_runtime, owner, status, active_version, created_at, updated_at
             FROM projects
             WHERE id = %s
             """,
@@ -79,12 +87,34 @@ class ProjectService:
             """
             UPDATE projects
             SET name = %s,
+                industry = %s,
                 description = %s,
+                plc_runtime = %s,
+                owner = %s,
                 status = %s,
+                active_version = %s,
                 updated_at = %s
             WHERE id = %s
             """,
-            (updated.name, updated.description, updated.status, updated.updated_at, project_id),
+            (
+                updated.name,
+                updated.industry,
+                updated.description,
+                updated.plc_runtime,
+                updated.owner,
+                updated.status,
+                updated.active_version,
+                updated.updated_at,
+                project_id,
+            ),
+        )
+
+        from services.versioning_trigger_service import versioning_trigger_service
+
+        versioning_trigger_service.trigger_auto_commit(
+            project_id=project_id,
+            trigger_source="Configuration Changed",
+            summary="Project configuration metadata updated.",
         )
 
         return self.get_project(project_id)
@@ -96,6 +126,45 @@ class ProjectService:
     def ensure_project(self, project_id: str) -> Project:
         return self.get_project(project_id)
 
+    def get_active_project(self) -> Project | None:
+        row = postgres_client.fetch_one(
+            """
+            SELECT id, name, industry, description, plc_runtime, owner, status, active_version, created_at, updated_at
+            FROM projects
+            WHERE status = 'active'
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """
+        )
+        return Project.model_validate(row) if row else None
+
+    def set_active_project(self, project_id: str) -> Project:
+        active = self.get_project(project_id)
+        if active.status == "archived":
+            raise HTTPException(status_code=400, detail="Archived project cannot be set active")
+
+        now = datetime.now(timezone.utc)
+        postgres_client.execute(
+            """
+            UPDATE projects
+            SET status = 'draft',
+                updated_at = %s
+            WHERE id <> %s
+              AND status = 'active'
+            """,
+            (now, project_id),
+        )
+        postgres_client.execute(
+            """
+            UPDATE projects
+            SET status = 'active',
+                updated_at = %s
+            WHERE id = %s
+            """,
+            (now, project_id),
+        )
+        return self.get_project(project_id)
+
     def workspace_paths(self, project_id: str) -> WorkspacePaths:
         self.ensure_project(project_id)
         root = self.workspace_root / project_id
@@ -103,7 +172,8 @@ class ProjectService:
 
         return WorkspacePaths(
             root=root,
-            uploads=root / "uploads",
+            documents=root / "documents",
+            uploads=root / "documents",
             plant_graph=root / "plant_graph",
             control_logic=root / "control_logic",
             simulation_models=root / "simulation_models",
@@ -116,6 +186,7 @@ class ProjectService:
     def _ensure_workspace(self, project_id: str) -> None:
         root = self.workspace_root / project_id
         subdirs: Iterable[Path] = (
+            root / "documents",
             root / "uploads",
             root / "plant_graph",
             root / "control_logic",

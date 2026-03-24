@@ -1,29 +1,12 @@
 import { useEffect, useMemo, useState, type ComponentType } from "react";
-import {
-  Activity,
-  AlertTriangle,
-  Boxes,
-  ChevronDown,
-  ChevronRight,
-  CircleDot,
-  Cog,
-  Cpu,
-  Database,
-  GitBranch,
-  Folder,
-  FolderOpen,
-  Gauge,
-  Network,
-  Radar,
-  Plus,
-  SlidersHorizontal,
-  Trash2,
-} from "lucide-react";
+import { Activity, AlertTriangle, Boxes, ChevronDown, ChevronRight, CircleDot, Cpu, Database, Folder, FolderOpen, Gauge, Network, Radar, Plus, SlidersHorizontal, Trash2 } from "lucide-react";
 import type { WorkspaceModuleId } from "../types/workspace";
 
 type ProjectItem = {
   id: string;
   name: string;
+  industry?: string;
+  status?: string;
 };
 
 type GraphNode = {
@@ -44,13 +27,13 @@ type ProjectNavigatorProps = {
   onSelectModule: (moduleId: WorkspaceModuleId) => void;
 };
 
-const MODULES: Array<{ id: WorkspaceModuleId; label: string; icon: ComponentType<{ size?: number; className?: string }> }> = [
+const WORKSPACE_MODULES: Array<{ id: WorkspaceModuleId; label: string; icon: ComponentType<{ size?: number; className?: string }> }> = [
   { id: "plant_model", label: "Plant Model", icon: Network },
-  { id: "control_loops", label: "Control Loops", icon: GitBranch },
-  { id: "io_mapping", label: "IO Mapping", icon: SlidersHorizontal },
+  { id: "control_loops", label: "Control Loops", icon: Boxes },
   { id: "control_logic", label: "Control Logic", icon: Cpu },
+  { id: "io_mapping", label: "IO Mapping", icon: SlidersHorizontal },
   { id: "simulation", label: "Simulation", icon: Activity },
-  { id: "runtime", label: "Runtime", icon: Cog },
+  { id: "runtime", label: "Runtime", icon: Radar },
   { id: "monitoring", label: "Monitoring", icon: Radar },
   { id: "diagnostics", label: "Diagnostics", icon: AlertTriangle },
 ];
@@ -69,8 +52,19 @@ export default function ProjectNavigator({
 }: ProjectNavigatorProps) {
   const [projectsExpanded, setProjectsExpanded] = useState(true);
   const [modulesExpanded, setModulesExpanded] = useState(true);
+  const [projectExpanded, setProjectExpanded] = useState<Record<string, boolean>>({});
   const [equipmentExpanded, setEquipmentExpanded] = useState(true);
   const [groupExpanded, setGroupExpanded] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    setProjectExpanded((previous) => {
+      const next: Record<string, boolean> = {};
+      for (const project of projects) {
+        next[project.id] = previous[project.id] ?? project.id === selectedProjectId;
+      }
+      return next;
+    });
+  }, [projects, selectedProjectId]);
+
 
   const toHumanHeading = (value: string): string =>
     value
@@ -129,6 +123,13 @@ export default function ProjectNavigator({
     }));
   };
 
+  const toggleProject = (projectId: string): void => {
+    setProjectExpanded((previous) => ({
+      ...previous,
+      [projectId]: !(previous[projectId] ?? true),
+    }));
+  };
+
   const groupIcon = (groupName: string) => {
     if (groupName === "Tanks") {
       return <Database className="tree-group-icon" size={13} />;
@@ -164,9 +165,17 @@ export default function ProjectNavigator({
           {projects.map((project) => (
             <li key={project.id}>
               <div className={`project-row ${selectedProjectId === project.id ? "active" : ""}`}>
-                <button className="project-item" onClick={() => onSelectProject(project.id)} type="button">
+                <button
+                  className="project-item"
+                  onClick={() => {
+                    onSelectProject(project.id);
+                    toggleProject(project.id);
+                  }}
+                  type="button"
+                >
+                  <span className="tree-arrow-icon">{projectExpanded[project.id] ?? true ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</span>
                   <Folder size={12} className="tree-node-icon" />
-                  {project.name}
+                  <span>{project.name}</span>
                 </button>
                 <button
                   aria-label={`Delete ${project.name}`}
@@ -180,6 +189,7 @@ export default function ProjectNavigator({
                   <Trash2 size={12} />
                 </button>
               </div>
+
             </li>
           ))}
         </ul>
@@ -197,7 +207,7 @@ export default function ProjectNavigator({
         </li>
 
         {modulesExpanded
-          ? MODULES.map((module) => {
+          ? WORKSPACE_MODULES.map((module) => {
               const Icon = module.icon;
               return (
                 <li key={module.id}>

@@ -10,7 +10,7 @@ export type WorkspaceModuleId =
   | "monitoring"
   | "diagnostics";
 
-export type RightPanelTabId = "Details" | "Signals" | "Trace" | "Replay" | "IO Mapping" | "Control Loops" | "Diagnostics";
+export type RightPanelTabId = "Details" | "Signals" | "Trace" | "Replay" | "IO Mapping" | "Control Loops" | "Diagnostics" | "Versions" | "P&ID Changes";
 
 export type TopToolbarActionId =
   | "upload_documents"
@@ -18,6 +18,7 @@ export type TopToolbarActionId =
   | "detect_control_loops"
   | "generate_logic"
   | "generate_io_mapping"
+  | "export_logic"
   | "deploy_runtime"
   | "start_monitoring"
   | "analyze_fault"
@@ -35,7 +36,7 @@ export type WorkspacePanelState = {
   activeModule: WorkspaceModuleId;
   activeRightTab: RightPanelTabId;
   activeBottomView: "simulation" | "monitoring" | "logic";
-  codePanelMode: "control_logic" | "generated_st" | "verification";
+  codePanelMode: "control_logic" | "generated_st" | "verification" | "version_diff";
   monitoringPanelMode: "io_mapping" | "runtime" | "versions";
 };
 

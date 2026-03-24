@@ -16,6 +16,7 @@ const ACTIONS: Array<{ id: ToolbarAction; label: string; primary?: boolean }> = 
   { id: "detect_control_loops", label: "Detect Control Loops" },
   { id: "generate_logic", label: "Generate Logic" },
   { id: "generate_io_mapping", label: "Generate IO Mapping" },
+  { id: "export_logic", label: "Export Logic" },
   { id: "deploy_runtime", label: "Deploy Runtime" },
   { id: "start_monitoring", label: "Start Monitoring" },
   { id: "analyze_fault", label: "Analyze Fault" },
