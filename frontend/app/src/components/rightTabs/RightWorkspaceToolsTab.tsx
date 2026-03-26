@@ -10,6 +10,9 @@ import type { EngineeringTableResponseRow } from "../../services/api";
 type RightWorkspaceToolsTabProps = {
   projectId?: string;
   currentRows: EngineeringTableResponseRow[];
+  rowsSource?: string;
+  filteredRowsCount?: number;
+  rowsLoading?: boolean;
   authToken: string;
   onAuthTokenChange: (token: string) => void;
   onRowsUpdate?: (rows: EngineeringTableResponseRow[]) => void;
@@ -20,6 +23,9 @@ type RightWorkspaceToolsTabProps = {
 export default function RightWorkspaceToolsTab({
   projectId,
   currentRows,
+  rowsSource = "workspace_rows",
+  filteredRowsCount = 0,
+  rowsLoading = false,
   authToken,
   onAuthTokenChange,
   onRowsUpdate,
@@ -32,7 +38,7 @@ export default function RightWorkspaceToolsTab({
       <SystemStatusPanel authToken={authToken} />
       <AuditPanel authToken={authToken} />
       <TagDatabasePanel projectId={projectId} />
-      <ViewsPanel projectId={projectId} currentRows={currentRows} />
+      <ViewsPanel projectId={projectId} currentRows={currentRows} rowsSource={rowsSource} filteredRowsCount={filteredRowsCount} rowsLoading={rowsLoading} />
       <AdvancedSystemPanel projectId={projectId} onSelectTag={onSelectTag} onTracePath={onTracePath} />
       <SystemControlLayer onRowsUpdate={onRowsUpdate} />
     </section>

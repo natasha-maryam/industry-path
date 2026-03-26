@@ -35,6 +35,7 @@ type DetailsPanelProps = {
   tracePath: string[];
   whyTraceTag?: string | null;
   ioMappingRows?: IOMappingTableRow[];
+  controlLoopIOMappingRows?: IOMappingTableRow[];
   ioMappingIssues?: IOMappingIssue[];
   selectedIOMappingTag?: string | null;
   runtimeTelemetryTags?: Record<string, unknown>;
@@ -48,6 +49,7 @@ type DetailsPanelProps = {
   replayTrace?: SimulationTracePoint[];
   replayIssues?: SimulationTraceIssue[];
   controlLoops?: ControlLoopRecord[];
+  engineeringRowsForLoops?: EngineeringTableResponseRow[];
   controlLoopsLoading?: boolean;
   controlLoopsError?: string | null;
   selectedControlLoopTag?: string | null;
@@ -60,6 +62,8 @@ type DetailsPanelProps = {
   onGenerateControlLoopLogic?: (loop: ControlLoopRecord) => void;
   onTraceControlLoop?: (loop: ControlLoopRecord) => void;
   onSimulateControlLoop?: (loop: ControlLoopRecord) => void;
+  onNavigateControlLoopToST?: (loop: ControlLoopRecord) => void;
+  onNavigateControlLoopToIO?: (loop: ControlLoopRecord) => void;
   onReplayPointChange?: (point: number) => void;
   onCloseWhyTrace?: () => void;
   onOpenVersionsWorkspace?: () => void;
@@ -75,15 +79,19 @@ type DetailsPanelProps = {
   onPIDCreateSnapshot?: () => void;
   projectId?: string;
   engineeringRows?: EngineeringTableResponseRow[];
+  engineeringRowsSource?: string;
+  engineeringFilteredRowsCount?: number;
+  engineeringRowsLoading?: boolean;
   productionAuthToken?: string;
   onProductionAuthTokenChange?: (token: string) => void;
   onWorkspaceRowsUpdate?: (rows: EngineeringTableResponseRow[]) => void;
   onWorkspaceSelectTag?: (tag: string) => void;
   onWorkspaceTracePath?: (path: string[]) => void;
+  onTraceStepSelect?: (tag: string) => void;
   onTabChange: (tab: RightTab) => void;
 };
 
-const TABS: RightTab[] = ["Details", "Signals", "Trace", "Replay", "IO Mapping", "Control Loops", "Diagnostics", "Versions", "P&ID Changes", "Workspace"];
+const TABS: RightTab[] = ["Details", "Signals", "Trace", "Replay", "IO Mapping", "Control Loops", "Diagnostics", "Versions", "Workspace"];
 
 export default function DetailsPanel({
   activeTab,
@@ -94,6 +102,7 @@ export default function DetailsPanel({
   tracePath,
   whyTraceTag = null,
   ioMappingRows = [],
+  controlLoopIOMappingRows = [],
   ioMappingIssues = [],
   selectedIOMappingTag = null,
   runtimeTelemetryTags = {},
@@ -107,6 +116,7 @@ export default function DetailsPanel({
   replayTrace = [],
   replayIssues = [],
   controlLoops = [],
+  engineeringRowsForLoops = [],
   controlLoopsLoading = false,
   controlLoopsError = null,
   selectedControlLoopTag = null,
@@ -119,6 +129,8 @@ export default function DetailsPanel({
   onGenerateControlLoopLogic,
   onTraceControlLoop,
   onSimulateControlLoop,
+  onNavigateControlLoopToST,
+  onNavigateControlLoopToIO,
   onReplayPointChange,
   onCloseWhyTrace,
   onOpenVersionsWorkspace,
@@ -134,11 +146,15 @@ export default function DetailsPanel({
   onPIDCreateSnapshot,
   projectId,
   engineeringRows = [],
+  engineeringRowsSource = "workspace_rows",
+  engineeringFilteredRowsCount = 0,
+  engineeringRowsLoading = false,
   productionAuthToken = "",
   onProductionAuthTokenChange,
   onWorkspaceRowsUpdate,
   onWorkspaceSelectTag,
   onWorkspaceTracePath,
+  onTraceStepSelect,
   onTabChange,
 }: DetailsPanelProps) {
   const renderActiveTab = () => {
@@ -149,7 +165,7 @@ export default function DetailsPanel({
       return <RightSignalsTab selectedEquipment={selectedEquipment} runtimeTelemetryTags={runtimeTelemetryTags} forcedTags={forcedTagNames} />;
     }
     if (activeTab === "Trace") {
-      return <RightTraceTab tracePath={tracePath} whyTraceTag={whyTraceTag} onCloseWhyTrace={onCloseWhyTrace} />;
+      return <RightTraceTab tracePath={tracePath} whyTraceTag={whyTraceTag} onCloseWhyTrace={onCloseWhyTrace} onSelectTraceTag={onTraceStepSelect} />;
     }
     if (activeTab === "Replay") {
       return (
@@ -178,6 +194,9 @@ export default function DetailsPanel({
       return (
         <RightControlLoopsTab
           loops={controlLoops}
+          ioMappingRows={controlLoopIOMappingRows}
+          engineeringRows={engineeringRowsForLoops}
+          replayTrace={replayTrace}
           loading={controlLoopsLoading}
           error={controlLoopsError}
           selectedLoopTag={selectedControlLoopTag}
@@ -188,6 +207,8 @@ export default function DetailsPanel({
           onGenerateLogic={(loop) => onGenerateControlLoopLogic?.(loop)}
           onTraceLoop={(loop) => onTraceControlLoop?.(loop)}
           onSimulate={(loop) => onSimulateControlLoop?.(loop)}
+          onNavigateToST={(loop) => onNavigateControlLoopToST?.(loop)}
+          onNavigateToIO={(loop) => onNavigateControlLoopToIO?.(loop)}
         />
       );
     }
@@ -215,6 +236,9 @@ export default function DetailsPanel({
         <RightWorkspaceToolsTab
           projectId={projectId}
           currentRows={engineeringRows}
+          rowsSource={engineeringRowsSource}
+          filteredRowsCount={engineeringFilteredRowsCount}
+          rowsLoading={engineeringRowsLoading}
           authToken={productionAuthToken}
           onAuthTokenChange={(token) => onProductionAuthTokenChange?.(token)}
           onRowsUpdate={onWorkspaceRowsUpdate}

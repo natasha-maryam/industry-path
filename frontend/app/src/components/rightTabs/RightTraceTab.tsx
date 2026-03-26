@@ -4,11 +4,12 @@ type RightTraceTabProps = {
   tracePath: string[];
   whyTraceTag?: string | null;
   onCloseWhyTrace?: () => void;
+  onSelectTraceTag?: (tag: string) => void;
 };
 
-export default function RightTraceTab({ tracePath, whyTraceTag = null, onCloseWhyTrace }: RightTraceTabProps) {
+export default function RightTraceTab({ tracePath, whyTraceTag = null, onCloseWhyTrace, onSelectTraceTag }: RightTraceTabProps) {
   if (whyTraceTag) {
-    return <RightWhyTracePanel tag={whyTraceTag} onClose={onCloseWhyTrace} />;
+    return <RightWhyTracePanel tag={whyTraceTag} onClose={onCloseWhyTrace} onSelectTag={onSelectTraceTag} />;
   }
 
   return (

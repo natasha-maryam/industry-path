@@ -36,14 +36,15 @@ export default function AdvancedSystemPanel({ projectId, onSelectTag, onTracePat
   const [statusText, setStatusText] = useState<string>("Advanced system layer idle.");
   const [errorText, setErrorText] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [lastPayload, setLastPayload] = useState<Record<string, unknown> | null>(null);
 
   const withBusy = useCallback(async (action: string, task: () => Promise<void>): Promise<void> => {
     setBusyAction(action);
     setErrorText(null);
     try {
       await task();
-    } catch {
-      setErrorText(`${action} failed.`);
+    } catch (err) {
+      setErrorText(err instanceof Error ? err.message : `${action} failed.`);
     } finally {
       setBusyAction(null);
     }
@@ -51,31 +52,47 @@ export default function AdvancedSystemPanel({ projectId, onSelectTag, onTracePat
 
   const handleOPCUAConnect = useCallback(() => {
     void withBusy("OPC UA connect", async () => {
+      if (!opcEndpoint.trim()) {
+        throw new Error("OPC UA endpoint is required.");
+      }
       const data = await connectAdvancedOPCUA({ endpoint: opcEndpoint });
       setStatusText(String(data.message ?? "OPC UA connector configured."));
+      setLastPayload({ action: "opcua", data });
     });
   }, [opcEndpoint, withBusy]);
 
   const handleMQTTConnect = useCallback(() => {
     void withBusy("MQTT connect", async () => {
+      if (!mqttHost.trim()) {
+        throw new Error("MQTT host is required.");
+      }
       const data = await connectAdvancedMQTT({ host: mqttHost, port: mqttPort });
       setStatusText(String(data.message ?? "MQTT connector configured."));
+      setLastPayload({ action: "mqtt", data });
     });
   }, [mqttHost, mqttPort, withBusy]);
 
   const handleAPIConnect = useCallback(() => {
     void withBusy("API connect", async () => {
+      if (!apiEndpoint.trim()) {
+        throw new Error("API endpoint is required.");
+      }
       const data = await connectAdvancedAPI({ endpoint: apiEndpoint });
       setStatusText(String(data.message ?? "API connector configured."));
+      setLastPayload({ action: "api", data });
     });
   }, [apiEndpoint, withBusy]);
 
   const handleAutoMap = useCallback(() => {
     void withBusy("Auto-map", async () => {
       const tags = toLines(externalTagsInput);
+      if (tags.length === 0) {
+        throw new Error("At least one external tag is required.");
+      }
       const result = await runAdvancedAutoMap({ external_tags: tags });
       const count = Number(result.count ?? 0);
       setStatusText(`Auto-map completed: ${count} mapped.`);
+      setLastPayload({ action: "auto_map", result });
     });
   }, [externalTagsInput, withBusy]);
 
@@ -87,20 +104,24 @@ export default function AdvancedSystemPanel({ projectId, onSelectTag, onTracePat
         return;
       }
       const trace = await getAdvancedTrace(tag, projectId, 6);
-      onTracePath?.(trace.path);
+      const safePath = Array.isArray(trace.path) ? trace.path : [];
+      onTracePath?.(safePath);
       onSelectTag?.(tag);
-      setStatusText(`Trace computed for ${tag} (${trace.path.length} nodes).`);
+      setStatusText(`Trace computed for ${tag} (${safePath.length} nodes).`);
+      setLastPayload({ action: "trace", trace: { ...trace, path: safePath } });
     });
   }, [onSelectTag, onTracePath, projectId, traceTagInput, withBusy]);
 
   const handleBottlenecks = useCallback(() => {
     void withBusy("Bottlenecks", async () => {
       const result = await getAdvancedBottlenecks(projectId, 10);
-      setBottlenecks(result.bottlenecks);
-      if (result.bottlenecks[0]?.tag) {
-        onSelectTag?.(result.bottlenecks[0].tag);
+      const safeBottlenecks = Array.isArray(result.bottlenecks) ? result.bottlenecks : [];
+      setBottlenecks(safeBottlenecks);
+      if (safeBottlenecks[0]?.tag) {
+        onSelectTag?.(safeBottlenecks[0].tag);
       }
       setStatusText(`Bottlenecks computed (${result.count}).`);
+      setLastPayload({ action: "bottlenecks", count: result.count, top: safeBottlenecks.slice(0, 3) });
     });
   }, [onSelectTag, projectId, withBusy]);
 
@@ -109,6 +130,7 @@ export default function AdvancedSystemPanel({ projectId, onSelectTag, onTracePat
       const result = await getAdvancedLoops(projectId, 20);
       setLoopsCount(result.count);
       setStatusText(`Loop analysis completed (${result.count}). Uses analytical graph loops only.`);
+      setLastPayload({ action: "loops", result });
     });
   }, [projectId, withBusy]);
 
@@ -131,7 +153,7 @@ export default function AdvancedSystemPanel({ projectId, onSelectTag, onTracePat
             className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-[11px]"
           />
           <button type="button" className="command-btn" onClick={handleOPCUAConnect}>
-            Connect OPC UA
+            {busyAction === "OPC UA connect" ? "Connecting..." : "Connect OPC UA"}
           </button>
         </div>
 
@@ -150,7 +172,7 @@ export default function AdvancedSystemPanel({ projectId, onSelectTag, onTracePat
             className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-[11px]"
           />
           <button type="button" className="command-btn" onClick={handleMQTTConnect}>
-            Connect MQTT
+            {busyAction === "MQTT connect" ? "Connecting..." : "Connect MQTT"}
           </button>
         </div>
 
@@ -163,7 +185,7 @@ export default function AdvancedSystemPanel({ projectId, onSelectTag, onTracePat
             className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-[11px]"
           />
           <button type="button" className="command-btn" onClick={handleAPIConnect}>
-            Connect API
+            {busyAction === "API connect" ? "Connecting..." : "Connect API"}
           </button>
         </div>
       </div>
@@ -178,7 +200,7 @@ export default function AdvancedSystemPanel({ projectId, onSelectTag, onTracePat
             className="h-20 w-full rounded border border-slate-300 bg-white p-2 text-[11px]"
           />
           <button type="button" className="command-btn" onClick={handleAutoMap}>
-            Run Auto-map
+            {busyAction === "Auto-map" ? "Running..." : "Run Auto-map"}
           </button>
         </div>
 
@@ -200,6 +222,13 @@ export default function AdvancedSystemPanel({ projectId, onSelectTag, onTracePat
       </div>
 
       {errorText ? <p className="mt-2 text-xs text-red-700">{errorText}</p> : null}
+
+      {lastPayload ? (
+        <div className="mt-2 rounded border border-slate-200 bg-slate-50 p-2">
+          <p className="text-[11px] font-semibold text-slate-700">Latest response</p>
+          <pre className="mt-1 max-h-28 overflow-auto text-[10px] text-slate-700">{JSON.stringify(lastPayload, null, 2)}</pre>
+        </div>
+      ) : null}
 
       {bottleneckPreview.length > 0 ? (
         <div className="mt-2 rounded border border-slate-200 bg-slate-50 p-2 text-[11px] text-slate-700">

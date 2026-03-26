@@ -83,11 +83,21 @@ class BehaviorWebSocketHub:
 
     async def send_full_snapshot(self, websocket: WebSocket) -> None:
         rows = deterministic_behavior_service.get_rows()
+        edges = deterministic_behavior_service.get_edges()
         payload = {
             "event": "behavior_snapshot_full",
             "success": True,
             "snapshot_id": rows[0].get("state_snapshot_id") if rows else "snapshot-00000000",
             "rows": rows,
+            "updated_rows": rows,
+            "edges": edges,
+            "changed_tags": [],
+            "impacted_tags": [],
+            "ignored_tags": [],
+            "unknown_tags": [],
+            "debug": {
+                "source": "initial_snapshot",
+            },
             "count": len(rows),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
@@ -125,24 +135,41 @@ class BehaviorWebSocketHub:
                 "event": "behavior_snapshot_partial",
                 "success": True,
                 "snapshot_id": payload.get("snapshot_id"),
+                "rows": payload.get("updated_rows", []),
                 "changed_tags": payload.get("changed_tags", []),
                 "impacted_tags": payload.get("impacted_tags", []),
                 "updated_rows": payload.get("updated_rows", []),
+                "ignored_tags": payload.get("ignored_tags", []),
+                "unknown_tags": payload.get("unknown_tags", []),
+                "tag_remap": payload.get("tag_remap", {}),
+                "debug": payload.get("debug", {}),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             logger.info(
-                "behavior_ws partial_broadcast queued clients=%s rows=%s changed_tags=%s",
+                "behavior_ws partial_broadcast queued clients=%s rows=%s changed_tags=%s ignored=%s unknown=%s",
                 self.connection_count(),
                 len(message.get("updated_rows", [])),
                 len(message.get("changed_tags", [])),
+                len(message.get("ignored_tags", [])),
+                len(message.get("unknown_tags", [])),
             )
         elif event_type == "loaded":
             rows = deterministic_behavior_service.get_rows()
+            edges = deterministic_behavior_service.get_edges()
             message = {
                 "event": "behavior_snapshot_full",
                 "success": True,
                 "snapshot_id": payload.get("snapshot_id"),
                 "rows": rows,
+                "updated_rows": rows,
+                "edges": edges,
+                "changed_tags": [],
+                "impacted_tags": [],
+                "ignored_tags": [],
+                "unknown_tags": [],
+                "debug": {
+                    "source": "reload",
+                },
                 "count": len(rows),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
@@ -192,10 +219,12 @@ def behavior_runtime_update(payload: dict[str, Any] = Body(default_factory=dict)
 
     result = deterministic_behavior_service.update_runtime_values(updates=updates, radius=radius)
     logger.info(
-        "behavior_runtime_update_result changed_tags=%s impacted_tags=%s ignored_tags=%s updated_rows=%s",
+        "behavior_runtime_update_result changed_tags=%s impacted_tags=%s ignored_tags=%s unknown_tags=%s remapped=%s updated_rows=%s",
         result.get("changed_tags", []),
         result.get("impacted_tags", []),
         result.get("ignored_tags", []),
+        result.get("unknown_tags", []),
+        result.get("tag_remap", {}),
         len(result.get("updated_rows", []) or []),
     )
     return {

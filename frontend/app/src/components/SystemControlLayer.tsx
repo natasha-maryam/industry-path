@@ -75,7 +75,12 @@ export default function SystemControlLayer({ onRowsUpdate }: SystemControlLayerP
   const [rowsView, setRowsView] = useState<EngineeringTableResponseRow[]>([]);
   const [status, setStatus] = useState<string>("UNS idle");
   const [error, setError] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<"query" | "script" | "connector" | "refresh" | "map" | null>(null);
+  const [wsState, setWsState] = useState<"connected" | "reconnecting" | "disconnected">("disconnected");
+  const [lastResponse, setLastResponse] = useState<Record<string, unknown> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const reconnectAttemptRef = useRef<number>(0);
 
   const broadcastRows = useCallback(
     (rows: EngineeringTableResponseRow[], mode: "replace" | "merge" = "replace") => {
@@ -90,13 +95,17 @@ export default function SystemControlLayer({ onRowsUpdate }: SystemControlLayerP
 
   const refreshRows = useCallback(async (): Promise<void> => {
     setError(null);
+    setBusyAction("refresh");
     try {
       const rows = await getUNSRows();
       const normalized = rows.map(toEngineeringRow);
       broadcastRows(normalized, "replace");
       setStatus(`Loaded ${normalized.length} UNS rows.`);
+      setLastResponse({ rows: normalized.length, mode: "refresh" });
     } catch {
       setError("UNS rows endpoint unavailable.");
+    } finally {
+      setBusyAction(null);
     }
   }, [broadcastRows]);
 
@@ -105,75 +114,160 @@ export default function SystemControlLayer({ onRowsUpdate }: SystemControlLayerP
   }, [refreshRows]);
 
   useEffect(() => {
-    const socket = createUNSSocket();
-    wsRef.current = socket;
+    let disposed = false;
 
-    socket.onmessage = (event) => {
-      try {
-        const payload = JSON.parse(event.data) as {
-          event?: string;
-          rows?: UNSRow[];
-          updated_rows?: UNSRow[];
-        };
-
-        if (payload.event === "uns_snapshot_full" && Array.isArray(payload.rows)) {
-          const nextRows = payload.rows.map(toEngineeringRow);
-          broadcastRows(nextRows, "replace");
-          setStatus(`UNS stream full snapshot (${nextRows.length} rows).`);
-          return;
-        }
-
-        if (payload.event === "uns_snapshot_partial" && Array.isArray(payload.updated_rows)) {
-          const updateRows = payload.updated_rows.map(toEngineeringRow);
-          broadcastRows(updateRows, "merge");
-          setStatus(`UNS stream partial update (${updateRows.length} rows).`);
-        }
-      } catch {
-        // Ignore malformed payloads to keep stream resilient.
+    const clearTimer = (): void => {
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
       }
     };
 
-    socket.onerror = () => {
-      setError((current) => current ?? "UNS websocket failed.");
+    const scheduleReconnect = (): void => {
+      if (disposed) {
+        return;
+      }
+      clearTimer();
+      reconnectAttemptRef.current += 1;
+      setWsState("reconnecting");
+      const delay = Math.min(12000, 600 * 2 ** Math.min(reconnectAttemptRef.current, 5));
+      reconnectTimerRef.current = window.setTimeout(() => {
+        if (!disposed) {
+          openSocket();
+        }
+      }, delay);
     };
 
+    const openSocket = (): void => {
+      const socket = createUNSSocket();
+      wsRef.current = socket;
+
+      socket.onopen = () => {
+        if (wsRef.current !== socket) {
+          return;
+        }
+        reconnectAttemptRef.current = 0;
+        setWsState("connected");
+      };
+
+      socket.onmessage = (event) => {
+        if (wsRef.current !== socket) {
+          return;
+        }
+        try {
+          const payload = JSON.parse(event.data) as {
+            event?: string;
+            rows?: UNSRow[];
+            updated_rows?: UNSRow[];
+          };
+
+          if (payload.event === "uns_snapshot_full" && Array.isArray(payload.rows)) {
+            const nextRows = payload.rows.map(toEngineeringRow);
+            broadcastRows(nextRows, "replace");
+            setStatus(`UNS stream full snapshot (${nextRows.length} rows).`);
+            setLastResponse({ event: payload.event, rows: nextRows.length });
+            return;
+          }
+
+          if (payload.event === "uns_snapshot_partial" && Array.isArray(payload.updated_rows)) {
+            const updateRows = payload.updated_rows.map(toEngineeringRow);
+            broadcastRows(updateRows, "merge");
+            setStatus(`UNS stream partial update (${updateRows.length} rows).`);
+            setLastResponse({ event: payload.event, rows: updateRows.length });
+          }
+        } catch {
+          setError((current) => current ?? "UNS websocket payload malformed.");
+        }
+      };
+
+      socket.onerror = () => {
+        if (wsRef.current !== socket) {
+          return;
+        }
+        setWsState("disconnected");
+        setError((current) => current ?? "UNS websocket failed.");
+      };
+
+      socket.onclose = () => {
+        if (disposed) {
+          return;
+        }
+        if (wsRef.current !== socket) {
+          return;
+        }
+        setWsState("reconnecting");
+        scheduleReconnect();
+      };
+    };
+
+    openSocket();
+
     return () => {
-      socket.close();
+      disposed = true;
+      clearTimer();
+      wsRef.current?.close();
       wsRef.current = null;
+      setWsState("disconnected");
     };
   }, [broadcastRows]);
 
   const handleRunQuery = useCallback(async () => {
+    const normalizedQuery = queryInput.trim();
+    if (!normalizedQuery) {
+      setError("Query is required.");
+      return;
+    }
     setError(null);
+    setBusyAction("query");
     try {
-      const rows = await queryUNS(queryInput);
+      const rows = await queryUNS(normalizedQuery);
       const normalized = rows.map(toEngineeringRow);
       broadcastRows(normalized, "replace");
       setStatus(`Query returned ${normalized.length} rows.`);
-    } catch {
-      setError("UNS query failed. Verify SQL is SELECT-only and references uns_rows.");
+      setLastResponse({ rows: normalized.length, mode: "query" });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "UNS query failed. Verify SQL is SELECT-only and references uns_rows.");
+    } finally {
+      setBusyAction(null);
     }
   }, [broadcastRows, queryInput]);
 
   const handleRunScript = useCallback(async () => {
+    const normalizedScript = scriptInput.trim();
+    if (!normalizedScript) {
+      setError("Script is required.");
+      return;
+    }
     setError(null);
+    setBusyAction("script");
     try {
-      await runUNSScript(scriptInput);
+      const result = await runUNSScript(normalizedScript);
       await refreshRows();
       setStatus("UNS script executed.");
-    } catch {
-      setError("UNS script execution failed. Only restricted internal script operations are allowed.");
+      setLastResponse({ mode: "script", result });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "UNS script execution failed. Only restricted internal script operations are allowed.");
+    } finally {
+      setBusyAction(null);
     }
   }, [refreshRows, scriptInput]);
 
   const connect = useCallback(
     async (connectorType: "opcua" | "mqtt" | "api") => {
+      if (!endpointInput.trim()) {
+        setError("Connector endpoint is required.");
+        return;
+      }
       setError(null);
+      setBusyAction("connector");
       try {
-        await setUNSConnector(connectorType, { endpoint: endpointInput });
+        const result = await setUNSConnector(connectorType, { endpoint: endpointInput.trim() });
         setStatus(`${connectorType.toUpperCase()} metadata saved.`);
-      } catch {
-        setError(`${connectorType.toUpperCase()} connect metadata update failed.`);
+        setLastResponse({ mode: "connector", connector: connectorType, result });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : `${connectorType.toUpperCase()} connect metadata update failed.`);
+      } finally {
+        setBusyAction(null);
       }
     },
     [endpointInput]
@@ -186,11 +280,15 @@ export default function SystemControlLayer({ onRowsUpdate }: SystemControlLayerP
     }
     const firstTag = rowsView[0].tag;
     setError(null);
+    setBusyAction("map");
     try {
-      await mapUNSTag(firstTag, { mapped_to: firstTag, source: "system_control_layer" });
+      const result = await mapUNSTag(firstTag, { mapped_to: firstTag, source: "system_control_layer" });
       setStatus(`Mapped tag ${firstTag}.`);
-    } catch {
-      setError("UNS mapping update failed.");
+      setLastResponse({ mode: "map", result });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "UNS mapping update failed.");
+    } finally {
+      setBusyAction(null);
     }
   }, [rowsView]);
 
@@ -201,6 +299,9 @@ export default function SystemControlLayer({ onRowsUpdate }: SystemControlLayerP
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-700">System Control Layer (UNS)</h4>
         <span className="text-[11px] text-slate-500">{status}</span>
+        <span className={`rounded border px-1.5 py-0.5 text-[10px] ${wsState === "connected" ? "border-emerald-300 bg-emerald-50 text-emerald-700" : wsState === "reconnecting" ? "border-amber-300 bg-amber-50 text-amber-700" : "border-slate-300 bg-slate-100 text-slate-600"}`}>
+          {wsState === "connected" ? "Live Connected" : wsState === "reconnecting" ? "Reconnecting" : "Disconnected"}
+        </span>
       </div>
 
       <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
@@ -211,8 +312,8 @@ export default function SystemControlLayer({ onRowsUpdate }: SystemControlLayerP
             onChange={(event) => setQueryInput(event.target.value)}
             className="h-20 w-full rounded border border-slate-300 bg-slate-50 p-2 text-[11px] text-slate-800"
           />
-          <button type="button" className="command-btn" onClick={() => void handleRunQuery()}>
-            Run Query
+          <button type="button" className="command-btn" onClick={() => void handleRunQuery()} disabled={busyAction !== null}>
+            {busyAction === "query" ? "Running..." : "Run Query"}
           </button>
         </div>
 
@@ -224,11 +325,11 @@ export default function SystemControlLayer({ onRowsUpdate }: SystemControlLayerP
             className="h-20 w-full rounded border border-slate-300 bg-slate-50 p-2 text-[11px] text-slate-800"
           />
           <div className="flex gap-2">
-            <button type="button" className="command-btn" onClick={() => void handleRunScript()}>
-              Run Script
+            <button type="button" className="command-btn" onClick={() => void handleRunScript()} disabled={busyAction !== null}>
+              {busyAction === "script" ? "Running..." : "Run Script"}
             </button>
-            <button type="button" className="command-btn" onClick={() => void handleQuickMap()}>
-              Map First Tag
+            <button type="button" className="command-btn" onClick={() => void handleQuickMap()} disabled={busyAction !== null}>
+              {busyAction === "map" ? "Mapping..." : "Map First Tag"}
             </button>
           </div>
         </div>
@@ -244,13 +345,20 @@ export default function SystemControlLayer({ onRowsUpdate }: SystemControlLayerP
             placeholder="opc.tcp://localhost:4840 or mqtt://broker or https://api"
           />
         </label>
-        <button type="button" className="command-btn" onClick={() => void connect("opcua")}>Connect OPC UA</button>
-        <button type="button" className="command-btn" onClick={() => void connect("mqtt")}>Connect MQTT</button>
-        <button type="button" className="command-btn" onClick={() => void connect("api")}>Connect API</button>
-        <button type="button" className="command-btn" onClick={() => void refreshRows()}>Refresh UNS</button>
+        <button type="button" className="command-btn" onClick={() => void connect("opcua")} disabled={busyAction !== null}>Connect OPC UA</button>
+        <button type="button" className="command-btn" onClick={() => void connect("mqtt")} disabled={busyAction !== null}>Connect MQTT</button>
+        <button type="button" className="command-btn" onClick={() => void connect("api")} disabled={busyAction !== null}>Connect API</button>
+        <button type="button" className="command-btn" onClick={() => void refreshRows()} disabled={busyAction !== null}>{busyAction === "refresh" ? "Refreshing..." : "Refresh UNS"}</button>
       </div>
 
       {error ? <p className="mt-2 text-xs text-red-700">{error}</p> : null}
+
+      {lastResponse ? (
+        <div className="mt-2 rounded border border-slate-200 bg-slate-50 p-2">
+          <p className="text-[11px] font-semibold text-slate-700">Latest response</p>
+          <pre className="mt-1 max-h-28 overflow-auto text-[10px] text-slate-700">{JSON.stringify(lastResponse, null, 2)}</pre>
+        </div>
+      ) : null}
 
       <div className="mt-2 rounded border border-slate-200 bg-slate-50 p-2">
         <p className="text-[11px] text-slate-600">Live view preview ({rowsView.length} rows):</p>

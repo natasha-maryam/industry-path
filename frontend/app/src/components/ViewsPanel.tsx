@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
 import DiffViewer from "./DiffViewer";
 import {
   createSavedView,
@@ -15,9 +16,18 @@ import {
 type ViewsPanelProps = {
   projectId?: string;
   currentRows: EngineeringTableResponseRow[];
+  rowsSource?: string;
+  filteredRowsCount?: number;
+  rowsLoading?: boolean;
 };
 
-export default function ViewsPanel({ projectId, currentRows }: ViewsPanelProps) {
+export default function ViewsPanel({
+  projectId,
+  currentRows,
+  rowsSource = "workspace_rows",
+  filteredRowsCount = 0,
+  rowsLoading = false,
+}: ViewsPanelProps) {
   const [views, setViews] = useState<SavedEngineeringView[]>([]);
   const [selectedViewId, setSelectedViewId] = useState<string>("");
   const [versions, setVersions] = useState<SavedEngineeringViewVersion[]>([]);
@@ -33,8 +43,13 @@ export default function ViewsPanel({ projectId, currentRows }: ViewsPanelProps) 
 
   const [loadingViews, setLoadingViews] = useState<boolean>(false);
   const [loadingDiff, setLoadingDiff] = useState<boolean>(false);
+  const [busyAction, setBusyAction] = useState<"save_view" | "save_snapshot" | "refresh_versions" | null>(null);
   const [status, setStatus] = useState<string>("Views idle");
   const [error, setError] = useState<string | null>(null);
+
+  const liveEngineeringRows = useMemo(() => currentRows, [currentRows]);
+  const totalLiveRowsCount = liveEngineeringRows.length;
+  const filteredVisibleRowsCount = filteredRowsCount > 0 ? filteredRowsCount : totalLiveRowsCount;
 
   const refreshViews = useCallback(async () => {
     if (!projectId) {
@@ -68,6 +83,7 @@ export default function ViewsPanel({ projectId, currentRows }: ViewsPanelProps) 
     }
 
     try {
+      setBusyAction("refresh_versions");
       const nextVersions = await listSavedViewVersions(selectedViewId);
       setVersions(nextVersions);
       if (nextVersions.length >= 2) {
@@ -76,6 +92,8 @@ export default function ViewsPanel({ projectId, currentRows }: ViewsPanelProps) 
       }
     } catch {
       setError("Failed to load view versions.");
+    } finally {
+      setBusyAction(null);
     }
   }, [selectedViewId]);
 
@@ -100,6 +118,7 @@ export default function ViewsPanel({ projectId, currentRows }: ViewsPanelProps) 
     }
 
     setError(null);
+    setBusyAction("save_view");
     try {
       const saved = await createSavedView({
         project_id: projectId,
@@ -113,31 +132,95 @@ export default function ViewsPanel({ projectId, currentRows }: ViewsPanelProps) 
       setSelectedViewId(saved.id);
     } catch {
       setError("Failed to save view.");
+    } finally {
+      setBusyAction(null);
     }
   }, [projectId, refreshViews, viewName, viewQuery, viewScript]);
 
   const handleSaveSnapshot = useCallback(async () => {
+    // Manual QA checklist:
+    // 1) save snapshot with visible rows loaded
+    // 2) save snapshot after websocket/runtime update
+    // 3) save snapshot while search/filter is active (full live dataset still saved)
+    // 4) save snapshot after refresh/reload
+    // 5) save snapshot with no selected view (must block)
     if (!selectedViewId) {
       setError("Select a saved view first.");
       return;
     }
 
+    if (rowsLoading) {
+      setError("Engineering rows are still loading. Please wait before saving snapshot.");
+      return;
+    }
+
     setError(null);
+    setBusyAction("save_snapshot");
     try {
-      await createSavedViewVersion({
+      console.info("[views.snapshot] save_start", {
+        selectedViewId,
+        totalLiveRowsCount,
+        filteredVisibleRowsCount,
+        dataSourceUsed: rowsSource,
+        notesLength: snapshotNotes.trim().length,
+      });
+
+      if (totalLiveRowsCount === 0) {
+        setError("Cannot save snapshot from an empty engineering table.");
+        console.info("[views.snapshot] save_blocked_empty", {
+          selectedViewId,
+          totalLiveRowsCount,
+          filteredVisibleRowsCount,
+          dataSourceUsed: rowsSource,
+        });
+        return;
+      }
+
+      const response = await createSavedViewVersion({
         view_id: selectedViewId,
         snapshot: {
-          rows: currentRows,
+          rows: liveEngineeringRows,
+          row_source: rowsSource,
+          filtered_visible_rows_count: filteredVisibleRowsCount,
         },
         notes: snapshotNotes,
       });
       setSnapshotNotes("");
       setStatus("Snapshot saved.");
+      toast.success("Snapshot created successfully.", {
+        className: "industrial-toast",
+      });
+      console.info("[views.snapshot] save_success", {
+        selectedViewId,
+        totalLiveRowsCount,
+        filteredVisibleRowsCount,
+        dataSourceUsed: rowsSource,
+        backendStatus: response?.id ? "success" : "unknown",
+      });
       await refreshVersions();
-    } catch {
+    } catch (err) {
       setError("Failed to save snapshot.");
+      console.info("[views.snapshot] save_error", {
+        selectedViewId,
+        totalLiveRowsCount,
+        filteredVisibleRowsCount,
+        dataSourceUsed: rowsSource,
+        backendStatus: "error",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setBusyAction(null);
     }
-  }, [currentRows, refreshVersions, selectedViewId, snapshotNotes]);
+  }, [
+    filteredVisibleRowsCount,
+    liveEngineeringRows,
+    refreshVersions,
+    rowsLoading,
+    rowsSource,
+    selectedViewId,
+    snapshotNotes,
+    totalLiveRowsCount,
+  ]);
 
   const handleRunDiff = useCallback(async () => {
     if (!beforeVersionId || !afterVersionId) {
@@ -154,7 +237,7 @@ export default function ViewsPanel({ projectId, currentRows }: ViewsPanelProps) 
     try {
       const payload = await diffSavedViewVersions(beforeVersionId, afterVersionId);
       setDiff(payload);
-      setStatus("Diff computed.");
+      setStatus(`Diff computed: +${payload.summary.added} / -${payload.summary.removed} / Δ${payload.summary.changed}`);
     } catch {
       setError("Failed to compute diff.");
       setDiff(null);
@@ -192,7 +275,7 @@ export default function ViewsPanel({ projectId, currentRows }: ViewsPanelProps) 
             className="h-16 w-full rounded border border-slate-300 bg-white p-2 text-[11px]"
           />
           <button type="button" className="command-btn" onClick={() => void handleSaveView()}>
-            Save View
+            {busyAction === "save_view" ? "Saving..." : "Save View"}
           </button>
         </div>
 
@@ -224,7 +307,7 @@ export default function ViewsPanel({ projectId, currentRows }: ViewsPanelProps) 
             className="h-16 w-full rounded border border-slate-300 bg-white p-2 text-[11px]"
           />
           <button type="button" className="command-btn" onClick={() => void handleSaveSnapshot()}>
-            Save Snapshot
+            {rowsLoading ? "Rows Loading..." : busyAction === "save_snapshot" ? "Saving..." : "Save Snapshot"}
           </button>
         </div>
 

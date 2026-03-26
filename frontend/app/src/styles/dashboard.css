@@ -119,8 +119,85 @@
   box-shadow: 0 8px 20px rgba(16, 24, 32, 0.16);
 }
 
+.export-modal {
+  width: min(880px, calc(100vw - 2rem));
+  max-height: calc(100vh - 2.2rem);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  overflow: hidden;
+  gap: 0;
+  padding: 0;
+}
+
+.export-modal-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 0.9rem 1rem 0.65rem;
+  border-bottom: 1px solid #d7e0e8;
+  background: #f7f8fa;
+}
+
+.export-modal-body {
+  overflow: auto;
+  padding: 0.75rem 1rem;
+  display: grid;
+  gap: 0.62rem;
+}
+
+.export-modal-body .monitor-frame {
+  margin-top: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.export-modal .monitor-frame {
+  display: block;
+  place-items: initial;
+  min-height: auto;
+  padding: 0.55rem 0.62rem;
+}
+
+.export-modal .monitor-frame > * + * {
+  margin-top: 0.3rem;
+}
+
+.export-modal .monitor-frame .value-mono {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.export-modal-footer {
+  position: static;
+  margin-top: 0;
+  padding: 0.65rem 1rem 0.85rem;
+  border-top: 1px solid #d7e0e8;
+  background: #f7f8fa;
+}
+
+.export-note {
+  color: #355f44;
+  font-size: 0.75rem;
+  margin-top: 0.2rem;
+  line-height: 1.35;
+}
+
 .modal-card h3 {
   margin: 0;
+}
+
+@media (max-width: 860px) {
+  .export-modal {
+    width: min(96vw, calc(100vw - 1rem));
+    max-height: calc(100vh - 1rem);
+  }
+
+  .export-modal-header,
+  .export-modal-body,
+  .export-modal-footer {
+    padding-left: 0.72rem;
+    padding-right: 0.72rem;
+  }
 }
 
 .modal-label {
@@ -330,8 +407,13 @@
 }
 
 .command-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.command-btn.is-loading:disabled {
   cursor: wait;
-  opacity: 0.92;
+  opacity: 0.78;
 }
 
 .btn-loader {

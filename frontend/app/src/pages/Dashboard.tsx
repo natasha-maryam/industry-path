@@ -36,6 +36,8 @@ import {
   clearRuntimeInputForce,
   createProject,
   createPLCExport,
+  getPLCExportReadiness,
+  handoffPLCExportForDeployment,
   createInitialPipelineStatuses,
   deleteProject,
   deployDirectPLC,
@@ -95,6 +97,9 @@ import {
   type PIDReconcileSummary,
   type PLCExportResponse,
   type PLCExportVendor,
+  type ExportReadinessSummary,
+  type ExportSourceMode,
+  type ExportDeploymentState,
   type EngineeringTableResponse,
   type EngineeringTableResponseRow,
   type Project,
@@ -497,7 +502,19 @@ export default function Dashboard() {
   const [showExportDialog, setShowExportDialog] = useState<boolean>(false);
   const [showDirectPLCDeployDialog, setShowDirectPLCDeployDialog] = useState<boolean>(false);
   const [exportVendor, setExportVendor] = useState<PLCExportVendor>("siemens");
+  const [exportSourceMode, setExportSourceMode] = useState<ExportSourceMode>("live");
+  const [exportSourceVersionTag, setExportSourceVersionTag] = useState<string | null>(null);
+  const [exportReadiness, setExportReadiness] = useState<ExportReadinessSummary | null>(null);
+  const [exportReadinessLoading, setExportReadinessLoading] = useState<boolean>(false);
+  const [exportReadinessError, setExportReadinessError] = useState<string | null>(null);
   const [exportResult, setExportResult] = useState<PLCExportResponse | null>(null);
+  const [deploymentTargetRuntime, setDeploymentTargetRuntime] = useState<string>("openplc");
+  const [exportDeploymentState, setExportDeploymentState] = useState<ExportDeploymentState>("not_ready");
+  const [exportDeploymentMessage, setExportDeploymentMessage] = useState<string>("Export package not prepared.");
+  const [exportDeploymentLogs, setExportDeploymentLogs] = useState<string[]>([]);
+  const [exportDeploymentErrors, setExportDeploymentErrors] = useState<string[]>([]);
+  const [exportDeploymentBusy, setExportDeploymentBusy] = useState<boolean>(false);
+  const [exportDeploymentAction, setExportDeploymentAction] = useState<"prepare" | "deploy" | null>(null);
   const [directDeployBusy, setDirectDeployBusy] = useState<boolean>(false);
   const [directDeployResult, setDirectDeployResult] = useState<string>("");
   const [directDeployForm, setDirectDeployForm] = useState<{
@@ -522,6 +539,9 @@ export default function Dashboard() {
   const [engineeringTableData, setEngineeringTableData] = useState<EngineeringTableResponse | null>(null);
   const [engineeringTableLoading, setEngineeringTableLoading] = useState<boolean>(false);
   const [engineeringTableError, setEngineeringTableError] = useState<string | null>(null);
+  const [liveEngineeringRows, setLiveEngineeringRows] = useState<EngineeringTableResponseRow[]>([]);
+  const [liveEngineeringRowsFilteredCount, setLiveEngineeringRowsFilteredCount] = useState<number>(0);
+  const [liveEngineeringRowsLoading, setLiveEngineeringRowsLoading] = useState<boolean>(false);
   const [behaviorRefreshKey, setBehaviorRefreshKey] = useState<number>(0);
   const [selectedWhyTraceTag, setSelectedWhyTraceTag] = useState<string | null>(null);
   const [unsTableRowsOverride, setUnsTableRowsOverride] = useState<EngineeringTableResponseRow[] | null>(null);
@@ -609,6 +629,7 @@ export default function Dashboard() {
   const previousPipelineStatusesRef = useRef<PipelineStageStatusMap>(pipelineStatuses);
   const behaviorHydrationSignatureRef = useRef<string>("");
   const rightResizeStartRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const exportReadinessRequestIdRef = useRef<number>(0);
 
   const setModuleState = (moduleId: WorkspaceModuleId, state: ModuleState): void => {
     setModuleStates((previous) => ({ ...previous, [moduleId]: state }));
@@ -1655,6 +1676,17 @@ export default function Dashboard() {
       if (action === "export_logic") {
         setShowExportDialog(true);
         setExportResult(null);
+        setExportReadiness(null);
+        setExportReadinessLoading(false);
+        setExportReadinessError(null);
+        setExportDeploymentLogs([]);
+        setExportDeploymentErrors([]);
+        setExportDeploymentBusy(false);
+        setExportDeploymentAction(null);
+        setExportDeploymentState("not_ready");
+        setExportDeploymentMessage("Validating export readiness...");
+        setExportSourceMode(selectedVersion ? "version" : "live");
+        setExportSourceVersionTag(selectedVersion?.version_tag ?? versions[0]?.version_tag ?? null);
         setStatusText("Select PLC vendor target to export active project logic.");
       }
 
@@ -1771,24 +1803,384 @@ export default function Dashboard() {
     }
   };
 
+  const refreshExportReadiness = useCallback(async (): Promise<void> => {
+    const requestId = exportReadinessRequestIdRef.current + 1;
+    exportReadinessRequestIdRef.current = requestId;
+
+    if (!selectedProjectId) {
+      setExportReadiness(null);
+      setExportReadinessLoading(false);
+      setExportReadinessError("Select a project to validate export readiness.");
+      setExportDeploymentState("not_ready");
+      setExportDeploymentMessage("Export package not prepared.");
+      setExportDeploymentBusy(false);
+      setExportDeploymentAction(null);
+      console.info("[export.modal] readiness_state", {
+        requestId,
+        exportAllowed: false,
+        exportBlocked: true,
+        deploymentReadiness: "not_ready",
+        blockerReasons: ["Select a project to validate export readiness."],
+      });
+      return;
+    }
+
+    const sourceVersion =
+      exportSourceMode === "version"
+        ? exportSourceVersionTag ?? selectedVersion?.version_tag ?? versions[0]?.version_tag ?? null
+        : null;
+
+    setExportReadinessLoading(true);
+    setExportReadinessError(null);
+    setExportDeploymentErrors([]);
+    setExportDeploymentLogs([]);
+    setExportDeploymentBusy(false);
+    setExportDeploymentAction(null);
+    setExportDeploymentMessage("Validating export readiness...");
+    try {
+      const readiness = await getPLCExportReadiness({
+        project_id: selectedProjectId,
+        vendor: exportVendor,
+        source_mode: exportSourceMode,
+        source_version_id: sourceVersion,
+      });
+      if (requestId !== exportReadinessRequestIdRef.current) {
+        console.info("[export.modal] readiness_state", {
+          requestId,
+          ignored: true,
+          reason: "stale_refresh_response",
+        });
+        return;
+      }
+
+      const blockerReasons = readiness.checks.filter((item) => !item.ready && item.level === "error").map((item) => item.message);
+      const deploymentReadinessState = readiness.deploy_allowed ? "ready_to_deploy" : "not_ready";
+      setExportReadiness(readiness);
+      setExportDeploymentState(deploymentReadinessState);
+      setExportDeploymentMessage(
+        readiness.deploy_allowed
+          ? "Deployment readiness passed."
+          : "Deployment checks loaded."
+      );
+      console.info("[export.modal] readiness_state", {
+        requestId,
+        exportAllowed: readiness.export_allowed,
+        deployAllowed: readiness.deploy_allowed,
+        exportBlocked: readiness.export_blocked,
+        deploymentReadiness: deploymentReadinessState,
+        sourceMode: readiness.source_mode,
+        sourceVersionId: readiness.source_version_id,
+        unresolvedPhysicalTags: readiness.unresolved_physical_io_tags?.length ?? 0,
+        unresolvedInternalTags: readiness.unresolved_internal_tags?.length ?? 0,
+        exportAllowedReason: readiness.export_allowed ? "Core export prerequisites satisfied" : readiness.export_blockers?.join("; "),
+        deployBlockedReason: readiness.deploy_allowed ? "none" : readiness.deploy_blockers?.join("; "),
+        blockerReasons,
+      });
+    } catch (error) {
+      if (requestId !== exportReadinessRequestIdRef.current) {
+        console.info("[export.modal] readiness_state", {
+          requestId,
+          ignored: true,
+          reason: "stale_refresh_error",
+        });
+        return;
+      }
+
+      const message = error instanceof Error ? error.message : "Export readiness check failed";
+      setExportReadiness(null);
+      setExportReadinessError(message);
+      setExportDeploymentState("not_ready");
+      setExportDeploymentMessage("Readiness validation failed.");
+      console.info("[export.modal] readiness_state", {
+        requestId,
+        exportAllowed: false,
+        deployAllowed: false,
+        exportBlocked: true,
+        deploymentReadiness: "not_ready",
+        blockerReasons: [message],
+      });
+    } finally {
+      if (requestId === exportReadinessRequestIdRef.current) {
+        setExportReadinessLoading(false);
+      }
+    }
+  }, [exportSourceMode, exportSourceVersionTag, exportVendor, selectedProjectId, selectedVersion?.version_tag, versions]);
+
+  const exportReadinessSections = useMemo<{
+    blockingPhysical: string[];
+    autoResolvedDerived: string[];
+    internalNonBlocking: string[];
+    unknownUnclassified: string[];
+  }>(() => {
+    if (!exportReadiness) {
+      return {
+        blockingPhysical: [],
+        autoResolvedDerived: [],
+        internalNonBlocking: [],
+        unknownUnclassified: [],
+      };
+    }
+
+    const checksByKey = new Map(exportReadiness.checks.map((check) => [check.key, check]));
+    return {
+      blockingPhysical: Array.from(new Set([...(exportReadiness.deploy_blockers ?? [])])).filter((item): item is string => Boolean(item)),
+      autoResolvedDerived: ["derived_auto_resolved"]
+        .map((key) => checksByKey.get(key)?.message)
+        .filter((item): item is string => Boolean(item)),
+      internalNonBlocking: ["mapping_warnings_non_physical", "internal_control_non_blocking"]
+        .map((key) => checksByKey.get(key)?.message)
+        .filter((item): item is string => Boolean(item)),
+      unknownUnclassified: ["unknown_unclassified"]
+        .map((key) => checksByKey.get(key)?.message)
+        .filter((item): item is string => Boolean(item)),
+    };
+  }, [exportReadiness]);
+
+  const readinessWarningMessages = useMemo<string[]>(() => {
+    if (!exportReadiness) {
+      return [];
+    }
+    const combined = [
+      ...(exportReadiness.warnings ?? []),
+      ...(exportReadiness.deploy_blockers ?? []),
+      ...(exportReadiness.unresolved_physical_io_tags ?? []).map((tag) => `Unresolved physical IO: ${tag}`),
+      ...(exportReadiness.unresolved_internal_tags ?? []).map((tag) => `Unresolved internal tag: ${tag}`),
+    ];
+    return Array.from(new Set(combined)).filter(Boolean);
+  }, [exportReadiness]);
+
+  const exportSourceSelectionBlocked = exportSourceMode === "version" && !exportSourceVersionTag;
+
+  const generateExportDisabledReason = useMemo<string | null>(() => {
+    if (isExportingLogic) {
+      return "Export generation in progress.";
+    }
+    if (exportSourceSelectionBlocked) {
+      return "Select a saved version before exporting.";
+    }
+    if (!selectedProjectId) {
+      return "Select a project to generate export.";
+    }
+    return null;
+  }, [exportSourceSelectionBlocked, isExportingLogic, selectedProjectId]);
+
+  const prepareHandoffDisabledReason = useMemo<string | null>(() => {
+    if (exportDeploymentBusy) {
+      return "Deployment action in progress.";
+    }
+    if (!selectedProjectId) {
+      return "Select a project before preparing handoff.";
+    }
+    if (!exportResult) {
+      return "Generate export package first.";
+    }
+    if (!deploymentTargetRuntime.trim()) {
+      return "Select target runtime before handoff.";
+    }
+    return null;
+  }, [
+    deploymentTargetRuntime,
+    exportDeploymentBusy,
+    exportResult,
+    selectedProjectId,
+  ]);
+
+  const triggerRuntimeDeployDisabledReason = useMemo<string | null>(() => {
+    if (exportDeploymentBusy) {
+      return "Deployment action in progress.";
+    }
+    if (!selectedProjectId) {
+      return "Select a project before runtime deploy.";
+    }
+    if (!exportResult) {
+      return "Generate export package first.";
+    }
+    if (!deploymentTargetRuntime.trim()) {
+      return "Select target runtime before deploy.";
+    }
+    if (exportDeploymentState === "deployment_in_progress") {
+      return "Runtime deployment already in progress.";
+    }
+    return null;
+  }, [
+    deploymentTargetRuntime,
+    exportDeploymentBusy,
+    exportDeploymentState,
+    exportResult,
+    selectedProjectId,
+  ]);
+
+  const deploymentActionBlockers = useMemo<string[]>(() => {
+    return readinessWarningMessages;
+  }, [
+    readinessWarningMessages,
+  ]);
+
+  const canGenerateExport = !generateExportDisabledReason;
+  const canPrepareHandoff = !prepareHandoffDisabledReason;
+  const canTriggerRuntimeDeploy = !triggerRuntimeDeployDisabledReason;
+
+  useEffect(() => {
+    if (!showExportDialog) {
+      return;
+    }
+    console.info("[export.modal] deployment_state", {
+      deploymentState: exportDeploymentState,
+      deploymentMessage: exportDeploymentMessage,
+      exportReadinessState: exportReadiness?.export_allowed ? "allowed" : "blocked",
+      deployReadinessState: exportReadiness?.deploy_allowed ? "allowed" : "blocked",
+      deploymentReadinessState: exportDeploymentState,
+      blockerReasons: deploymentActionBlockers,
+      generateExportDisabledReason,
+      prepareHandoffDisabledReason,
+      triggerRuntimeDeployDisabledReason,
+      canGenerateExport,
+      canPrepareHandoff,
+      canTriggerRuntimeDeploy,
+      isReadinessLoading: exportReadinessLoading,
+      isDeploymentBusy: exportDeploymentBusy,
+    });
+  }, [
+    exportReadiness,
+    canGenerateExport,
+    canPrepareHandoff,
+    canTriggerRuntimeDeploy,
+    deploymentActionBlockers,
+    exportDeploymentBusy,
+    exportDeploymentMessage,
+    exportDeploymentState,
+    exportReadinessLoading,
+    generateExportDisabledReason,
+    prepareHandoffDisabledReason,
+    showExportDialog,
+    triggerRuntimeDeployDisabledReason,
+  ]);
+
+  useEffect(() => {
+    if (!showExportDialog) {
+      return;
+    }
+    void refreshExportReadiness();
+  }, [refreshExportReadiness, showExportDialog]);
+
   const handleGeneratePLCExport = async (): Promise<void> => {
     if (!selectedProjectId) {
       return;
     }
+    if (!selectedProjectId) {
+      toast.error("Select a project before generating export.", { className: "industrial-toast industrial-toast-error" });
+      return;
+    }
+
+    const sourceVersion =
+      exportSourceMode === "version"
+        ? exportSourceVersionTag ?? selectedVersion?.version_tag ?? versions[0]?.version_tag ?? null
+        : null;
+
     setIsExportingLogic(true);
     setExportResult(null);
     try {
-      const result = await createPLCExport(selectedProjectId, exportVendor);
+      const result = await createPLCExport(selectedProjectId, exportVendor, {
+        source_mode: exportSourceMode,
+        source_version_id: sourceVersion,
+      });
       setExportResult(result);
       setStatusText(`Export created for ${result.project_name} (${result.vendor}).`);
+      const deployAllowedAfterExport = Boolean(exportReadiness?.deploy_allowed);
+      setExportDeploymentState(deployAllowedAfterExport ? "ready_to_deploy" : "not_ready");
+      setExportDeploymentMessage(
+        deployAllowedAfterExport
+          ? "Export package ready for deployment handoff."
+          : "Export package ready for testing workflow."
+      );
+      setExportDeploymentLogs([]);
+      setExportDeploymentErrors([]);
       toast.success(`Export ready: ${result.vendor}`, { className: "industrial-toast" });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Export failed";
       setStatusText("PLC export generation failed.");
+      setExportDeploymentState("failed");
+      setExportDeploymentMessage("Export generation failed.");
+      setExportDeploymentErrors([message]);
       toast.error(message, { className: "industrial-toast industrial-toast-error" });
     } finally {
       setIsExportingLogic(false);
     }
+  };
+
+  const executeExportDeploymentHandoff = async (triggerRuntimeDeploy: boolean): Promise<void> => {
+    if (!selectedProjectId || !exportResult) {
+      return;
+    }
+
+    setExportDeploymentBusy(true);
+    setExportDeploymentAction(triggerRuntimeDeploy ? "deploy" : "prepare");
+    setExportDeploymentState(triggerRuntimeDeploy ? "deployment_in_progress" : exportDeploymentState);
+    try {
+      const response = await handoffPLCExportForDeployment({
+        project_id: selectedProjectId,
+        export_id: exportResult.export_id,
+        target_runtime: deploymentTargetRuntime,
+        runtime_config: {
+          source_mode: exportResult.source_mode ?? "live",
+          source_version_id: exportResult.source_version_id ?? null,
+          export_vendor: exportResult.vendor,
+        },
+        trigger_runtime_deploy: triggerRuntimeDeploy,
+      });
+      setExportDeploymentState(response.state);
+      setExportDeploymentMessage(response.message);
+      setExportDeploymentLogs(response.logs ?? []);
+      setExportDeploymentErrors(response.errors ?? []);
+      console.info("[export.modal] deployment_state", {
+        triggerRuntimeDeploy,
+        responseState: response.state,
+        blockerReasons: response.errors ?? [],
+      });
+      if (response.state === "deployed") {
+        toast.success("Runtime deployment completed from export package.", { className: "industrial-toast" });
+      } else if (response.state === "ready_to_deploy") {
+        toast.success("Export package handed off for deployment.", { className: "industrial-toast" });
+      } else if (response.state === "not_ready") {
+        toast("Deployment handoff is not ready.", { className: "industrial-toast" });
+      } else if (response.state === "failed") {
+        toast.error("Deployment handoff failed.", { className: "industrial-toast industrial-toast-error" });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Deployment handoff failed";
+      setExportDeploymentState("failed");
+      setExportDeploymentMessage("Deployment handoff failed.");
+      setExportDeploymentErrors([message]);
+      console.info("[export.modal] deployment_state", {
+        triggerRuntimeDeploy,
+        responseState: "failed",
+        blockerReasons: [message],
+      });
+      toast.error(message, { className: "industrial-toast industrial-toast-error" });
+    } finally {
+      setExportDeploymentBusy(false);
+      setExportDeploymentAction(null);
+    }
+  };
+
+  const handleExportDeploymentHandoff = async (triggerRuntimeDeploy: boolean): Promise<void> => {
+    if (!selectedProjectId || !exportResult) {
+      return;
+    }
+
+    const disabledReason = triggerRuntimeDeploy ? triggerRuntimeDeployDisabledReason : prepareHandoffDisabledReason;
+    if (disabledReason) {
+      console.info("[export.modal] deploy_action_blocked", {
+        triggerRuntimeDeploy,
+        blockerReasons: [disabledReason],
+        exportReadinessState: exportReadiness?.export_allowed ? "allowed" : "blocked",
+        deploymentReadinessState: exportDeploymentState,
+      });
+      toast(disabledReason, { className: "industrial-toast" });
+      return;
+    }
+
+    await executeExportDeploymentHandoff(triggerRuntimeDeploy);
   };
 
   const handlePIDReviewConflicts = (): void => {
@@ -2015,6 +2407,12 @@ export default function Dashboard() {
   };
 
   const currentProject = projects.find((project) => project.id === selectedProjectId);
+  const selectedControlLoop = selectedControlLoopTag ? controlLoops.find((item) => item.loop_tag === selectedControlLoopTag) ?? null : null;
+  const resolvedEngineeringRowsForWorkspace =
+    liveEngineeringRows.length > 0 ? liveEngineeringRows : unsTableRowsOverride ?? engineeringTableData?.rows ?? [];
+  const resolvedEngineeringRowsSource = liveEngineeringRows.length > 0 ? "deterministic_behavior" : unsTableRowsOverride ? "uns_override" : "engineering_table_response";
+  const resolvedEngineeringFilteredCount =
+    liveEngineeringRows.length > 0 ? liveEngineeringRowsFilteredCount : resolvedEngineeringRowsForWorkspace.length;
   const activeModuleState = moduleStates[panelState.activeModule];
   const layoutStorage = typeof window === "undefined" ? undefined : window.localStorage;
   const workspaceRowsLayout = useDefaultLayout({ id: "crosslayerx-workspace-rows", storage: layoutStorage });
@@ -2528,7 +2926,9 @@ export default function Dashboard() {
   const handleControlLoopSelect = (loop: ControlLoopRecord): void => {
     setSelectedControlLoopTag(loop.loop_tag);
     setSelectedNode(loop.sensor_tag);
+    setSelectedWhyTraceTag(loop.sensor_tag);
     traceControlLoopPath(loop);
+    setIsRightPanelExpanded(true);
   };
 
   const handleControlLoopView = async (loop: ControlLoopRecord): Promise<void> => {
@@ -2557,6 +2957,32 @@ export default function Dashboard() {
 
   const handleControlLoopGenerateLogic = async (_loop: ControlLoopRecord): Promise<void> => {
     await handleToolbarAction("generate_logic");
+  };
+
+  const handleControlLoopNavigateToST = (loop: ControlLoopRecord): void => {
+    const candidateTags = [loop.sensor_tag, loop.actuator_tag, loop.controller_tag || "", loop.setpoint_tag || "", loop.output_tag || ""]
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+
+    const targetFile = generatedSTFiles.find((file) => {
+      const contentToken = toComparableToken(file.content || "");
+      return candidateTags.some((tag) => contentToken.includes(toComparableToken(tag)));
+    });
+
+    setActiveBottomView("logic");
+    setCodePanelMode("generated_st");
+    setSelectedSTFilePath(targetFile?.path ?? generatedSTFiles[0]?.path ?? null);
+    setStatusText(`Loop ${loop.loop_tag} linked to ST ${targetFile?.path ?? "bundle"}.`);
+  };
+
+  const handleControlLoopNavigateToIO = (loop: ControlLoopRecord): void => {
+    setSelectedControlLoopTag(loop.loop_tag);
+    setSelectedNode(loop.sensor_tag);
+    setSelectedIOMappingTag(loop.actuator_tag || loop.sensor_tag);
+    setActiveTab("IO Mapping");
+    setActiveBottomView("monitoring");
+    setMonitoringPanelMode("io_mapping");
+    setIsRightPanelExpanded(true);
   };
 
   const handleControlLoopTrace = (loop: ControlLoopRecord): void => {
@@ -2740,8 +3166,49 @@ export default function Dashboard() {
 
       {showExportDialog ? (
         <div className="modal-backdrop" onClick={() => setShowExportDialog(false)}>
-          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
-            <h3>Export Logic</h3>
+          <div className="modal-card export-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="export-modal-header">
+              <h3>Export Logic</h3>
+            </div>
+            <div className="export-modal-body">
+            <label className="modal-label" htmlFor="export-source-mode">Export Source</label>
+            <select
+              id="export-source-mode"
+              className="modal-input"
+              value={exportSourceMode}
+              onChange={(event) => {
+                const mode = event.target.value as ExportSourceMode;
+                setExportSourceMode(mode);
+                if (mode === "live") {
+                  setExportSourceVersionTag(null);
+                } else {
+                  setExportSourceVersionTag((current) => current ?? selectedVersion?.version_tag ?? versions[0]?.version_tag ?? null);
+                }
+              }}
+            >
+              <option value="live">Live Current State</option>
+              <option value="version">Saved Snapshot / Version</option>
+            </select>
+
+            {exportSourceMode === "version" ? (
+              <>
+                <label className="modal-label" htmlFor="export-source-version">Version</label>
+                <select
+                  id="export-source-version"
+                  className="modal-input"
+                  value={exportSourceVersionTag ?? ""}
+                  onChange={(event) => setExportSourceVersionTag(event.target.value || null)}
+                >
+                  {versions.length === 0 ? <option value="">No saved versions</option> : null}
+                  {versions.map((version) => (
+                    <option key={version.id} value={version.version_tag}>
+                      {version.version_tag} • {new Date(version.created_at).toLocaleString()}
+                    </option>
+                  ))}
+                </select>
+              </>
+            ) : null}
+
             <label className="modal-label" htmlFor="export-vendor">Target Vendor</label>
             <select
               id="export-vendor"
@@ -2754,14 +3221,92 @@ export default function Dashboard() {
               <option value="codesys">Codesys</option>
               <option value="beckhoff">TwinCAT</option>
               <option value="openplc">OpenPLC</option>
+              <option value="generic_st">Generic Structured Text</option>
             </select>
+
+            <div className="modal-actions" style={{ marginTop: "0.4rem" }}>
+              <button
+                className={`command-btn ${exportReadinessLoading ? "is-loading" : ""}`}
+                type="button"
+                onClick={() => void refreshExportReadiness()}
+                disabled={exportReadinessLoading}
+              >
+                {exportReadinessLoading ? (
+                  <>
+                    <span className="btn-loader" aria-hidden="true" />
+                    Validating...
+                  </>
+                ) : (
+                  "Refresh Readiness"
+                )}
+              </button>
+            </div>
+
+            <div className="monitor-frame" style={{ marginTop: "0.6rem" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem" }}>
+                <strong>Export Readiness</strong>
+                <span>
+                  {!exportReadiness
+                    ? "Pending"
+                    : exportReadiness.export_allowed
+                      ? (exportReadiness.warnings.length > 0 ? "Allowed with warnings" : "Ready for export")
+                      : "Blocked"}
+                </span>
+              </div>
+              {exportReadinessError ? <div style={{ color: "#ef4444" }}>{exportReadinessError}</div> : null}
+              {exportReadiness ? (
+                <>
+                  <div className="modal-label">Core readiness</div>
+                  <div>Plant model: {exportReadiness.checks.find((item) => item.key === "plant_model")?.ready ? "ready" : "not ready"}</div>
+                  <div>ST logic: {exportReadiness.checks.find((item) => item.key === "st_logic")?.ready ? "ready" : "not ready"}</div>
+                  <div>Export target: {exportReadiness.checks.find((item) => item.key === "target_vendor")?.ready ? "ready" : "not ready"}</div>
+                  <div className="export-note">Derived alarm/limit/internal control tags do not require direct hardware IO mapping if their parent field signal is already mapped.</div>
+                  {exportReadinessSections.autoResolvedDerived.length > 0 ? (
+                    <div style={{ color: "#8a6b21", fontSize: "0.74rem", marginTop: "0.2rem" }}>
+                      <strong>Auto-resolved derived tags</strong>
+                      {exportReadinessSections.autoResolvedDerived.map((message, index) => (
+                        <div key={`derived-${message}-${index}`} className="value-mono">• {message}</div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {exportReadinessSections.internalNonBlocking.length > 0 ? (
+                    <div style={{ color: "#8a6b21", fontSize: "0.74rem", marginTop: "0.2rem" }}>
+                      <strong>Export warnings</strong>
+                      {exportReadinessSections.internalNonBlocking.map((message, index) => (
+                        <div key={`internal-${message}-${index}`} className="value-mono">• {message}</div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {exportReadinessSections.unknownUnclassified.length > 0 ? (
+                    <div style={{ color: "#9c5b2b", fontSize: "0.74rem", marginTop: "0.2rem" }}>
+                      <strong>Unknown/unclassified tags</strong>
+                      {exportReadinessSections.unknownUnclassified.map((message, index) => (
+                        <div key={`unknown-${message}-${index}`} className="value-mono">• {message}</div>
+                      ))}
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
 
             {exportResult ? (
               <div className="monitor-frame" style={{ marginTop: "0.6rem" }}>
                 <div>Export ID: <span className="value-mono">{exportResult.export_id}</span></div>
                 <div>Vendor: {exportResult.vendor}</div>
+                <div>Source: {exportResult.source_mode === "version" ? `version ${exportResult.source_version_id || "(unknown)"}` : "live current state"}</div>
                 <div>Artifact: {exportResult.artifact_name || "Generated package"}</div>
                 <div>Generated: {new Date(exportResult.generated_at).toLocaleString()}</div>
+                <div>Blocks: {exportResult.logic_block_count ?? 0} • Tags: {exportResult.tag_count ?? 0}</div>
+                {exportResult.package_preview && exportResult.package_preview.length > 0 ? (
+                  <div style={{ marginTop: "0.4rem" }}>
+                    <strong>Package Preview</strong>
+                    <div style={{ maxHeight: "6rem", overflow: "auto" }}>
+                      {exportResult.package_preview.slice(0, 20).map((file) => (
+                        <div key={file} className="value-mono">{file}</div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 <button
                   className="command-btn primary"
                   type="button"
@@ -2774,14 +3319,105 @@ export default function Dashboard() {
               </div>
             ) : null}
 
-            <div className="modal-actions">
+            <div className="monitor-frame" style={{ marginTop: "0.6rem" }}>
+              <strong>Deployment Readiness</strong>
+              <div>Status: Ready for testing workflow</div>
+              <div>{exportDeploymentMessage}</div>
+              <label className="modal-label" htmlFor="export-deploy-runtime" style={{ marginTop: "0.45rem", marginBottom: "0.45rem", display: "block" }}>Target Runtime</label>
+              <select
+                id="export-deploy-runtime"
+                className="modal-input"
+                value={deploymentTargetRuntime}
+                onChange={(event) => setDeploymentTargetRuntime(event.target.value)}
+              >
+                <option value="openplc">OpenPLC</option>
+                <option value="beremiz">Beremiz</option>
+                <option value="codesys">Codesys</option>
+                <option value="siemens">Siemens</option>
+                <option value="other">Other</option>
+              </select>
+              {exportDeploymentLogs.length > 0 ? (
+                <div style={{ maxHeight: "5.5rem", overflow: "auto", marginTop: "0.35rem" }}>
+                  {exportDeploymentLogs.slice(-10).map((item, index) => (
+                    <div key={`${item}-${index}`} className="value-mono">{item}</div>
+                  ))}
+                </div>
+              ) : null}
+              <div className="modal-actions" style={{ marginTop: "0.4rem" }}>
+                <div style={{ flex: 1 }}>
+                  <button
+                    className={`command-btn ${exportDeploymentBusy && exportDeploymentAction === "prepare" ? "is-loading" : ""}`}
+                    type="button"
+                    disabled={!canPrepareHandoff}
+                    onClick={() => {
+                      void handleExportDeploymentHandoff(false);
+                    }}
+                  >
+                    {exportDeploymentBusy && exportDeploymentAction === "prepare" ? (
+                      <>
+                        <span className="btn-loader" aria-hidden="true" />
+                        Preparing...
+                      </>
+                    ) : (
+                      "Prepare Handoff"
+                    )}
+                  </button>
+                  {prepareHandoffDisabledReason && !(exportDeploymentBusy && exportDeploymentAction === "prepare") ? (
+                    <div style={{ color: "#7a2a2a", fontSize: "0.72rem", marginTop: "0.2rem" }}>{prepareHandoffDisabledReason}</div>
+                  ) : null}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <button
+                    className={`command-btn primary ${exportDeploymentBusy && exportDeploymentAction === "deploy" ? "is-loading" : ""}`}
+                    type="button"
+                    disabled={!canTriggerRuntimeDeploy}
+                    onClick={() => {
+                      void handleExportDeploymentHandoff(true);
+                    }}
+                  >
+                    {exportDeploymentBusy && exportDeploymentAction === "deploy" ? (
+                      <>
+                        <span className="btn-loader" aria-hidden="true" />
+                        Deploying...
+                      </>
+                    ) : (
+                      "Trigger Runtime Deploy"
+                    )}
+                  </button>
+                  {triggerRuntimeDeployDisabledReason && !(exportDeploymentBusy && exportDeploymentAction === "deploy") ? (
+                    <div style={{ color: "#7a2a2a", fontSize: "0.72rem", marginTop: "0.2rem" }}>{triggerRuntimeDeployDisabledReason}</div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+
+            </div>
+
+            <div className="modal-actions export-modal-footer">
               <button className="command-btn" onClick={() => setShowExportDialog(false)} type="button">
                 Close
               </button>
-              <button className="command-btn primary" onClick={() => { void handleGeneratePLCExport(); }} type="button" disabled={isExportingLogic}>
-                {isExportingLogic ? "Generating..." : "Generate Export"}
+              <button
+                className={`command-btn primary ${isExportingLogic ? "is-loading" : ""}`}
+                onClick={() => {
+                  void handleGeneratePLCExport();
+                }}
+                type="button"
+                disabled={!canGenerateExport}
+              >
+                {isExportingLogic ? (
+                  <>
+                    <span className="btn-loader" aria-hidden="true" />
+                    Generating...
+                  </>
+                ) : (
+                  "Generate Export"
+                )}
               </button>
             </div>
+            {generateExportDisabledReason && !isExportingLogic ? (
+              <div style={{ color: "#7a2a2a", fontSize: "0.72rem", margin: "0 1rem 0.65rem" }}>{generateExportDisabledReason}</div>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -3056,6 +3692,13 @@ export default function Dashboard() {
                     error={engineeringTableError}
                     onRowSelect={handleEngineeringRowSelect}
                     onOpenWhyTrace={handleEngineeringOpenWhyTrace}
+                    externalSelectedTag={selectedControlLoop?.sensor_tag ?? selectedNode}
+                    highlightedTags={selectedControlLoop ? [selectedControlLoop.sensor_tag, selectedControlLoop.actuator_tag] : []}
+                    onRowsResolved={(payload) => {
+                      setLiveEngineeringRows(payload.rows);
+                      setLiveEngineeringRowsFilteredCount(payload.filteredRows);
+                    }}
+                    onLoadingStateChange={setLiveEngineeringRowsLoading}
                   />
                 </section>
               </div>
@@ -3086,6 +3729,7 @@ export default function Dashboard() {
                     replayTrace={simulationTrace}
                     replayIssues={simulationIssues}
                     controlLoops={controlLoops}
+                    engineeringRowsForLoops={resolvedEngineeringRowsForWorkspace}
                     controlLoopsLoading={isControlLoopsLoading}
                     controlLoopsError={controlLoopsError}
                     selectedControlLoopTag={selectedControlLoopTag}
@@ -3094,6 +3738,7 @@ export default function Dashboard() {
                     tracePath={tracePath}
                     whyTraceTag={selectedWhyTraceTag}
                     ioMappingRows={selectedNodeIOMappingRows}
+                    controlLoopIOMappingRows={ioMappingRows}
                     ioMappingIssues={ioMappingIssues}
                     selectedIOMappingTag={selectedIOMappingTag}
                     runtimeTelemetryTags={runtimeTelemetryTags}
@@ -3128,6 +3773,8 @@ export default function Dashboard() {
                     onSimulateControlLoop={(loop) => {
                       void handleControlLoopSimulate(loop);
                     }}
+                    onNavigateControlLoopToST={handleControlLoopNavigateToST}
+                    onNavigateControlLoopToIO={handleControlLoopNavigateToIO}
                     onOpenVersionsWorkspace={() => {
                       setMonitoringPanelMode("versions");
                       setActiveBottomView("monitoring");
@@ -3148,7 +3795,10 @@ export default function Dashboard() {
                       void handlePIDCreateSnapshot();
                     }}
                     projectId={selectedProjectId}
-                    engineeringRows={unsTableRowsOverride ?? engineeringTableData?.rows ?? []}
+                    engineeringRows={resolvedEngineeringRowsForWorkspace}
+                    engineeringRowsSource={resolvedEngineeringRowsSource}
+                    engineeringFilteredRowsCount={resolvedEngineeringFilteredCount}
+                    engineeringRowsLoading={liveEngineeringRowsLoading}
                     productionAuthToken={productionAuthToken}
                     onProductionAuthTokenChange={setProductionAuthToken}
                     onWorkspaceRowsUpdate={setUnsTableRowsOverride}
@@ -3161,6 +3811,12 @@ export default function Dashboard() {
                         setSelectedNode(path[0]);
                       }
                       setSelectedWhyTraceTag(null);
+                      setActiveTab("Trace");
+                      setIsRightPanelExpanded(true);
+                    }}
+                    onTraceStepSelect={(tag) => {
+                      setSelectedNode(tag);
+                      void handleTrace(tag);
                       setActiveTab("Trace");
                       setIsRightPanelExpanded(true);
                     }}

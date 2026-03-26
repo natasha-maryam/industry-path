@@ -39,6 +39,7 @@ export default function TagDatabasePanel({ projectId }: TagDatabasePanelProps) {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState<"csv" | "json" | null>(null);
+  const [feedback, setFeedback] = useState<string>("");
 
   const loadRows = useCallback(async () => {
     setLoading(true);
@@ -50,7 +51,9 @@ export default function TagDatabasePanel({ projectId }: TagDatabasePanelProps) {
         search: searchInput,
       });
       setPayload(result);
-      setRows(result.rows ?? []);
+      const safeRows = Array.isArray(result.rows) ? result.rows : [];
+      setRows(safeRows);
+      setFeedback(`Loaded ${safeRows.length} row(s).`);
     } catch {
       setError("Tag intelligence endpoint unavailable.");
       setRows([]);
@@ -73,9 +76,17 @@ export default function TagDatabasePanel({ projectId }: TagDatabasePanelProps) {
 
   const exportCsv = useCallback(async () => {
     setExporting("csv");
+    setError(null);
+    setFeedback("");
     try {
       const blob = await exportTagIntelligenceCsv({ projectId, category, search: searchInput });
+      if (blob.size === 0) {
+        throw new Error("CSV export returned empty content.");
+      }
       downloadBlob(blob, `tag-intelligence-${category}.csv`);
+      setFeedback("CSV export completed.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "CSV export failed.");
     } finally {
       setExporting(null);
     }
@@ -83,9 +94,17 @@ export default function TagDatabasePanel({ projectId }: TagDatabasePanelProps) {
 
   const exportJson = useCallback(async () => {
     setExporting("json");
+    setError(null);
+    setFeedback("");
     try {
       const blob = await exportTagIntelligenceJson({ projectId, category, search: searchInput });
+      if (blob.size === 0) {
+        throw new Error("JSON export returned empty content.");
+      }
       downloadBlob(blob, `tag-intelligence-${category}.json`);
+      setFeedback("JSON export completed.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "JSON export failed.");
     } finally {
       setExporting(null);
     }
@@ -128,6 +147,7 @@ export default function TagDatabasePanel({ projectId }: TagDatabasePanelProps) {
       </div>
 
       <p className="mb-2 text-[11px] text-slate-600">{summaryText}</p>
+      {feedback ? <p className="mb-2 text-[11px] text-emerald-700">{feedback}</p> : null}
 
       <div className="max-h-64 overflow-auto rounded border border-slate-200 bg-slate-50">
         <table className="w-full border-collapse text-left text-[11px] text-slate-700">

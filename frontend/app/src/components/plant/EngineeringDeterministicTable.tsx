@@ -27,6 +27,15 @@ type EngineeringDeterministicTableProps = {
   error: string | null;
   onRowSelect?: (row: EngineeringTableResponseRow) => void;
   onOpenWhyTrace?: (row: EngineeringTableResponseRow) => void;
+  onRowsResolved?: (payload: {
+    source: "deterministic_behavior";
+    totalRows: number;
+    filteredRows: number;
+    rows: EngineeringTableResponseRow[];
+  }) => void;
+  onLoadingStateChange?: (loading: boolean) => void;
+  externalSelectedTag?: string | null;
+  highlightedTags?: string[];
 };
 
 type RowsState = {
@@ -59,6 +68,8 @@ const toText = (value: unknown): string => {
   const normalized = String(value).trim();
   return normalized.length > 0 ? normalized : "—";
 };
+
+const toComparableToken = (value: string): string => value.toUpperCase().replace(/[^A-Z0-9]/g, "");
 
 const normalizeBehaviorRow = (row: Partial<DeterministicBehaviorRow> & { tag: string }): DeterministicBehaviorRow => {
   return {
@@ -188,6 +199,10 @@ export default function EngineeringDeterministicTable({
   error,
   onRowSelect,
   onOpenWhyTrace,
+  onRowsResolved,
+  onLoadingStateChange,
+  externalSelectedTag = null,
+  highlightedTags = [],
 }: EngineeringDeterministicTableProps) {
   const [searchInput, setSearchInput] = useState<string>("");
   const [sorting, setSorting] = useState<SortingState>([{ id: "tag", desc: false }]);
@@ -195,14 +210,17 @@ export default function EngineeringDeterministicTable({
   const [selectedTag, setSelectedTag] = useState<string>("");
   const [isBehaviorLoading, setIsBehaviorLoading] = useState<boolean>(false);
   const [behaviorError, setBehaviorError] = useState<string | null>(null);
-  const [wsStatus, setWsStatus] = useState<"connecting" | "connected" | "disconnected" | "error">("connecting");
+  const [wsStatus, setWsStatus] = useState<"connecting" | "connected" | "reconnecting" | "disconnected">("connecting");
   const [exporting, setExporting] = useState<"csv" | "json" | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const scrollTopRef = useRef<number>(0);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef<number>(0);
+  const lastPartialSignatureRef = useRef<string>("");
+  const lastFullSnapshotRef = useRef<string>("");
   const search = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS);
 
   const applyChipSearch = useCallback((value: string): void => {
@@ -244,6 +262,7 @@ export default function EngineeringDeterministicTable({
       }
       clearReconnectTimer();
       reconnectAttemptRef.current += 1;
+      setWsStatus("reconnecting");
       const delay = Math.min(15000, 800 * 2 ** Math.min(reconnectAttemptRef.current, 5));
       reconnectTimerRef.current = window.setTimeout(() => {
         if (!disposed) {
@@ -261,26 +280,46 @@ export default function EngineeringDeterministicTable({
       wsRef.current = socket;
 
       socket.onopen = () => {
+        if (wsRef.current !== socket) {
+          return;
+        }
         reconnectAttemptRef.current = 0;
         setWsStatus("connected");
         setBehaviorError(null);
       };
 
       socket.onmessage = (event) => {
+        if (wsRef.current !== socket) {
+          return;
+        }
         try {
           const payload = JSON.parse(event.data) as {
             event?: string;
             rows?: DeterministicBehaviorRow[];
             updated_rows?: DeterministicBehaviorRow[];
+            snapshot_id?: string;
+            changed_tags?: string[];
           };
 
           if (payload.event === "behavior_snapshot_full" && Array.isArray(payload.rows)) {
+            const snapshotId = String(payload.snapshot_id ?? "");
+            if (snapshotId && lastFullSnapshotRef.current === snapshotId) {
+              return;
+            }
+            if (snapshotId) {
+              lastFullSnapshotRef.current = snapshotId;
+            }
             const normalized = payload.rows.map((row) => normalizeBehaviorRow(row));
             setRowsState(setRowsFromList(normalized));
             return;
           }
 
           if (payload.event === "behavior_snapshot_partial" && Array.isArray(payload.updated_rows)) {
+            const signature = `${payload.snapshot_id ?? ""}|${(payload.changed_tags ?? []).join(",")}|${payload.updated_rows.length}`;
+            if (signature === lastPartialSignatureRef.current) {
+              return;
+            }
+            lastPartialSignatureRef.current = signature;
             const normalized = payload.updated_rows.map((row) => normalizeBehaviorRow(row));
             setRowsState((previous) => mergePartialRows(previous, normalized));
           }
@@ -290,7 +329,10 @@ export default function EngineeringDeterministicTable({
       };
 
       socket.onerror = () => {
-        setWsStatus("error");
+        if (wsRef.current !== socket) {
+          return;
+        }
+        setWsStatus("disconnected");
         setBehaviorError((current) => current ?? `Behavior websocket connection failed (${socketUrl}).`);
       };
 
@@ -298,7 +340,10 @@ export default function EngineeringDeterministicTable({
         if (disposed) {
           return;
         }
-        setWsStatus("disconnected");
+        if (wsRef.current !== socket) {
+          return;
+        }
+        setWsStatus("reconnecting");
         scheduleReconnect();
       };
     };
@@ -313,6 +358,7 @@ export default function EngineeringDeterministicTable({
       if (socket) {
         socket.close();
       }
+      setWsStatus("disconnected");
     };
   }, [projectId]);
 
@@ -346,6 +392,29 @@ export default function EngineeringDeterministicTable({
     return rowsState.order.map((tag) => rowsState.byTag[tag]).filter((row): row is DeterministicBehaviorRow => Boolean(row));
   }, [rowsState]);
 
+  const tagByComparableToken = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of orderedRows) {
+      map.set(toComparableToken(row.tag), row.tag);
+    }
+    return map;
+  }, [orderedRows]);
+
+  const highlightedTagSet = useMemo(() => {
+    return new Set(highlightedTags.map((item) => toComparableToken(item || "")).filter((item) => item.length > 0));
+  }, [highlightedTags]);
+
+  useEffect(() => {
+    if (!externalSelectedTag) {
+      return;
+    }
+    const resolved = tagByComparableToken.get(toComparableToken(externalSelectedTag));
+    if (!resolved) {
+      return;
+    }
+    setSelectedTag((current) => (current === resolved ? current : resolved));
+  }, [externalSelectedTag, tagByComparableToken]);
+
   const rowSearchIndex = useMemo(() => {
     const index = new Map<string, string>();
     for (const row of orderedRows) {
@@ -372,13 +441,19 @@ export default function EngineeringDeterministicTable({
 
   const handleExportCsv = useCallback(async () => {
     setExporting("csv");
+    setExportError(null);
     try {
       const blob = await exportTagIntelligenceCsv({
         projectId,
         category: "all",
         search: searchInput,
       });
+      if (blob.size === 0) {
+        throw new Error("CSV export returned empty content.");
+      }
       downloadBlob(blob, "tag-intelligence-all.csv");
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : "CSV export failed.");
     } finally {
       setExporting(null);
     }
@@ -386,13 +461,19 @@ export default function EngineeringDeterministicTable({
 
   const handleExportJson = useCallback(async () => {
     setExporting("json");
+    setExportError(null);
     try {
       const blob = await exportTagIntelligenceJson({
         projectId,
         category: "all",
         search: searchInput,
       });
+      if (blob.size === 0) {
+        throw new Error("JSON export returned empty content.");
+      }
       downloadBlob(blob, "tag-intelligence-all.json");
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : "JSON export failed.");
     } finally {
       setExporting(null);
     }
@@ -512,6 +593,19 @@ export default function EngineeringDeterministicTable({
   const activeError = error ?? behaviorError;
   const isLoading = loading || isBehaviorLoading;
 
+  useEffect(() => {
+    onLoadingStateChange?.(isLoading);
+  }, [isLoading, onLoadingStateChange]);
+
+  useEffect(() => {
+    onRowsResolved?.({
+      source: "deterministic_behavior",
+      totalRows: orderedRows.length,
+      filteredRows: filteredRows.length,
+      rows: orderedRows,
+    });
+  }, [filteredRows.length, onRowsResolved, orderedRows]);
+
   if (isLoading && orderedRows.length === 0) {
     return <div className="flex h-full items-center justify-center bg-white text-sm text-slate-600">Loading deterministic behavior rows…</div>;
   }
@@ -543,7 +637,17 @@ export default function EngineeringDeterministicTable({
             {filteredRows.length} / {orderedRows.length} rows
           </div>
           <div className="flex items-center gap-2 text-xs text-slate-600">
-            <span>WS: {wsStatus}</span>
+            <span
+              className={`rounded border px-1.5 py-0.5 ${
+                wsStatus === "connected"
+                  ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                  : wsStatus === "reconnecting"
+                    ? "border-amber-300 bg-amber-50 text-amber-700"
+                    : "border-slate-300 bg-slate-100 text-slate-600"
+              }`}
+            >
+              {wsStatus === "connected" ? "Live Connected" : wsStatus === "reconnecting" ? "Reconnecting" : "Disconnected"}
+            </span>
             <button type="button" className="command-btn" onClick={() => void handleExportCsv()} disabled={exporting !== null}>
               {exporting === "csv" ? "Exporting CSV..." : "Export CSV"}
             </button>
@@ -554,6 +658,7 @@ export default function EngineeringDeterministicTable({
           {(isLoading || activeError) && orderedRows.length > 0 ? (
             <div className="text-xs text-slate-600">{isLoading ? "Refreshing…" : activeError}</div>
           ) : null}
+          {exportError ? <div className="text-xs text-red-700">{exportError}</div> : null}
         </div>
 
         <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto">
@@ -589,10 +694,11 @@ export default function EngineeringDeterministicTable({
                   return null;
                 }
                 const selected = selectedTag === row.original.tag;
+                const loopHighlighted = highlightedTagSet.has(toComparableToken(row.original.tag));
                 return (
                   <tr
                     key={row.original.tag}
-                    className={`absolute left-0 top-0 cursor-pointer border-b border-slate-200 hover:bg-slate-50 ${selected ? "bg-red-50" : ""}`}
+                    className={`absolute left-0 top-0 cursor-pointer border-b border-slate-200 hover:bg-slate-50 ${selected ? "bg-red-50" : loopHighlighted ? "bg-amber-50" : ""}`}
                     style={{ transform: `translateY(${virtualRow.start}px)`, width: "100%", display: "table", tableLayout: "fixed" }}
                     onClick={() => {
                       setSelectedTag(row.original.tag);

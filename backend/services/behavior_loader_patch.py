@@ -117,7 +117,33 @@ class BehaviorLoaderPatch:
                 "reason": "inactive_project",
             }
 
-        response = deterministic_behavior_service.update_runtime_values(dict(updates), radius=radius)
+        normalized_updates: dict[str, dict[str, Any]] = {}
+        remapped: dict[str, str] = {}
+        unknown_requested: list[str] = []
+        for incoming_tag, patch in updates.items():
+            text_tag = str(incoming_tag or "").strip()
+            if not text_tag:
+                continue
+            resolved = deterministic_behavior_service.resolve_row_tag(text_tag)
+            if resolved is None:
+                unknown_requested.append(text_tag)
+                normalized_updates[text_tag] = dict(patch)
+                continue
+            normalized_updates[resolved] = dict(patch)
+            if resolved != text_tag:
+                remapped[text_tag] = resolved
+
+        response = deterministic_behavior_service.update_runtime_values(normalized_updates, radius=radius)
+        logger.info(
+            "behavior_runtime_bridge project_id=%s requested=%s remapped=%s unknown_requested=%s changed=%s ignored=%s impacted=%s",
+            project_id,
+            sorted(str(tag) for tag in updates.keys()),
+            remapped,
+            sorted(unknown_requested),
+            response.get("changed_tags", []),
+            response.get("ignored_tags", []),
+            response.get("impacted_tags", []),
+        )
         return {
             "project_id": project_id,
             "skipped": False,
@@ -125,6 +151,10 @@ class BehaviorLoaderPatch:
             "changed_tags": response.get("changed_tags", []),
             "impacted_tags": response.get("impacted_tags", []),
             "updated_rows": len(response.get("updated_rows", [])),
+            "ignored_tags": response.get("ignored_tags", []),
+            "unknown_tags": response.get("unknown_tags", []),
+            "tag_remap": response.get("tag_remap", remapped),
+            "debug": response.get("debug", {}),
         }
 
     def push_runtime_values(self, project_id: str, values: Mapping[str, Any], *, radius: int | None = None) -> dict[str, Any]:

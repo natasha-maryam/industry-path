@@ -16,13 +16,61 @@ export type Project = {
   updated_at: string;
 };
 
-export type PLCExportVendor = "siemens" | "rockwell" | "codesys" | "beckhoff" | "openplc";
+export type PLCExportVendor = "siemens" | "rockwell" | "codesys" | "beckhoff" | "openplc" | "generic_st";
+
+export type ExportSourceMode = "live" | "version";
+
+export type ExportReadinessLevel = "success" | "warning" | "error";
+
+export type ExportReadinessItem = {
+  key: string;
+  label: string;
+  ready: boolean;
+  level: ExportReadinessLevel;
+  message: string;
+};
+
+export type ExportReadinessSummary = {
+  project_id: string;
+  vendor: PLCExportVendor;
+  source_mode: ExportSourceMode;
+  source_version_id?: string | null;
+  checks: ExportReadinessItem[];
+  warnings: string[];
+  errors: string[];
+  export_allowed: boolean;
+  export_blocked: boolean;
+  deploy_allowed: boolean;
+  deploy_blocked: boolean;
+  unresolved_physical_io_tags: string[];
+  unresolved_internal_tags: string[];
+  auto_resolved_derived_tags: string[];
+  unknown_unclassified_tags: string[];
+  export_blockers: string[];
+  deploy_blockers: string[];
+  generated_at: string;
+};
+
+export type ExportDeploymentState = "not_ready" | "ready_to_deploy" | "deployment_in_progress" | "deployed" | "failed";
+
+export type ExportDeploymentHandoffResponse = {
+  project_id: string;
+  export_id: string;
+  target_runtime: string;
+  state: ExportDeploymentState;
+  message: string;
+  logs: string[];
+  errors: string[];
+  package_path?: string | null;
+};
 
 export type PLCExportResponse = {
   export_id: string;
   project_id: string;
   project_name: string;
   vendor: PLCExportVendor;
+  source_mode?: ExportSourceMode;
+  source_version_id?: string | null;
   generated_at: string;
   files: string[];
   download_url: string;
@@ -30,6 +78,8 @@ export type PLCExportResponse = {
   artifact_name?: string;
   logic_block_count?: number;
   tag_count?: number;
+  readiness?: ExportReadinessSummary | null;
+  package_preview?: string[];
 };
 
 export type PIDChangeEntry = {
@@ -1002,6 +1052,29 @@ const api = axios.create({
   baseURL: resolveApiBaseUrl(),
 });
 
+const getErrorMessage = (error: unknown, fallback: string): string => {
+  if (axios.isAxiosError(error)) {
+    const detail = error.response?.data?.detail;
+    if (typeof detail === "string" && detail.trim()) {
+      return detail;
+    }
+    if (error.message) {
+      return error.message;
+    }
+  }
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return fallback;
+};
+
+const unwrapData = <T>(responseData: unknown, fallback: T): T => {
+  if (responseData && typeof responseData === "object" && "data" in responseData) {
+    return (responseData as { data: T }).data;
+  }
+  return fallback;
+};
+
 const HARD_FAIL_RULES = new Set([
   "missing_end_if",
   "missing_end_program",
@@ -1328,8 +1401,49 @@ export async function deleteProject(projectId: string): Promise<void> {
   await api.delete(`/projects/${projectId}`);
 }
 
-export async function createPLCExport(projectId: string, vendor: PLCExportVendor): Promise<PLCExportResponse> {
-  const response = await api.post<PLCExportResponse>("/export", { project_id: projectId, vendor });
+export async function getPLCExportReadiness(payload: {
+  project_id: string;
+  vendor: PLCExportVendor;
+  source_mode?: ExportSourceMode;
+  source_version_id?: string | null;
+}): Promise<ExportReadinessSummary> {
+  const response = await api.post<ExportReadinessSummary>("/export/readiness", {
+    project_id: payload.project_id,
+    vendor: payload.vendor,
+    source_mode: payload.source_mode ?? "live",
+    source_version_id: payload.source_version_id ?? null,
+  });
+  return response.data;
+}
+
+export async function createPLCExport(
+  projectId: string,
+  vendor: PLCExportVendor,
+  options: { source_mode?: ExportSourceMode; source_version_id?: string | null } = {}
+): Promise<PLCExportResponse> {
+  const response = await api.post<PLCExportResponse>("/export", {
+    project_id: projectId,
+    vendor,
+    source_mode: options.source_mode ?? "live",
+    source_version_id: options.source_version_id ?? null,
+  });
+  return response.data;
+}
+
+export async function handoffPLCExportForDeployment(payload: {
+  project_id: string;
+  export_id: string;
+  target_runtime: string;
+  runtime_config?: Record<string, unknown>;
+  trigger_runtime_deploy?: boolean;
+}): Promise<ExportDeploymentHandoffResponse> {
+  const response = await api.post<ExportDeploymentHandoffResponse>("/export/deploy-handoff", {
+    project_id: payload.project_id,
+    export_id: payload.export_id,
+    target_runtime: payload.target_runtime,
+    runtime_config: payload.runtime_config ?? {},
+    trigger_runtime_deploy: Boolean(payload.trigger_runtime_deploy),
+  });
   return response.data;
 }
 
@@ -1820,10 +1934,11 @@ export function createRuntimeTelemetrySocket(): WebSocket {
 }
 
 export async function getDeterministicBehaviorRows(tags?: string[]): Promise<DeterministicBehaviorRowsResponse> {
+  const cleanTags = (tags ?? []).map((tag) => tag.trim()).filter((tag) => tag.length > 0);
   const response = await api.get<{ data: DeterministicBehaviorRowsResponse }>("/behavior/rows", {
-    params: tags && tags.length > 0 ? { tags: tags.join(",") } : undefined,
+    params: cleanTags.length > 0 ? { tags: cleanTags.join(",") } : undefined,
   });
-  return response.data.data;
+  return unwrapData(response.data, { snapshot_id: "snapshot-00000000", rows: [], count: 0 });
 }
 
 export async function loadDeterministicBehaviorCache(payload: {
@@ -1841,10 +1956,19 @@ export async function loadDeterministicBehaviorCache(payload: {
 }
 
 export async function getDeterministicWhyTrace(tag: string, maxDepth = 4): Promise<DeterministicWhyTraceResponse> {
-  const response = await api.get<{ data: DeterministicWhyTraceResponse }>(`/behavior/why/${encodeURIComponent(tag)}`, {
+  const normalizedTag = tag.trim();
+  if (!normalizedTag) {
+    throw new Error("tag is required");
+  }
+  const response = await api.get<{ data: DeterministicWhyTraceResponse }>(`/behavior/why/${encodeURIComponent(normalizedTag)}`, {
     params: { max_depth: maxDepth },
   });
-  return response.data.data;
+  return unwrapData(response.data, {
+    tag: normalizedTag,
+    available: false,
+    snapshot_id: "snapshot-00000000",
+    steps: [],
+  });
 }
 
 const toBehaviorSocketUrl = (wsBase: string): string => {
@@ -1887,13 +2011,21 @@ export async function loadUNSModel(rows: UNSRow[], edges: Array<Record<string, u
 }
 
 export async function queryUNS(query: string): Promise<UNSRow[]> {
-  const response = await api.post<{ data: { rows: UNSRow[] } }>("/uns/query", { query });
-  return response.data.data.rows;
+  const normalizedQuery = query.trim();
+  if (!normalizedQuery) {
+    throw new Error("Query is required.");
+  }
+  const response = await api.post<{ data: { rows: UNSRow[] } }>("/uns/query", { query: normalizedQuery });
+  return unwrapData(response.data, { rows: [] }).rows ?? [];
 }
 
 export async function runUNSScript(script: string): Promise<Record<string, unknown>> {
-  const response = await api.post<{ data: Record<string, unknown> }>("/uns/script", { script });
-  return response.data.data;
+  const normalizedScript = script.trim();
+  if (!normalizedScript) {
+    throw new Error("Script is required.");
+  }
+  const response = await api.post<{ data: Record<string, unknown> }>("/uns/script", { script: normalizedScript });
+  return unwrapData(response.data, {});
 }
 
 export async function mapUNSTag(tag: string, mapping: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -1905,16 +2037,19 @@ export async function setUNSConnector(
   connectorType: "opcua" | "mqtt" | "api",
   metadata: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
+  if (!["opcua", "mqtt", "api"].includes(connectorType)) {
+    throw new Error("connector_type must be one of: opcua, mqtt, api");
+  }
   const response = await api.post<{ data: Record<string, unknown> }>("/uns/connector", {
     connector_type: connectorType,
     metadata,
   });
-  return response.data.data;
+  return unwrapData(response.data, {});
 }
 
 export async function getUNSRows(): Promise<UNSRow[]> {
   const response = await api.get<{ data: { rows: UNSRow[] } }>("/uns/rows");
-  return response.data.data.rows;
+  return unwrapData(response.data, { rows: [] }).rows ?? [];
 }
 
 export function createUNSSocket(): WebSocket {
@@ -1929,8 +2064,19 @@ export async function connectAdvancedOPCUA(payload: {
   auth_mode?: string;
   username?: string;
 }): Promise<Record<string, unknown>> {
-  const response = await api.post<{ data: Record<string, unknown> }>("/system-layer/connect/opcua", payload);
-  return response.data.data;
+  if (!payload.endpoint.trim()) {
+    throw new Error("OPC UA endpoint is required.");
+  }
+  try {
+    const response = await api.post<{ data: Record<string, unknown> }>("/system-layer/connect/opcua", payload);
+    return unwrapData(response.data, {});
+  } catch (error) {
+    const message = getErrorMessage(error, "OPC UA connector request failed.");
+    if (message.toLowerCase().includes("asyncua is not installed")) {
+      throw new Error("OPC UA connector is unavailable on the server (missing asyncua dependency). Contact backend admin to enable OPC UA support.");
+    }
+    throw new Error(message);
+  }
 }
 
 export async function connectAdvancedMQTT(payload: {
@@ -1939,8 +2085,11 @@ export async function connectAdvancedMQTT(payload: {
   client_id?: string;
   topic?: string;
 }): Promise<Record<string, unknown>> {
+  if (!payload.host.trim()) {
+    throw new Error("MQTT host is required.");
+  }
   const response = await api.post<{ data: Record<string, unknown> }>("/system-layer/connect/mqtt", payload);
-  return response.data.data;
+  return unwrapData(response.data, {});
 }
 
 export async function connectAdvancedAPI(payload: {
@@ -1948,23 +2097,38 @@ export async function connectAdvancedAPI(payload: {
   method?: string;
   headers?: Record<string, string>;
 }): Promise<Record<string, unknown>> {
+  if (!payload.endpoint.trim()) {
+    throw new Error("API endpoint is required.");
+  }
   const response = await api.post<{ data: Record<string, unknown> }>("/system-layer/connect/api", payload);
-  return response.data.data;
+  return unwrapData(response.data, {});
 }
 
 export async function runAdvancedAutoMap(payload: { external_tags: string[]; threshold?: number }): Promise<Record<string, unknown>> {
+  if (!payload.external_tags.length) {
+    throw new Error("At least one external tag is required.");
+  }
   const response = await api.post<{ data: Record<string, unknown> }>("/system-layer/auto-map", payload);
-  return response.data.data;
+  return unwrapData(response.data, {});
 }
 
 export async function getAdvancedTrace(tag: string, projectId?: string, maxDepth = 6): Promise<SystemTraceResponse> {
+  const normalizedTag = tag.trim();
+  if (!normalizedTag) {
+    throw new Error("Trace tag is required.");
+  }
   const response = await api.get<{ data: SystemTraceResponse }>(`/system-layer/trace/${encodeURIComponent(tag)}`, {
     params: {
       project_id: projectId,
       max_depth: maxDepth,
     },
   });
-  return response.data.data;
+  return unwrapData(response.data, {
+    tag: normalizedTag,
+    project_id: projectId ?? null,
+    path: [],
+    steps: [],
+  });
 }
 
 export async function getAdvancedLoops(projectId?: string, limit = 20): Promise<{ loops: string[][]; count: number; note?: string }> {
@@ -1974,7 +2138,7 @@ export async function getAdvancedLoops(projectId?: string, limit = 20): Promise<
       limit,
     },
   });
-  return response.data.data;
+  return unwrapData(response.data, { loops: [], count: 0 });
 }
 
 export async function getAdvancedBottlenecks(projectId?: string, limit = 10): Promise<{ bottlenecks: SystemBottleneck[]; count: number }> {
@@ -1984,7 +2148,7 @@ export async function getAdvancedBottlenecks(projectId?: string, limit = 10): Pr
       limit,
     },
   });
-  return response.data.data;
+  return unwrapData(response.data, { bottlenecks: [], count: 0 });
 }
 
 export async function createSavedView(payload: {
@@ -1993,15 +2157,31 @@ export async function createSavedView(payload: {
   query?: string;
   script?: string;
 }): Promise<SavedEngineeringView> {
+  if (!payload.project_id.trim()) {
+    throw new Error("project_id is required");
+  }
+  if (!payload.name.trim()) {
+    throw new Error("name is required");
+  }
   const response = await api.post<{ data: SavedEngineeringView }>("/views", payload);
-  return response.data.data;
+  return unwrapData(response.data, {
+    id: "",
+    project_id: payload.project_id,
+    name: payload.name,
+    query: payload.query ?? null,
+    script: payload.script ?? null,
+    created_at: new Date().toISOString(),
+  });
 }
 
 export async function listSavedViews(projectId: string): Promise<SavedEngineeringView[]> {
+  if (!projectId.trim()) {
+    return [];
+  }
   const response = await api.get<{ data: { views: SavedEngineeringView[] } }>("/views", {
     params: { project_id: projectId },
   });
-  return response.data.data.views;
+  return unwrapData(response.data, { views: [] }).views ?? [];
 }
 
 export async function createSavedViewVersion(payload: {
@@ -2009,24 +2189,46 @@ export async function createSavedViewVersion(payload: {
   snapshot: Record<string, unknown> | Array<Record<string, unknown>>;
   notes?: string;
 }): Promise<SavedEngineeringViewVersion> {
+  if (!payload.view_id.trim()) {
+    throw new Error("view_id is required");
+  }
   const response = await api.post<{ data: SavedEngineeringViewVersion }>(`/views/${encodeURIComponent(payload.view_id)}/versions`, {
     snapshot: payload.snapshot,
     notes: payload.notes,
   });
-  return response.data.data;
+  return unwrapData(response.data, {
+    id: "",
+    view_id: payload.view_id,
+    project_id: "",
+    notes: payload.notes ?? null,
+    created_at: new Date().toISOString(),
+  });
 }
 
 export async function listSavedViewVersions(viewId: string): Promise<SavedEngineeringViewVersion[]> {
+  if (!viewId.trim()) {
+    return [];
+  }
   const response = await api.get<{ data: { versions: SavedEngineeringViewVersion[] } }>(`/views/${encodeURIComponent(viewId)}/versions`);
-  return response.data.data.versions;
+  return unwrapData(response.data, { versions: [] }).versions ?? [];
 }
 
 export async function diffSavedViewVersions(beforeVersionId: string, afterVersionId: string): Promise<SavedEngineeringViewDiff> {
+  if (!beforeVersionId.trim() || !afterVersionId.trim()) {
+    throw new Error("Two version ids are required.");
+  }
   const response = await api.post<{ data: SavedEngineeringViewDiff }>("/views/diff", {
     before_version_id: beforeVersionId,
     after_version_id: afterVersionId,
   });
-  return response.data.data;
+  return unwrapData(response.data, {
+    before_version_id: beforeVersionId,
+    after_version_id: afterVersionId,
+    summary: { added: 0, removed: 0, changed: 0 },
+    added: [],
+    removed: [],
+    changed: [],
+  });
 }
 
 const buildBearerHeader = (token?: string): Record<string, string> | undefined => {
@@ -2068,7 +2270,18 @@ export async function getTagIntelligence(params: {
       search: params.search ?? "",
     },
   });
-  return response.data.data;
+  return unwrapData(response.data, {
+    project_id: params.projectId ?? null,
+    category: params.category ?? "all",
+    search: params.search ?? "",
+    rows: [],
+    summary: {
+      total: 0,
+      unused: 0,
+      orphans: 0,
+      conflicts: 0,
+    },
+  });
 }
 
 export async function exportTagIntelligenceCsv(params: {
@@ -2076,15 +2289,19 @@ export async function exportTagIntelligenceCsv(params: {
   category?: "all" | "unused" | "orphans" | "conflicts";
   search?: string;
 }): Promise<Blob> {
-  const response = await api.get<Blob>("/tag-intelligence/export/csv", {
-    params: {
-      project_id: params.projectId,
-      category: params.category ?? "all",
-      search: params.search ?? "",
-    },
-    responseType: "blob",
-  });
-  return response.data;
+  try {
+    const response = await api.get<Blob>("/tag-intelligence/export/csv", {
+      params: {
+        project_id: params.projectId,
+        category: params.category ?? "all",
+        search: params.search ?? "",
+      },
+      responseType: "blob",
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "CSV export failed."));
+  }
 }
 
 export async function exportTagIntelligenceJson(params: {
@@ -2092,15 +2309,19 @@ export async function exportTagIntelligenceJson(params: {
   category?: "all" | "unused" | "orphans" | "conflicts";
   search?: string;
 }): Promise<Blob> {
-  const response = await api.get<Blob>("/tag-intelligence/export/json", {
-    params: {
-      project_id: params.projectId,
-      category: params.category ?? "all",
-      search: params.search ?? "",
-    },
-    responseType: "blob",
-  });
-  return response.data;
+  try {
+    const response = await api.get<Blob>("/tag-intelligence/export/json", {
+      params: {
+        project_id: params.projectId,
+        category: params.category ?? "all",
+        search: params.search ?? "",
+      },
+      responseType: "blob",
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "JSON export failed."));
+  }
 }
 
 export async function getMonitoring(projectId: string): Promise<Record<string, unknown>> {

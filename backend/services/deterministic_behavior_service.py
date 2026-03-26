@@ -259,6 +259,28 @@ class DeterministicBehaviorService:
         self._snapshot_sequence = 0
         self._active_snapshot_id = self._next_snapshot_id_locked()
 
+    @staticmethod
+    def normalize_tag(tag: str) -> str:
+        raw = str(tag or "").strip().upper()
+        if not raw:
+            return ""
+        compact = "".join(ch for ch in raw if ch.isalnum())
+        return compact
+
+    @classmethod
+    def tags_match(cls, left: str, right: str) -> bool:
+        return bool(cls.normalize_tag(left)) and cls.normalize_tag(left) == cls.normalize_tag(right)
+
+    def resolve_row_tag(self, tag: str) -> str | None:
+        normalized = self.normalize_tag(tag)
+        if not normalized:
+            return None
+        with self._lock:
+            for row_tag in self._rows_by_tag.keys():
+                if self.normalize_tag(row_tag) == normalized:
+                    return row_tag
+        return None
+
     def register_listener(self, callback: BehaviorListener) -> str:
         with self._lock:
             self._listener_sequence += 1
@@ -280,11 +302,21 @@ class DeterministicBehaviorService:
 
     def has_row_tag(self, tag: str) -> bool:
         with self._lock:
-            return tag in self._rows_by_tag
+            if tag in self._rows_by_tag:
+                return True
+            normalized = self.normalize_tag(tag)
+            if not normalized:
+                return False
+            return any(self.normalize_tag(row_tag) == normalized for row_tag in self._rows_by_tag.keys())
 
     def has_runtime_tag(self, tag: str) -> bool:
         with self._lock:
-            return tag in self._runtime_by_tag
+            if tag in self._runtime_by_tag:
+                return True
+            normalized = self.normalize_tag(tag)
+            if not normalized:
+                return False
+            return any(self.normalize_tag(runtime_tag) == normalized for runtime_tag in self._runtime_by_tag.keys())
 
     def get_row_preview(self, tag: str) -> dict[str, Any] | None:
         with self._lock:
@@ -395,6 +427,8 @@ class DeterministicBehaviorService:
         with self._lock:
             changed_tags: set[str] = set()
             ignored_tags: list[str] = []
+            unknown_tags: list[str] = []
+            tag_remap: dict[str, str] = {}
 
             if not updates:
                 logger.info("behavior_runtime_update skipped empty_updates")
@@ -404,6 +438,14 @@ class DeterministicBehaviorService:
                     "impacted_tags": [],
                     "updated_rows": [],
                     "ignored_tags": [],
+                    "unknown_tags": [],
+                    "tag_remap": {},
+                    "debug": {
+                        "requested_tags": [],
+                        "normalized_requested_tags": [],
+                        "known_row_tags": len(self._rows_by_tag),
+                        "known_runtime_tags": len(self._runtime_by_tag),
+                    },
                 }
 
             next_snapshot_id = self._next_snapshot_id_locked()
@@ -414,20 +456,32 @@ class DeterministicBehaviorService:
                 text = str(value).strip()
                 return text or None
 
-            for tag, patch in updates.items():
-                if tag not in self._rows_by_tag:
-                    ignored_tags.append(tag)
+            for incoming_tag, patch in updates.items():
+                resolved_tag = incoming_tag if incoming_tag in self._rows_by_tag else None
+                if resolved_tag is None:
+                    incoming_normalized = self.normalize_tag(incoming_tag)
+                    if incoming_normalized:
+                        for known_tag in self._rows_by_tag.keys():
+                            if self.normalize_tag(known_tag) == incoming_normalized:
+                                resolved_tag = known_tag
+                                if known_tag != incoming_tag:
+                                    tag_remap[incoming_tag] = known_tag
+                                break
+
+                if resolved_tag is None:
+                    ignored_tags.append(incoming_tag)
+                    unknown_tags.append(incoming_tag)
                     continue
 
-                changed_tags.add(tag)
-                state = self._runtime_by_tag.get(tag)
+                changed_tags.add(resolved_tag)
+                state = self._runtime_by_tag.get(resolved_tag)
                 if state is None:
-                    state = RuntimeState(tag=tag, snapshot_id=next_snapshot_id)
-                    self._runtime_by_tag[tag] = state
+                    state = RuntimeState(tag=resolved_tag, snapshot_id=next_snapshot_id)
+                    self._runtime_by_tag[resolved_tag] = state
 
                 state.apply_patch(patch, snapshot_id=next_snapshot_id)
 
-                row = self._rows_by_tag.get(tag)
+                row = self._rows_by_tag.get(resolved_tag)
                 if row is not None:
                     if "current_value" in patch:
                         row.current_value = to_string_or_none(patch.get("current_value"))
@@ -451,6 +505,14 @@ class DeterministicBehaviorService:
                     "impacted_tags": [],
                     "updated_rows": [],
                     "ignored_tags": ignored_tags,
+                    "unknown_tags": sorted(unknown_tags),
+                    "tag_remap": dict(tag_remap),
+                    "debug": {
+                        "requested_tags": sorted(updates.keys()),
+                        "normalized_requested_tags": sorted({self.normalize_tag(tag) for tag in updates.keys() if self.normalize_tag(tag)}),
+                        "known_row_tags": len(self._rows_by_tag),
+                        "known_runtime_tags": len(self._runtime_by_tag),
+                    },
                 }
 
             self._active_snapshot_id = next_snapshot_id
@@ -464,14 +526,24 @@ class DeterministicBehaviorService:
                 "impacted_tags": sorted(impacted_tags),
                 "updated_rows": updated_rows,
                 "ignored_tags": sorted(ignored_tags),
+                "unknown_tags": sorted(unknown_tags),
+                "tag_remap": dict(tag_remap),
+                "debug": {
+                    "requested_tags": sorted(updates.keys()),
+                    "normalized_requested_tags": sorted({self.normalize_tag(tag) for tag in updates.keys() if self.normalize_tag(tag)}),
+                    "known_row_tags": len(self._rows_by_tag),
+                    "known_runtime_tags": len(self._runtime_by_tag),
+                },
             }
             listeners = list(self._listeners.values())
 
             logger.info(
-                "behavior_runtime_update updated changed_tags=%s impacted_tags=%s ignored_tags=%s updated_rows=%s",
+                "behavior_runtime_update updated changed_tags=%s impacted_tags=%s ignored_tags=%s unknown_tags=%s remapped=%s updated_rows=%s",
                 payload["changed_tags"],
                 payload["impacted_tags"],
                 payload["ignored_tags"],
+                payload["unknown_tags"],
+                payload["tag_remap"],
                 len(updated_rows),
             )
 
