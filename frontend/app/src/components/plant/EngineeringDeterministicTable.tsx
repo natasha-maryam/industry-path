@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   createColumnHelper,
   flexRender,
@@ -41,6 +41,7 @@ type EngineeringDeterministicTableProps = {
 type RowsState = {
   byTag: Record<string, DeterministicBehaviorRow>;
   order: string[];
+  searchIndexByTag: Record<string, string>;
 };
 
 const columnHelper = createColumnHelper<DeterministicBehaviorRow>();
@@ -147,6 +148,29 @@ const buildSearchIndex = (row: DeterministicBehaviorRow): string => {
     .toLowerCase();
 };
 
+const hasMeaningfulRowChange = (previousRow: DeterministicBehaviorRow | undefined, nextRow: DeterministicBehaviorRow): boolean => {
+  if (!previousRow) {
+    return true;
+  }
+
+  return (
+    previousRow.state_snapshot_id !== nextRow.state_snapshot_id ||
+    previousRow.behavior_card !== nextRow.behavior_card ||
+    previousRow.behavior_summary !== nextRow.behavior_summary ||
+    previousRow.impact_summary !== nextRow.impact_summary ||
+    previousRow.current_value !== nextRow.current_value ||
+    previousRow.state !== nextRow.state ||
+    previousRow.setpoint !== nextRow.setpoint ||
+    previousRow.mode !== nextRow.mode ||
+    previousRow.behavior_confidence !== nextRow.behavior_confidence ||
+    previousRow.controls.length !== nextRow.controls.length ||
+    previousRow.upstream.length !== nextRow.upstream.length ||
+    previousRow.downstream.length !== nextRow.downstream.length ||
+    previousRow.cause_chain.length !== nextRow.cause_chain.length ||
+    previousRow.effect_chain.length !== nextRow.effect_chain.length
+  );
+};
+
 const mergePartialRows = (previous: RowsState, incomingRows: DeterministicBehaviorRow[]): RowsState => {
   if (incomingRows.length === 0) {
     return previous;
@@ -154,31 +178,49 @@ const mergePartialRows = (previous: RowsState, incomingRows: DeterministicBehavi
 
   const nextByTag = { ...previous.byTag };
   const nextOrder = [...previous.order];
+  const nextSearchIndexByTag = { ...previous.searchIndexByTag };
   const knownTags = new Set(nextOrder);
+  let changed = false;
 
   for (const row of incomingRows) {
     const normalized = normalizeBehaviorRow(row);
-    nextByTag[normalized.tag] = normalized;
+    const previousRow = nextByTag[normalized.tag];
+    if (hasMeaningfulRowChange(previousRow, normalized)) {
+      nextByTag[normalized.tag] = normalized;
+      nextSearchIndexByTag[normalized.tag] = buildSearchIndex(normalized);
+      changed = true;
+    }
     if (!knownTags.has(normalized.tag)) {
       nextOrder.push(normalized.tag);
       knownTags.add(normalized.tag);
+      changed = true;
     }
   }
 
-  return { byTag: nextByTag, order: nextOrder };
+  if (!changed) {
+    return previous;
+  }
+
+  return { byTag: nextByTag, order: nextOrder, searchIndexByTag: nextSearchIndexByTag };
 };
 
 const setRowsFromList = (rows: DeterministicBehaviorRow[]): RowsState => {
   const byTag: Record<string, DeterministicBehaviorRow> = {};
   const order: string[] = [];
+  const searchIndexByTag: Record<string, string> = {};
+  const seen = new Set<string>();
 
   for (const row of rows) {
     const normalized = normalizeBehaviorRow(row);
     byTag[normalized.tag] = normalized;
-    order.push(normalized.tag);
+    searchIndexByTag[normalized.tag] = buildSearchIndex(normalized);
+    if (!seen.has(normalized.tag)) {
+      order.push(normalized.tag);
+      seen.add(normalized.tag);
+    }
   }
 
-  return { byTag, order };
+  return { byTag, order, searchIndexByTag };
 };
 
 const downloadBlob = (blob: Blob, filename: string): void => {
@@ -222,6 +264,7 @@ export default function EngineeringDeterministicTable({
   const lastPartialSignatureRef = useRef<string>("");
   const lastFullSnapshotRef = useRef<string>("");
   const search = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS);
+  const deferredSearch = useDeferredValue(search);
 
   const applyChipSearch = useCallback((value: string): void => {
     setSearchInput(value);
@@ -415,21 +458,15 @@ export default function EngineeringDeterministicTable({
     setSelectedTag((current) => (current === resolved ? current : resolved));
   }, [externalSelectedTag, tagByComparableToken]);
 
-  const rowSearchIndex = useMemo(() => {
-    const index = new Map<string, string>();
-    for (const row of orderedRows) {
-      index.set(row.tag, buildSearchIndex(row));
-    }
-    return index;
-  }, [orderedRows]);
-
   const filteredRows = useMemo(() => {
-    const normalizedSearch = search.trim().toLowerCase();
+    const normalizedSearch = deferredSearch.trim().toLowerCase();
     if (!normalizedSearch) {
       return orderedRows;
     }
-    return orderedRows.filter((row) => (rowSearchIndex.get(row.tag) ?? "").includes(normalizedSearch));
-  }, [orderedRows, rowSearchIndex, search]);
+    return orderedRows.filter((row) => (rowsState.searchIndexByTag[row.tag] ?? "").includes(normalizedSearch));
+  }, [deferredSearch, orderedRows, rowsState.searchIndexByTag]);
+
+  const deferredFilteredRows = useDeferredValue(filteredRows);
 
   const selectedRow = useMemo(() => (selectedTag ? rowsState.byTag[selectedTag] ?? null : null), [rowsState.byTag, selectedTag]);
 
@@ -573,7 +610,7 @@ export default function EngineeringDeterministicTable({
   );
 
   const table = useReactTable({
-    data: filteredRows,
+    data: deferredFilteredRows,
     columns,
     state: { sorting },
     onSortingChange: setSorting,
@@ -586,6 +623,7 @@ export default function EngineeringDeterministicTable({
   const rowVirtualizer = useVirtualizer({
     count: tableRows.length,
     getScrollElement: () => scrollRef.current,
+    getItemKey: (index) => tableRows[index]?.id ?? index,
     estimateSize: () => 34,
     overscan: 12,
   });
@@ -598,12 +636,22 @@ export default function EngineeringDeterministicTable({
   }, [isLoading, onLoadingStateChange]);
 
   useEffect(() => {
-    onRowsResolved?.({
-      source: "deterministic_behavior",
-      totalRows: orderedRows.length,
-      filteredRows: filteredRows.length,
-      rows: orderedRows,
-    });
+    if (!onRowsResolved) {
+      return;
+    }
+
+    const handle = window.setTimeout(() => {
+      onRowsResolved({
+        source: "deterministic_behavior",
+        totalRows: orderedRows.length,
+        filteredRows: filteredRows.length,
+        rows: orderedRows,
+      });
+    }, 90);
+
+    return () => {
+      window.clearTimeout(handle);
+    };
   }, [filteredRows.length, onRowsResolved, orderedRows]);
 
   if (isLoading && orderedRows.length === 0) {

@@ -512,7 +512,7 @@ export default function Dashboard() {
   const [exportDeploymentState, setExportDeploymentState] = useState<ExportDeploymentState>("not_ready");
   const [exportDeploymentMessage, setExportDeploymentMessage] = useState<string>("Export package not prepared.");
   const [exportDeploymentLogs, setExportDeploymentLogs] = useState<string[]>([]);
-  const [exportDeploymentErrors, setExportDeploymentErrors] = useState<string[]>([]);
+  const [, setExportDeploymentErrors] = useState<string[]>([]);
   const [exportDeploymentBusy, setExportDeploymentBusy] = useState<boolean>(false);
   const [exportDeploymentAction, setExportDeploymentAction] = useState<"prepare" | "deploy" | null>(null);
   const [directDeployBusy, setDirectDeployBusy] = useState<boolean>(false);

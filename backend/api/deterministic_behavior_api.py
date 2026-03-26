@@ -254,7 +254,15 @@ def behavior_rows(tags: str | None = Query(default=None)) -> dict[str, Any]:
 
 @router.get("/behavior/why/{tag}")
 def behavior_why(tag: str, max_depth: int = Query(default=3, ge=1, le=10)) -> dict[str, Any]:
+    logger.info("[WHY_CHAIN_DEBUG] api_selected_tag=%s max_depth=%s", tag, max_depth)
     explanation = deterministic_behavior_service.explain_why(tag=tag, max_depth=max_depth)
+    logger.info("[WHY_CHAIN_DEBUG] api_response_tag=%s", explanation.get("tag"))
+    if str(explanation.get("tag") or "") != str(tag or ""):
+        logger.error(
+            "[WHY_CHAIN_DEBUG] selected_tag_mismatch requested=%s response=%s",
+            tag,
+            explanation.get("tag"),
+        )
     return {
         "success": True,
         "message": "Deterministic behavior why-trace generated.",

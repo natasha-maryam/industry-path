@@ -9,6 +9,10 @@ from typing import Any, Callable, Iterable, Mapping
 
 from models.engineering_table import EngineeringTableRow
 from models.graph import GraphEdge
+from services.why_chain_resolver import WhyChainResolver
+from services.why_engine_hardened import WhyEngineHardened
+from services.why_graph_builder import WhyGraphBuilder
+from services.why_narrative_engine import WhyNarrativeEngine
 
 
 BehaviorListener = Callable[[str, dict[str, Any]], None]
@@ -73,6 +77,8 @@ class RelationshipEdge:
     edge_type: str
     edge_class: str | None = None
     confidence: float | None = None
+    source_type: str = "explicit"
+    inferred: bool = False
 
 
 @dataclass(slots=True)
@@ -244,6 +250,8 @@ class DeterministicBehaviorService:
         self._lock = RLock()
         self._impact_radius = max(1, impact_radius)
         self._default_chain_depth = max(1, default_chain_depth)
+        self._why_narrative_engine = WhyNarrativeEngine()
+        self._why_engine_hardened = WhyEngineHardened()
 
         self._rows_by_tag: dict[str, RowModel] = {}
         self._runtime_by_tag: dict[str, RuntimeState] = {}
@@ -344,6 +352,8 @@ class DeterministicBehaviorService:
                     "edge_type": edge.edge_type,
                     "edge_class": edge.edge_class,
                     "confidence": edge.confidence,
+                    "source_type": edge.source_type,
+                    "inferred": edge.inferred,
                 }
                 for edge in self._edges
             ]
@@ -359,15 +369,33 @@ class DeterministicBehaviorService:
         with self._lock:
             self._rows_by_tag.clear()
             self._runtime_by_tag.clear()
-            self._edges = [self._coerce_edge(edge) for edge in edges]
-            self._rebuild_edge_indexes_locked()
             self._active_snapshot_id = self._next_snapshot_id_locked()
+
+            normalized_rows: list[dict[str, Any]] = []
+            explicit_edge_payloads: list[dict[str, Any]] = []
+            for raw_edge in edges:
+                if hasattr(raw_edge, "model_dump"):
+                    explicit_edge_payloads.append(dict(raw_edge.model_dump()))
+                elif isinstance(raw_edge, Mapping):
+                    explicit_edge_payloads.append(dict(raw_edge))
+                else:
+                    explicit_edge_payloads.append(
+                        {
+                            "id": getattr(raw_edge, "id", ""),
+                            "source": getattr(raw_edge, "source", ""),
+                            "target": getattr(raw_edge, "target", ""),
+                            "edge_type": getattr(raw_edge, "edge_type", "RELATED_TO"),
+                            "edge_class": getattr(raw_edge, "edge_class", None),
+                            "confidence": getattr(raw_edge, "confidence", None),
+                        }
+                    )
 
             for raw_row in rows:
                 row = RowModel.from_engineering_row(raw_row, snapshot_id=self._active_snapshot_id)
                 if not row.tag:
                     continue
                 self._rows_by_tag[row.tag] = row
+                normalized_rows.append(row.as_dict())
                 self._runtime_by_tag[row.tag] = RuntimeState(
                     tag=row.tag,
                     current_value=row.current_value,
@@ -377,6 +405,23 @@ class DeterministicBehaviorService:
                     unit=row.unit,
                     snapshot_id=self._active_snapshot_id,
                 )
+
+            graph_builder = WhyGraphBuilder()
+            graph = graph_builder.build_graph(normalized_rows, explicit_edges=explicit_edge_payloads)
+            self._edges = [
+                RelationshipEdge(
+                    id=f"edge-{index:08d}",
+                    source=edge.source,
+                    target=edge.target,
+                    edge_type=edge.rel_type,
+                    edge_class=("inferred" if edge.inferred else "explicit"),
+                    confidence=edge.confidence,
+                    source_type=edge.source_type,
+                    inferred=edge.inferred,
+                )
+                for index, edge in enumerate(graph.edges, start=1)
+            ]
+            self._rebuild_edge_indexes_locked()
 
             if runtime_seed:
                 for tag, patch in runtime_seed.items():
@@ -552,27 +597,423 @@ class DeterministicBehaviorService:
 
     def explain_why(self, tag: str, max_depth: int = 3) -> dict[str, Any]:
         with self._lock:
-            row = self._rows_by_tag.get(tag)
+            requested_tag = str(tag or "").strip()
+            normalized_requested_tag = self.normalize_tag(requested_tag)
+            row = self._rows_by_tag.get(requested_tag)
+
+            hardened_rows = [item.as_dict() for item in self._rows_by_tag.values()]
+            hardened_edges = [
+                {
+                    "id": edge.id,
+                    "source": edge.source,
+                    "target": edge.target,
+                    "edge_type": edge.edge_type,
+                    "edge_class": edge.edge_class,
+                    "confidence": edge.confidence,
+                    "source_type": edge.source_type,
+                    "inferred": edge.inferred,
+                }
+                for edge in self._edges
+            ]
+            hardened_output = self._why_engine_hardened.generate(
+                requested_tag,
+                hardened_rows,
+                edges=hardened_edges,
+                version="v1",
+            )
+            hardened_structure = dict(hardened_output.get("structure") or {})
+            hardened_explanation = dict(hardened_output.get("explanation") or {})
+            hardened_debug = dict(hardened_output.get("debug") or {})
+
+            logger.info(
+                "[WHY_CHAIN_DEBUG] engine_selected_tag raw=%s normalized=%s",
+                requested_tag,
+                normalized_requested_tag,
+            )
             if row is None:
+                exists_by_normalized = any(self.normalize_tag(row_tag) == normalized_requested_tag for row_tag in self._rows_by_tag.keys())
+                missing_reason = "normalized_key_mismatch" if exists_by_normalized else "selected_tag_absent"
+                narrative = self._why_narrative_engine.build(
+                    target_tag=requested_tag,
+                    target_role="unknown",
+                    target_type=None,
+                    target_subtype=None,
+                    behavior_summary=None,
+                    ranked_upstream=[],
+                    ranked_downstream=[],
+                    runtime_state=None,
+                    diagnostics_reason=missing_reason,
+                )
+                logger.info(
+                    "[WHY_CHAIN_DEBUG] selected_tag_exists_in_nodes=%s total_nodes=%s total_edges=%s",
+                    False,
+                    len(self._rows_by_tag),
+                    len(self._edges),
+                )
+                explanation = hardened_explanation if hardened_explanation else narrative
                 return {
-                    "tag": tag,
+                    "tag": requested_tag,
                     "available": False,
                     "snapshot_id": self._active_snapshot_id,
                     "steps": [],
+                    "debug": {
+                        "classification": {
+                            "selected_tag_role": "unknown",
+                            "selected_tag_role_reason": "tag_not_found",
+                            "classification_inputs": {},
+                        },
+                        "graph": {
+                            "selected_tag": tag,
+                            "incoming_edge_count": 0,
+                            "outgoing_edge_count": 0,
+                            "normalized_upstream_tags": [],
+                            "normalized_downstream_tags": [],
+                        },
+                        "edges": [],
+                        "neighbors": [],
+                        "chain_diagnostics": {
+                            "requested_tag": requested_tag,
+                            "normalized_requested_tag": normalized_requested_tag,
+                            "exists_in_nodes": False,
+                            "exists_by_normalized_key": exists_by_normalized,
+                            "reason": missing_reason,
+                            "resolver_called": False,
+                            "upstream_candidate_paths": 0,
+                            "downstream_candidate_paths": 0,
+                            "ranked_upstream_returned": 0,
+                            "ranked_downstream_returned": 0,
+                        },
+                    },
+                    "structure": (hardened_structure or {
+                        "ranked_upstream": [],
+                        "ranked_downstream": [],
+                        "merged_context": {
+                            "parallel_upstream": [],
+                            "parallel_downstream": [],
+                        },
+                        "diagnostics": {
+                            "reason": missing_reason,
+                            "ranked_upstream_count": 0,
+                            "ranked_downstream_count": 0,
+                        },
+                    }),
+                    "engine": hardened_debug,
+                    "explanation": explanation,
+                    "narrative": explanation,
                 }
 
-            steps = self._build_why_trace_locked(tag, max_depth=max(1, max_depth))
-            runtime_state = self._runtime_by_tag.get(tag)
+            steps = self._build_why_trace_locked(requested_tag, max_depth=max(1, max_depth))
+            runtime_state = self._runtime_by_tag.get(requested_tag)
+            debug = self._build_why_debug_locked(requested_tag)
+            chain_resolution = dict((hardened_structure.get("chains") or {}) if hardened_structure else {})
+            if not chain_resolution:
+                chain_resolution = self._resolve_ranked_chains_locked(requested_tag, max_depth=max(1, max_depth))
+            else:
+                chain_resolution.setdefault("diagnostics", {})
+                chain_resolution["diagnostics"]["hardened_engine"] = True
+                chain_resolution["diagnostics"]["cache_hit"] = bool(hardened_debug.get("cache_hit", False))
+
+            debug["chains"] = chain_resolution
+            debug["chain_diagnostics"] = dict(chain_resolution.get("diagnostics", {}) or {})
+            structure = hardened_structure if hardened_structure else self._build_why_structure_locked(chain_resolution)
+            steps = self._build_why_trace_locked(requested_tag, max_depth=max(1, max_depth), chain_resolution=chain_resolution)
+            narrative = self._why_narrative_engine.build(
+                target_tag=requested_tag,
+                target_role=str(debug.get("classification", {}).get("selected_tag_role") or "unknown"),
+                target_type=row.type,
+                target_subtype=row.subtype,
+                behavior_summary=row.behavior_summary,
+                ranked_upstream=(hardened_structure.get("ranked_upstream", []) if hardened_structure else structure.get("ranked_upstream", [])) or [],
+                ranked_downstream=(hardened_structure.get("ranked_downstream", []) if hardened_structure else structure.get("ranked_downstream", [])) or [],
+                runtime_state=runtime_state.as_dict() if runtime_state else None,
+                diagnostics_reason=str(((hardened_structure.get("diagnostics", {}) if hardened_structure else structure.get("diagnostics", {})) or {}).get("reason") or ""),
+            )
+            explanation = hardened_explanation if hardened_explanation else narrative
+            logger.info(
+                "[WHY_NARRATIVE_DEBUG] tag=%s summary_len=%s behavior_len=%s upstream_len=%s downstream_len=%s state_len=%s warnings_count=%s",
+                requested_tag,
+                len(str(explanation.get("summary", "") or "")),
+                len(str(explanation.get("behavior", "") or "")),
+                len(str(explanation.get("upstream", "") or "")),
+                len(str(explanation.get("downstream", "") or "")),
+                len(str(explanation.get("state", "") or "")),
+                len(list(explanation.get("warnings", []) or [])),
+            )
+
+            logger.info(
+                "[WHY_DEBUG] selected_tag=%s role=%s in_edges=%s out_edges=%s upstream=%s downstream=%s",
+                requested_tag,
+                debug.get("classification", {}).get("selected_tag_role", "unknown"),
+                debug.get("graph", {}).get("incoming_edge_count", 0),
+                debug.get("graph", {}).get("outgoing_edge_count", 0),
+                ",".join(debug.get("graph", {}).get("normalized_upstream_tags", [])),
+                ",".join(debug.get("graph", {}).get("normalized_downstream_tags", [])),
+            )
+
+            logger.info(
+                "[WHY_DEBUG] selected_tag=%s ranked_upstream=%s ranked_downstream=%s merged_context=%s",
+                requested_tag,
+                len(chain_resolution.get("ranked_upstream", [])),
+                len(chain_resolution.get("ranked_downstream", [])),
+                len((chain_resolution.get("merged_context", {}) or {}).get("parallel_context_tags", [])),
+            )
+            logger.info(
+                "[WHY_CHAIN_DEBUG] serialized_structure_lengths upstream=%s downstream=%s final_api_response_tag=%s",
+                len((structure.get("ranked_upstream", []) or [])),
+                len((structure.get("ranked_downstream", []) or [])),
+                requested_tag,
+            )
 
             return {
-                "tag": tag,
+                "tag": requested_tag,
                 "available": row.why_trace_available,
                 "snapshot_id": row.state_snapshot_id,
                 "behavior_card": row.behavior_card,
                 "behavior_summary": row.behavior_summary,
                 "runtime_state": runtime_state.as_dict() if runtime_state else None,
                 "steps": steps,
+                "debug": debug,
+                "structure": structure,
+                "engine": hardened_debug,
+                "explanation": explanation,
+                "narrative": explanation,
             }
+
+    def _build_why_structure_locked(self, chain_resolution: Mapping[str, Any] | None) -> dict[str, Any]:
+        source = dict(chain_resolution or {})
+        ranked_upstream = source.get("ranked_upstream", []) or []
+        ranked_downstream = source.get("ranked_downstream", []) or []
+        merged_context = source.get("merged_context", {}) or {}
+        diagnostics = source.get("diagnostics", {}) or {}
+
+        def normalize_ranked_chain(item: Mapping[str, Any]) -> dict[str, Any]:
+            tags = [str(tag).strip() for tag in (item.get("nodes", []) or []) if str(tag).strip()]
+            weak_links = list(item.get("weak_links", []) or [])
+            broken = bool(item.get("broken", False))
+            break_reason_raw = str(item.get("break_reason", "")).strip()
+            break_reason = break_reason_raw if broken and break_reason_raw else None
+
+            score_raw = item.get("score")
+            try:
+                score = float(score_raw)
+            except (TypeError, ValueError):
+                score = 0.0
+
+            return {
+                "tags": tags,
+                "score": round(score, 6),
+                "depth": max(0, len(tags) - 1),
+                "weak_links": weak_links,
+                "broken": broken,
+                "break_reason": break_reason,
+            }
+
+        return {
+            "ranked_upstream": [normalize_ranked_chain(item) for item in ranked_upstream if isinstance(item, Mapping)],
+            "ranked_downstream": [normalize_ranked_chain(item) for item in ranked_downstream if isinstance(item, Mapping)],
+            "merged_context": {
+                "parallel_upstream": [
+                    str(tag).strip()
+                    for tag in (merged_context.get("parallel_upstream_tags", []) or [])
+                    if str(tag).strip()
+                ],
+                "parallel_downstream": [
+                    str(tag).strip()
+                    for tag in (merged_context.get("parallel_downstream_tags", []) or [])
+                    if str(tag).strip()
+                ],
+            },
+            "diagnostics": {
+                "reason": str(diagnostics.get("zero_reason", "") or ""),
+                "ranked_upstream_count": len([item for item in ranked_upstream if isinstance(item, Mapping)]),
+                "ranked_downstream_count": len([item for item in ranked_downstream if isinstance(item, Mapping)]),
+            },
+        }
+
+    @staticmethod
+    def _normalize_source_type(source_type: str | None, inferred: bool) -> str:
+        raw = str(source_type or "").strip().lower()
+        if inferred:
+            if raw.startswith("row:"):
+                raw = raw.split(":", 1)[1]
+            if raw in {"upstream", "downstream", "controls", "signal_inputs", "signal_outputs", "controlled_by"}:
+                return raw
+        return "explicit"
+
+    def _classify_why_role_locked(self, row: RowModel) -> tuple[str, str]:
+        tag_text = (row.tag or "").strip().upper()
+        type_text = (row.type or "").strip().lower()
+        subtype_text = (row.subtype or "").strip().lower()
+        role_text = (row.process_role or "").strip().lower()
+        desc_text = (row.description or "").strip().lower()
+        equipment_text = (row.equipment or "").strip().lower()
+
+        internal_suffixes = ("_SP", "_HH", "_LL", "_ALM", "_CMD", "_STATUS")
+        if tag_text.endswith(internal_suffixes):
+            for suffix in internal_suffixes:
+                if tag_text.endswith(suffix):
+                    return "internal_logical", f"matched tag suffix {suffix} -> internal_logical"
+
+        sensor_prefixes = ("AIT", "FIT", "LIT", "PIT", "DPIT")
+        for prefix in sensor_prefixes:
+            if tag_text.startswith(prefix):
+                return "sensor", f"matched tag prefix {prefix} -> sensor"
+        if any(token in subtype_text for token in ("transmitter", "analyzer", "sensor")):
+            if "transmitter" in subtype_text:
+                return "sensor", "matched subtype contains transmitter -> sensor"
+            if "analyzer" in subtype_text:
+                return "sensor", "matched subtype contains analyzer -> sensor"
+            return "sensor", "matched subtype contains sensor -> sensor"
+        if "instrument" in type_text:
+            return "sensor", "matched type contains instrument -> sensor"
+
+        actuator_prefixes = ("FCV", "VAL", "PMP", "BL", "MOTOR")
+        for prefix in actuator_prefixes:
+            if tag_text.startswith(prefix):
+                return "actuator", f"matched tag prefix {prefix} -> actuator"
+        if any(token in subtype_text for token in ("valve", "pump", "actuator", "blower")):
+            if "valve" in subtype_text:
+                return "actuator", "matched subtype contains valve -> actuator"
+            if "pump" in subtype_text:
+                return "actuator", "matched subtype contains pump -> actuator"
+            if "actuator" in subtype_text:
+                return "actuator", "matched subtype contains actuator -> actuator"
+            return "actuator", "matched subtype contains blower -> actuator"
+        if "actuator" in type_text:
+            return "actuator", "matched type contains actuator -> actuator"
+
+        if any(token in tag_text for token in ("CTRL", "LOOP", "PID", "DT_LOOP")):
+            return "controller", "matched tag contains CTRL/LOOP/PID/DT_LOOP -> controller"
+        if "control" in subtype_text or "control" in role_text:
+            return "controller", "matched subtype/process_role contains control -> controller"
+
+        if "process" in subtype_text:
+            return "process_unit", "matched subtype=process -> process_unit"
+        if "process_unit" in type_text:
+            return "process_unit", "matched type contains process_unit -> process_unit"
+        if any(token in equipment_text for token in ("basin", "tank", "clarifier", "reactor", "area")):
+            if "basin" in equipment_text:
+                return "process_unit", "matched equipment contains basin -> process_unit"
+            if "tank" in equipment_text:
+                return "process_unit", "matched equipment contains tank -> process_unit"
+            if "clarifier" in equipment_text:
+                return "process_unit", "matched equipment contains clarifier -> process_unit"
+            if "reactor" in equipment_text:
+                return "process_unit", "matched equipment contains reactor -> process_unit"
+            return "process_unit", "matched equipment contains area -> process_unit"
+        if any(token in tag_text for token in ("BAS", "TANK", "AREA")):
+            if "BAS" in tag_text:
+                return "process_unit", "matched tag contains BAS -> process_unit"
+            if "TANK" in tag_text:
+                return "process_unit", "matched tag contains TANK -> process_unit"
+            return "process_unit", "matched tag contains AREA -> process_unit"
+
+        if any(token in equipment_text for token in ("pipe", "skid", "package", "structure")):
+            if "pipe" in equipment_text:
+                return "passive_equipment", "matched equipment contains pipe -> passive_equipment"
+            if "skid" in equipment_text:
+                return "passive_equipment", "matched equipment contains skid -> passive_equipment"
+            if "package" in equipment_text:
+                return "passive_equipment", "matched equipment contains package -> passive_equipment"
+            return "passive_equipment", "matched equipment contains structure -> passive_equipment"
+        if subtype_text in {"n/a", "passive"}:
+            return "passive_equipment", f"matched subtype={subtype_text} -> passive_equipment"
+
+        if "process" in desc_text:
+            return "process_unit", "matched description contains process -> process_unit"
+
+        return "unknown", "no classification rule matched -> unknown"
+
+    def _build_why_debug_locked(self, tag: str) -> dict[str, Any]:
+        row = self._rows_by_tag.get(tag)
+        if row is None:
+            return {
+                "classification": {
+                    "selected_tag_role": "unknown",
+                    "selected_tag_role_reason": "tag_not_found",
+                    "classification_inputs": {},
+                },
+                "graph": {
+                    "selected_tag": tag,
+                    "incoming_edge_count": 0,
+                    "outgoing_edge_count": 0,
+                    "normalized_upstream_tags": [],
+                    "normalized_downstream_tags": [],
+                },
+                "edges": [],
+                "neighbors": [],
+            }
+
+        selected_role, role_reason = self._classify_why_role_locked(row)
+
+        incoming_edges = [edge for edge in self._edges if edge.target == tag]
+        outgoing_edges = [edge for edge in self._edges if edge.source == tag]
+        connected_edges = incoming_edges + outgoing_edges
+
+        upstream_neighbors = sorted({edge.source for edge in incoming_edges if edge.source})
+        downstream_neighbors = sorted({edge.target for edge in outgoing_edges if edge.target})
+        immediate_neighbors = sorted(set(upstream_neighbors) | set(downstream_neighbors))
+
+        edge_debug = [
+            {
+                "source": edge.source,
+                "target": edge.target,
+                "rel_type": edge.edge_type,
+                "confidence": edge.confidence if edge.confidence is not None else 1.0,
+                "inferred": bool(edge.inferred),
+                "source_type": self._normalize_source_type(edge.source_type, bool(edge.inferred)),
+            }
+            for edge in connected_edges
+        ]
+        edge_debug.sort(key=lambda item: (item["source"], item["target"], item["rel_type"]))
+
+        neighbors: list[dict[str, Any]] = []
+        for neighbor_tag in immediate_neighbors:
+            neighbor_row = self._rows_by_tag.get(neighbor_tag)
+            if neighbor_row is None:
+                neighbors.append(
+                    {
+                        "tag": neighbor_tag,
+                        "role": "unknown",
+                        "type": None,
+                        "subtype": None,
+                    }
+                )
+                continue
+
+            neighbor_role, _ = self._classify_why_role_locked(neighbor_row)
+            neighbors.append(
+                {
+                    "tag": neighbor_tag,
+                    "role": neighbor_role,
+                    "type": neighbor_row.type,
+                    "subtype": neighbor_row.subtype,
+                }
+            )
+
+        return {
+            "classification": {
+                "selected_tag_role": selected_role,
+                "selected_tag_role_reason": role_reason,
+                "classification_inputs": {
+                    "type": row.type,
+                    "subtype": row.subtype,
+                    "description": row.description,
+                    "equipment": row.equipment,
+                    "system": row.system,
+                    "process_role": row.process_role,
+                },
+            },
+            "graph": {
+                "selected_tag": tag,
+                "incoming_edge_count": len(incoming_edges),
+                "outgoing_edge_count": len(outgoing_edges),
+                "normalized_upstream_tags": sorted({self.normalize_tag(item) for item in upstream_neighbors if self.normalize_tag(item)}),
+                "normalized_downstream_tags": sorted({self.normalize_tag(item) for item in downstream_neighbors if self.normalize_tag(item)}),
+            },
+            "edges": edge_debug,
+            "neighbors": neighbors,
+        }
 
     def _notify_listeners(self, listeners: list[BehaviorListener], event_type: str, payload: dict[str, Any]) -> None:
         for listener in listeners:
@@ -606,9 +1047,11 @@ class DeterministicBehaviorService:
             id=str(payload.get("id", "")).strip(),
             source=str(payload.get("source", "")).strip(),
             target=str(payload.get("target", "")).strip(),
-            edge_type=str(payload.get("edge_type", "RELATED_TO")).strip() or "RELATED_TO",
+            edge_type=str(payload.get("edge_type") or payload.get("type") or "RELATED_TO").strip() or "RELATED_TO",
             edge_class=(str(payload.get("edge_class")).strip() if payload.get("edge_class") is not None else None),
             confidence=(float(payload["confidence"]) if payload.get("confidence") is not None else None),
+            source_type=(str(payload.get("source_type")).strip() if payload.get("source_type") is not None else "explicit"),
+            inferred=bool(payload.get("inferred", False)),
         )
 
     def _rebuild_edge_indexes_locked(self) -> None:
@@ -778,7 +1221,333 @@ class DeterministicBehaviorService:
 
         return round(max(0.0, min(1.0, base + runtime_score + topology_score - penalty)), 4)
 
-    def _build_why_trace_locked(self, tag: str, max_depth: int) -> list[dict[str, Any]]:
+    def _resolve_ranked_chains_locked(self, tag: str, max_depth: int) -> dict[str, Any]:
+        resolver = WhyChainResolver()
+        requested_tag = str(tag or "").strip()
+        normalized_requested_tag = self.normalize_tag(requested_tag)
+        node_roles = {
+            row_tag: self._classify_why_role_locked(row)[0]
+            for row_tag, row in self._rows_by_tag.items()
+        }
+
+        norm_to_canonical: dict[str, str] = {}
+        for row_tag in self._rows_by_tag.keys():
+            normalized = self.normalize_tag(row_tag)
+            if normalized and normalized not in norm_to_canonical:
+                norm_to_canonical[normalized] = row_tag
+
+        def canonicalize_tag(raw: str) -> str:
+            text = str(raw or "").strip()
+            normalized = self.normalize_tag(text)
+            if normalized and normalized in norm_to_canonical:
+                return norm_to_canonical[normalized]
+            return text
+
+        selected_tag = canonicalize_tag(requested_tag)
+        normalized_selected_tag = self.normalize_tag(selected_tag)
+        selected_exists = selected_tag in self._rows_by_tag
+
+        logger.info(
+            "[WHY_CHAIN_DEBUG] start resolving selected_tag_api=%s selected_tag_engine=%s selected_tag_graph_builder=%s",
+            requested_tag,
+            selected_tag,
+            selected_tag,
+        )
+        logger.info(
+            "[WHY_CHAIN_DEBUG] selected_tag_normalization raw=%s normalized=%s canonical=%s canonical_normalized=%s exists_in_nodes=%s",
+            requested_tag,
+            normalized_requested_tag,
+            selected_tag,
+            normalized_selected_tag,
+            selected_exists,
+        )
+
+        incoming_edges: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        outgoing_edges: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for edge in self._edges:
+            source_tag = canonicalize_tag(edge.source)
+            target_tag = canonicalize_tag(edge.target)
+            edge_payload = {
+                "source": source_tag,
+                "target": target_tag,
+                "edge_type": edge.edge_type,
+                "confidence": edge.confidence if edge.confidence is not None else 1.0,
+                "source_type": edge.source_type,
+            }
+            outgoing_edges[source_tag].append(edge_payload)
+            incoming_edges[target_tag].append(edge_payload)
+
+        immediate_incoming_neighbors = sorted(
+            {
+                str(item.get("source", "")).strip()
+                for item in (incoming_edges.get(selected_tag, []) or [])
+                if str(item.get("source", "")).strip()
+            }
+        )
+        immediate_outgoing_neighbors = sorted(
+            {
+                str(item.get("target", "")).strip()
+                for item in (outgoing_edges.get(selected_tag, []) or [])
+                if str(item.get("target", "")).strip()
+            }
+        )
+
+        logger.info(
+            "[WHY_CHAIN_DEBUG] totals nodes=%s edges=%s incoming_count=%s outgoing_count=%s",
+            len(self._rows_by_tag),
+            len(self._edges),
+            len(incoming_edges.get(selected_tag, [])),
+            len(outgoing_edges.get(selected_tag, [])),
+        )
+        logger.info("[WHY_CHAIN_DEBUG] immediate_incoming_neighbors=%s", immediate_incoming_neighbors)
+        logger.info("[WHY_CHAIN_DEBUG] immediate_outgoing_neighbors=%s", immediate_outgoing_neighbors)
+
+        upstream_candidate_paths = self._estimate_candidate_paths_locked(
+            target_tag=selected_tag,
+            direction="upstream",
+            adjacency=incoming_edges,
+            max_depth=max_depth,
+            max_paths=8,
+        )
+        downstream_candidate_paths = self._estimate_candidate_paths_locked(
+            target_tag=selected_tag,
+            direction="downstream",
+            adjacency=outgoing_edges,
+            max_depth=max_depth,
+            max_paths=8,
+        )
+        logger.info(
+            "[WHY_CHAIN_DEBUG] resolver_called=%s upstream_candidate_paths=%s downstream_candidate_paths=%s",
+            True,
+            upstream_candidate_paths,
+            downstream_candidate_paths,
+        )
+
+        chain_resolution = resolver.resolve_ranked_chains(
+            target_tag=selected_tag,
+            nodes=self._rows_by_tag,
+            incoming_edges=incoming_edges,
+            outgoing_edges=outgoing_edges,
+            node_roles=node_roles,
+            max_depth=max_depth,
+            max_paths=8,
+        )
+
+        ranked_upstream = chain_resolution.get("ranked_upstream", []) or []
+        ranked_downstream = chain_resolution.get("ranked_downstream", []) or []
+
+        if not ranked_upstream and incoming_edges.get(selected_tag):
+            ranked_upstream = self._fallback_ranked_chains_locked(
+                target_tag=selected_tag,
+                direction="upstream",
+                adjacency=incoming_edges,
+                max_depth=max_depth,
+                max_paths=8,
+            )
+            chain_resolution["ranked_upstream"] = ranked_upstream
+
+        if not ranked_downstream and outgoing_edges.get(selected_tag):
+            ranked_downstream = self._fallback_ranked_chains_locked(
+                target_tag=selected_tag,
+                direction="downstream",
+                adjacency=outgoing_edges,
+                max_depth=max_depth,
+                max_paths=8,
+            )
+            chain_resolution["ranked_downstream"] = ranked_downstream
+
+        if not chain_resolution.get("merged_context"):
+            up_tags = {
+                node
+                for chain in (chain_resolution.get("ranked_upstream", []) or [])
+                for node in (chain.get("nodes", []) or [])
+                if node and node != selected_tag
+            }
+            down_tags = {
+                node
+                for chain in (chain_resolution.get("ranked_downstream", []) or [])
+                for node in (chain.get("nodes", []) or [])
+                if node and node != selected_tag
+            }
+            chain_resolution["merged_context"] = {
+                "parallel_upstream_tags": sorted(up_tags),
+                "parallel_downstream_tags": sorted(down_tags),
+                "parallel_context_tags": sorted(up_tags | down_tags),
+            }
+
+        upstream_paths = chain_resolution.get("ranked_upstream", []) or []
+        downstream_paths = chain_resolution.get("ranked_downstream", []) or []
+        zero_reason = ""
+        if len(upstream_paths) == 0 and len(downstream_paths) == 0:
+            if not selected_exists:
+                zero_reason = "selected_tag_absent"
+            elif len(incoming_edges.get(selected_tag, [])) == 0 and len(outgoing_edges.get(selected_tag, [])) == 0:
+                zero_reason = "no_incoming_adjacency_and_no_outgoing_adjacency"
+            elif upstream_candidate_paths == 0 and downstream_candidate_paths == 0:
+                zero_reason = "all_paths_filtered_or_not_discovered"
+            else:
+                zero_reason = "resolver_returned_empty"
+
+        chain_resolution["diagnostics"] = {
+            "requested_tag": requested_tag,
+            "normalized_requested_tag": normalized_requested_tag,
+            "selected_tag": selected_tag,
+            "normalized_selected_tag": normalized_selected_tag,
+            "exists_in_nodes": selected_exists,
+            "total_nodes": len(self._rows_by_tag),
+            "total_edges": len(self._edges),
+            "incoming_count": len(incoming_edges.get(selected_tag, [])),
+            "outgoing_count": len(outgoing_edges.get(selected_tag, [])),
+            "incoming_neighbors": immediate_incoming_neighbors,
+            "outgoing_neighbors": immediate_outgoing_neighbors,
+            "resolver_called": True,
+            "upstream_candidate_paths": upstream_candidate_paths,
+            "downstream_candidate_paths": downstream_candidate_paths,
+            "ranked_upstream_returned": len(upstream_paths),
+            "ranked_downstream_returned": len(downstream_paths),
+            "zero_reason": zero_reason,
+        }
+
+        logger.info("[WHY_CHAIN_DEBUG] upstream_paths=%s", len(upstream_paths))
+        logger.info("[WHY_CHAIN_DEBUG] downstream_paths=%s", len(downstream_paths))
+
+        if upstream_paths:
+            logger.info("[WHY_CHAIN_DEBUG] sample_upstream=%s", (upstream_paths[0] or {}))
+        if downstream_paths:
+            logger.info("[WHY_CHAIN_DEBUG] sample_downstream=%s", (downstream_paths[0] or {}))
+
+        return chain_resolution
+
+    def _estimate_candidate_paths_locked(
+        self,
+        *,
+        target_tag: str,
+        direction: str,
+        adjacency: Mapping[str, list[dict[str, Any]]],
+        max_depth: int,
+        max_paths: int,
+    ) -> int:
+        queue: deque[tuple[str, set[str], int]] = deque([(target_tag, {target_tag}, 0)])
+        count = 0
+        hard_limit = max_paths * 20
+
+        while queue and count < hard_limit:
+            current, visited, depth = queue.popleft()
+            if depth >= max_depth:
+                continue
+
+            for raw in (adjacency.get(current, []) or []):
+                neighbor = str(raw.get("source") if direction == "upstream" else raw.get("target") or "").strip()
+                if not neighbor:
+                    continue
+                count += 1
+                if count >= hard_limit:
+                    break
+                if neighbor in visited:
+                    continue
+                next_visited = set(visited)
+                next_visited.add(neighbor)
+                queue.append((neighbor, next_visited, depth + 1))
+
+            if count >= hard_limit:
+                break
+
+        return count
+
+    def _fallback_ranked_chains_locked(
+        self,
+        *,
+        target_tag: str,
+        direction: str,
+        adjacency: Mapping[str, list[dict[str, Any]]],
+        max_depth: int,
+        max_paths: int,
+    ) -> list[dict[str, Any]]:
+        queue: deque[tuple[list[str], list[dict[str, Any]], int]] = deque([([target_tag], [], 0)])
+        seen_paths: set[tuple[str, ...]] = set()
+        results: list[dict[str, Any]] = []
+
+        while queue and len(results) < max_paths:
+            nodes, edges, depth = queue.popleft()
+            current = nodes[-1]
+            raw_edges = list(adjacency.get(current, []) or [])
+            if not raw_edges:
+                continue
+
+            for raw in raw_edges:
+                source = str(raw.get("source", "") or "").strip()
+                target = str(raw.get("target", "") or "").strip()
+                rel_type = str(raw.get("edge_type") or raw.get("rel_type") or "RELATED_TO").strip() or "RELATED_TO"
+                source_type = str(raw.get("source_type") or "explicit").strip() or "explicit"
+                try:
+                    confidence = float(raw.get("confidence", 1.0))
+                except (TypeError, ValueError):
+                    confidence = 1.0
+                confidence = max(0.0, min(1.0, confidence))
+
+                neighbor = source if direction == "upstream" else target
+                if not neighbor:
+                    continue
+
+                next_nodes = nodes + [neighbor]
+                signature = tuple(next_nodes)
+                if signature in seen_paths:
+                    continue
+
+                next_edges = edges + [
+                    {
+                        "source": source,
+                        "target": target,
+                        "rel_type": rel_type,
+                        "confidence": confidence,
+                        "source_type": source_type,
+                    }
+                ]
+
+                weak_links: list[dict[str, Any]] = []
+                if confidence < 0.8:
+                    weak_links.append(
+                        {
+                            "index": len(next_edges) - 1,
+                            "source": source,
+                            "target": target,
+                            "rel_type": rel_type,
+                            "confidence": confidence,
+                            "reasons": ["low_confidence"],
+                        }
+                    )
+
+                cycle_detected = neighbor in nodes
+                score = round(max(0.0, (0.78 * confidence) + 0.22 - (0.03 * (len(next_nodes) - 1))), 6)
+                results.append(
+                    {
+                        "nodes": next_nodes,
+                        "edges": next_edges,
+                        "score": score,
+                        "broken": cycle_detected,
+                        "break_reason": "cycle_detected" if cycle_detected else "path_end",
+                        "weak_links": weak_links,
+                    }
+                )
+                seen_paths.add(signature)
+
+                if len(results) >= max_paths:
+                    break
+
+                if depth + 1 < max_depth and not cycle_detected:
+                    queue.append((next_nodes, next_edges, depth + 1))
+
+            if len(results) >= max_paths:
+                break
+
+        return results
+
+    def _build_why_trace_locked(
+        self,
+        tag: str,
+        max_depth: int,
+        chain_resolution: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         steps: list[dict[str, Any]] = []
 
         row = self._rows_by_tag.get(tag)
@@ -796,6 +1565,13 @@ class DeterministicBehaviorService:
                 "behavior_summary": row.behavior_summary,
             }
         )
+
+        if chain_resolution:
+            ranked_upstream = chain_resolution.get("ranked_upstream", []) or []
+            ranked_downstream = chain_resolution.get("ranked_downstream", []) or []
+            ordered_from_ranked = self._ranked_paths_to_steps_locked(tag, ranked_upstream, ranked_downstream, max_depth)
+            if ordered_from_ranked:
+                return ordered_from_ranked
 
         def traverse(direction: str) -> None:
             adjacency = self._inbound if direction == "upstream" else self._outbound
@@ -831,6 +1607,79 @@ class DeterministicBehaviorService:
         traverse("upstream")
         traverse("downstream")
 
+        steps.sort(key=lambda item: (item["depth"], item["direction"], item["tag"]))
+        return steps
+
+    def _ranked_paths_to_steps_locked(
+        self,
+        tag: str,
+        ranked_upstream: list[dict[str, Any]],
+        ranked_downstream: list[dict[str, Any]],
+        max_depth: int,
+    ) -> list[dict[str, Any]]:
+        steps: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, int]] = set()
+
+        root_runtime = self._runtime_by_tag.get(tag)
+        root_row = self._rows_by_tag.get(tag)
+        if root_row is None:
+            return steps
+
+        root_key = (tag, "self", 0)
+        seen.add(root_key)
+        steps.append(
+            {
+                "depth": 0,
+                "direction": "self",
+                "tag": tag,
+                "edge_type": None,
+                "runtime_state": root_runtime.as_dict() if root_runtime else None,
+                "behavior_summary": root_row.behavior_summary,
+            }
+        )
+
+        def append_from_ranked(chains: list[dict[str, Any]], direction: str) -> None:
+            for chain in chains:
+                nodes = [str(item).strip() for item in (chain.get("nodes", []) or []) if str(item).strip()]
+                edges = chain.get("edges", []) or []
+                if len(nodes) <= 1:
+                    continue
+
+                traversal = list(reversed(nodes[:-1])) if direction == "upstream" else nodes[1:]
+                max_len = min(max_depth, len(traversal))
+                for index in range(max_len):
+                    node_tag = traversal[index]
+                    depth = index + 1
+                    key = (node_tag, direction, depth)
+                    if key in seen:
+                        continue
+
+                    neighbor_row = self._rows_by_tag.get(node_tag)
+                    neighbor_runtime = self._runtime_by_tag.get(node_tag)
+                    edge_type: str | None = None
+                    if direction == "upstream":
+                        edge_index = len(edges) - depth
+                        if 0 <= edge_index < len(edges):
+                            edge_type = str((edges[edge_index] or {}).get("rel_type") or "") or None
+                    else:
+                        edge_index = depth - 1
+                        if 0 <= edge_index < len(edges):
+                            edge_type = str((edges[edge_index] or {}).get("rel_type") or "") or None
+
+                    steps.append(
+                        {
+                            "depth": depth,
+                            "direction": direction,
+                            "tag": node_tag,
+                            "edge_type": edge_type,
+                            "runtime_state": neighbor_runtime.as_dict() if neighbor_runtime else None,
+                            "behavior_summary": neighbor_row.behavior_summary if neighbor_row else "",
+                        }
+                    )
+                    seen.add(key)
+
+        append_from_ranked(ranked_upstream, "upstream")
+        append_from_ranked(ranked_downstream, "downstream")
         steps.sort(key=lambda item: (item["depth"], item["direction"], item["tag"]))
         return steps
 

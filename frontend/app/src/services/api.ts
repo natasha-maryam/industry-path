@@ -283,6 +283,144 @@ export type DeterministicWhyTraceStep = {
   behavior_summary: string;
 };
 
+export type DeterministicWhyTraceDebugClassification = {
+  selected_tag_role: string;
+  selected_tag_role_reason?: string;
+  classification_inputs?: {
+    type?: string | null;
+    subtype?: string | null;
+    description?: string | null;
+    equipment?: string | null;
+    system?: string | null;
+    process_role?: string | null;
+  };
+};
+
+export type DeterministicWhyTraceDebugGraph = {
+  selected_tag: string;
+  incoming_edge_count: number;
+  outgoing_edge_count: number;
+  normalized_upstream_tags: string[];
+  normalized_downstream_tags: string[];
+};
+
+export type DeterministicWhyTraceDebugEdge = {
+  source: string;
+  target: string;
+  rel_type: string;
+  confidence: number;
+  inferred: boolean;
+  source_type: string;
+};
+
+export type DeterministicWhyTraceDebugNeighbor = {
+  tag: string;
+  role: string;
+  type: string | null;
+  subtype: string | null;
+};
+
+export type DeterministicWhyTraceDebugWeakLink = {
+  index: number;
+  source: string;
+  target: string;
+  rel_type: string;
+  confidence: number;
+  reasons: string[];
+};
+
+export type DeterministicWhyTraceDebugChainEdge = {
+  source: string;
+  target: string;
+  rel_type: string;
+  confidence: number;
+  source_type: string;
+};
+
+export type DeterministicWhyTraceDebugRankedChain = {
+  nodes: string[];
+  edges: DeterministicWhyTraceDebugChainEdge[];
+  score: number;
+  broken: boolean;
+  break_reason: string;
+  weak_links: DeterministicWhyTraceDebugWeakLink[];
+};
+
+export type DeterministicWhyTraceDebugMergedContext = {
+  parallel_upstream_tags: string[];
+  parallel_downstream_tags: string[];
+  parallel_context_tags: string[];
+};
+
+export type DeterministicWhyTraceDebugChains = {
+  ranked_upstream: DeterministicWhyTraceDebugRankedChain[];
+  ranked_downstream: DeterministicWhyTraceDebugRankedChain[];
+  merged_context: DeterministicWhyTraceDebugMergedContext;
+  diagnostics?: {
+    requested_tag?: string;
+    selected_tag?: string;
+    exists_in_nodes?: boolean;
+    incoming_count?: number;
+    outgoing_count?: number;
+    upstream_candidate_paths?: number;
+    downstream_candidate_paths?: number;
+    ranked_upstream_returned?: number;
+    ranked_downstream_returned?: number;
+    zero_reason?: string;
+  };
+};
+
+export type DeterministicWhyStructureRankedChain = {
+  tags: string[];
+  score: number;
+  depth: number;
+  weak_links: DeterministicWhyTraceDebugWeakLink[];
+  broken: boolean;
+  break_reason: string | null;
+};
+
+export type DeterministicWhyStructureMergedContext = {
+  parallel_upstream: string[];
+  parallel_downstream: string[];
+};
+
+export type DeterministicWhyStructure = {
+  chains?: {
+    ranked_upstream: DeterministicWhyStructureRankedChain[];
+    ranked_downstream: DeterministicWhyStructureRankedChain[];
+    merged_context: {
+      parallel_upstream_tags: string[];
+      parallel_downstream_tags: string[];
+      parallel_context_tags: string[];
+    };
+  };
+  ranked_upstream: DeterministicWhyStructureRankedChain[];
+  ranked_downstream: DeterministicWhyStructureRankedChain[];
+  merged_context: DeterministicWhyStructureMergedContext;
+  diagnostics?: {
+    reason?: string;
+    ranked_upstream_count?: number;
+    ranked_downstream_count?: number;
+  };
+};
+
+export type DeterministicWhyNarrative = {
+  summary: string;
+  behavior: string;
+  upstream: string;
+  downstream: string;
+  state: string;
+  warnings: string[];
+};
+
+export type DeterministicWhyTraceDebug = {
+  classification?: DeterministicWhyTraceDebugClassification;
+  graph?: DeterministicWhyTraceDebugGraph;
+  edges?: DeterministicWhyTraceDebugEdge[];
+  neighbors?: DeterministicWhyTraceDebugNeighbor[];
+  chains?: DeterministicWhyTraceDebugChains;
+};
+
 export type DeterministicWhyTraceResponse = {
   tag: string;
   available: boolean;
@@ -291,6 +429,16 @@ export type DeterministicWhyTraceResponse = {
   behavior_summary?: string;
   runtime_state?: Record<string, unknown> | null;
   steps: DeterministicWhyTraceStep[];
+  debug?: DeterministicWhyTraceDebug;
+  structure?: DeterministicWhyStructure;
+  engine?: {
+    cache_hit?: boolean;
+    cache_key?: string;
+    rows_count?: number;
+    edges_count?: number;
+  };
+  explanation?: DeterministicWhyNarrative;
+  narrative?: DeterministicWhyNarrative;
 };
 
 export type UNSRow = {

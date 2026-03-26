@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import sqlite3
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from threading import RLock
@@ -295,10 +296,16 @@ class UNSCore:
         if ";" in statement.rstrip(";"):
             raise ValueError("Multiple statements are not allowed.")
 
+        aliased_statement = re.sub(r"\bFROM\s+tags\b", "FROM uns_rows", statement, flags=re.IGNORECASE)
+        aliased_statement = re.sub(r"\bJOIN\s+tags\b", "JOIN uns_rows", aliased_statement, flags=re.IGNORECASE)
+
         with self._lock:
-            cursor = self._db.execute(statement)
-            rows = cursor.fetchall()
-            return [dict(item) for item in rows]
+            try:
+                cursor = self._db.execute(aliased_statement)
+                rows = cursor.fetchall()
+                return [dict(item) for item in rows]
+            except sqlite3.Error as exc:
+                raise ValueError(f"Invalid UNS query: {exc}") from exc
 
     def run_script(self, script: str) -> dict[str, Any]:
         source = (script or "").strip()
@@ -336,9 +343,13 @@ class UNSCore:
             "get_mappings": self.get_mappings,
             "set_connector": self.set_connector,
             "get_connectors": self.get_connectors,
+            "rows": self.get_rows(),
         }
 
-        exec(compile(tree, filename="<uns-script>", mode="exec"), sandbox_globals, sandbox_locals)
+        try:
+            exec(compile(tree, filename="<uns-script>", mode="exec"), sandbox_globals, sandbox_locals)
+        except Exception as exc:
+            raise ValueError(f"Script execution failed: {exc}") from exc
         result = sandbox_locals.get("result")
 
         return {
