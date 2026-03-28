@@ -122,3 +122,60 @@ export type VersionHistoryPanelResponse = {
   total_snapshots: number;
   snapshots: VersionSnapshot[];
 };
+
+export type CopilotRunMode = "ai_fallback";
+
+export type CopilotRunResponse = {
+  success: boolean;
+  command: string;
+  provider: string;
+  mode: CopilotRunMode;
+  prompt: string | null;
+  warnings: string[];
+  result: Record<string, unknown>;
+  timestamp: string;
+};
+
+export type CopilotProviderResponse = {
+  provider: string;
+  registered: boolean;
+  metadata: Record<string, unknown>;
+  timestamp: string;
+};
+
+export type CopilotProductionResultType = "ai";
+
+export type CopilotAsyncJobStatus = "queued" | "running" | "completed" | "failed";
+
+export type CopilotProductionResult = {
+  type: CopilotProductionResultType;
+  summary: string;
+  warnings: string[];
+  prompt: string | null;
+  cached: boolean;
+  provider: string;
+  data: Record<string, unknown>;
+};
+
+export type CopilotAsyncRunResponse = {
+  success: boolean;
+  job_id: string;
+  status: CopilotAsyncJobStatus;
+  command: string;
+  provider: string;
+  submitted_at: string;
+};
+
+export type CopilotJobStatusResponse = {
+  success: boolean;
+  job_id: string;
+  status: CopilotAsyncJobStatus;
+  command: string | null;
+  provider: string | null;
+  submitted_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  error: string | null;
+  error_code: string | null;
+  result: CopilotProductionResult | null;
+};

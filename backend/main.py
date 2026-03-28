@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app_integration_behavior_patch import register_behavior_routes
+from api.copilot_api import router as copilot_api_router
 from api.production_api import router as production_api_router
 from api.routes.deploy import router as deploy_router
 from api.engineering_table import router as engineering_table_router
@@ -96,6 +97,7 @@ app.include_router(plc_export_router, prefix="/api")
 app.include_router(plc_reverse_engineering_router, prefix="/api")
 app.include_router(direct_plc_deploy_router, prefix="/api")
 app.include_router(engineering_table_router, prefix="/api")
+app.include_router(copilot_api_router, prefix="/api")
 register_behavior_routes(app)
 app.include_router(system_layer_router, prefix="/api")
 app.include_router(system_layer_upgrade_router, prefix="/api")

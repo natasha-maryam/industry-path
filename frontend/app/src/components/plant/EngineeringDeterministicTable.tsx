@@ -265,6 +265,7 @@ export default function EngineeringDeterministicTable({
   const lastFullSnapshotRef = useRef<string>("");
   const search = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS);
   const deferredSearch = useDeferredValue(search);
+  const copilotSeedTag = selectedTag || externalSelectedTag || "";
 
   const applyChipSearch = useCallback((value: string): void => {
     setSearchInput(value);
@@ -529,6 +530,7 @@ export default function EngineeringDeterministicTable({
               title={row.tag}
               onClick={(event) => {
                 event.stopPropagation();
+                console.log("COPILOT_ROW_CLICKED", row.tag);
                 setSelectedTag(row.tag);
                 onRowSelect?.(row);
               }}
@@ -696,6 +698,19 @@ export default function EngineeringDeterministicTable({
             >
               {wsStatus === "connected" ? "Live Connected" : wsStatus === "reconnecting" ? "Reconnecting" : "Disconnected"}
             </span>
+            <button
+              type="button"
+              className="command-btn deterministic-toolbar-btn"
+              onClick={() => {
+                window.dispatchEvent(
+                  new CustomEvent("openCopilotPanel", {
+                    detail: copilotSeedTag ? { tag: copilotSeedTag } : {},
+                  })
+                );
+              }}
+            >
+              Copilot
+            </button>
             <button type="button" className="command-btn deterministic-toolbar-btn" onClick={() => void handleExportCsv()} disabled={exporting !== null}>
               {exporting === "csv" ? "Exporting CSV..." : "Export CSV"}
             </button>
@@ -749,6 +764,7 @@ export default function EngineeringDeterministicTable({
                     className={`absolute left-0 top-0 cursor-pointer border-b border-slate-200 hover:bg-slate-50 ${selected ? "bg-red-50" : loopHighlighted ? "bg-amber-50" : ""}`}
                     style={{ transform: `translateY(${virtualRow.start}px)`, width: "100%", display: "table", tableLayout: "fixed" }}
                     onClick={() => {
+                      console.log("COPILOT_ROW_CLICKED", row.original.tag);
                       setSelectedTag(row.original.tag);
                       onRowSelect?.(row.original);
                     }}

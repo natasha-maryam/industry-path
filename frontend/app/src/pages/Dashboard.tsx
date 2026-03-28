@@ -13,6 +13,7 @@ import {
 import { Toaster, toast } from "react-hot-toast";
 import { Separator } from "react-resizable-panels";
 import ActivityBar from "../components/ActivityBar";
+import BottomPanel from "../components/BottomPanel";
 import CodeExplorerPanel, { type GeneratedLogicFile, type STDiagnosticMarker, type STJumpLocation } from "../components/CodeExplorerPanel";
 import CommandBar, { type ToolbarAction } from "../components/CommandBar";
 import DetailsPanel, { type RightTab } from "../components/DetailsPanel";
@@ -712,6 +713,8 @@ export default function Dashboard() {
   const [liveEngineeringRowsFilteredCount, setLiveEngineeringRowsFilteredCount] = useState<number>(0);
   const [liveEngineeringRowsLoading, setLiveEngineeringRowsLoading] = useState<boolean>(false);
   const [behaviorRefreshKey, setBehaviorRefreshKey] = useState<number>(0);
+  const [selectedEngineeringTag, setSelectedEngineeringTag] = useState<string | null>(null);
+  const [selectedEngineeringRow, setSelectedEngineeringRow] = useState<EngineeringTableResponseRow | null>(null);
   const [selectedWhyTraceTag, setSelectedWhyTraceTag] = useState<string | null>(null);
   const [whyFocusToken, setWhyFocusToken] = useState<number>(0);
   const [unsTableRowsOverride, setUnsTableRowsOverride] = useState<EngineeringTableResponseRow[] | null>(null);
@@ -798,6 +801,7 @@ export default function Dashboard() {
   });
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const previousPipelineStatusesRef = useRef<PipelineStageStatusMap>(pipelineStatuses);
+  const suppressInitialPipelineWorkspaceSyncRef = useRef<boolean>(true);
   const pendingPipelineToastCopyRef = useRef<Partial<Record<PipelineStageKey, PipelineToastCopy>>>({});
   const behaviorHydrationSignatureRef = useRef<string>("");
   const rightResizeStartRef = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -916,27 +920,23 @@ export default function Dashboard() {
       setMonitoringPanelMode("io_mapping");
       setActiveBottomView("monitoring");
       setActiveTab("IO Mapping");
-      setIsRightPanelExpanded(true);
       return;
     }
     if (stage === "runtime_validation") {
       setMonitoringPanelMode("runtime");
       setActiveBottomView("monitoring");
       setActiveTab("Diagnostics");
-      setIsRightPanelExpanded(true);
       return;
     }
     if (stage === "simulation_validation") {
       setActiveBottomView("simulation");
       setActiveTab("Diagnostics");
-      setIsRightPanelExpanded(true);
       return;
     }
     if (stage === "version_snapshot") {
       setMonitoringPanelMode("versions");
       setActiveBottomView("monitoring");
       setActiveTab("Diagnostics");
-      setIsRightPanelExpanded(true);
     }
   };
 
@@ -950,6 +950,20 @@ export default function Dashboard() {
       "simulation_validation",
       "version_snapshot",
     ];
+
+    const hasStatusChanges = toastableStages.some((stage) => previous[stage] !== pipelineStatuses[stage]);
+    if (suppressInitialPipelineWorkspaceSyncRef.current && hasStatusChanges && !loadingAction) {
+      previousPipelineStatusesRef.current = pipelineStatuses;
+      suppressInitialPipelineWorkspaceSyncRef.current = false;
+      return;
+    }
+
+    if (!hasStatusChanges) {
+      previousPipelineStatusesRef.current = pipelineStatuses;
+      return;
+    }
+
+    suppressInitialPipelineWorkspaceSyncRef.current = false;
 
     for (const stage of toastableStages) {
       const prevState = previous[stage];
@@ -2796,6 +2810,8 @@ export default function Dashboard() {
     (row: EngineeringTableResponseRow): void => {
       setSelectedNode(row.tag);
       setSelectedRowId(row.id?.trim() || row.tag);
+      setSelectedEngineeringTag(row.tag);
+      setSelectedEngineeringRow(row);
       if (activeTab === "Trace") {
         void handleTrace(row.tag);
       }
@@ -2863,6 +2879,36 @@ export default function Dashboard() {
   const hasGeneratedLogic = generatedSTFiles.length > 0 || generatedLogic.trim().length > 0;
   const hasIOMapping = ioMappingRows.length > 0;
   const hasSimulationResults = simulationTrace.length > 0 || Boolean(simulationValidationData);
+
+  useEffect(() => {
+    if (!selectedEngineeringTag) {
+      setSelectedEngineeringRow(null);
+      return;
+    }
+
+    const nextSelectedRow = resolvedEngineeringRowsForWorkspace.find((row) => row.tag === selectedEngineeringTag) ?? null;
+    if (!nextSelectedRow) {
+      setSelectedEngineeringTag(null);
+      setSelectedEngineeringRow(null);
+      return;
+    }
+
+    setSelectedEngineeringRow(nextSelectedRow);
+  }, [resolvedEngineeringRowsForWorkspace, selectedEngineeringTag]);
+
+  useEffect(() => {
+    console.log("COPILOT_SELECTED_TAG_STATE", selectedEngineeringTag);
+  }, [selectedEngineeringTag]);
+
+  useEffect(() => {
+    setSelectedEngineeringTag(null);
+    setSelectedEngineeringRow(null);
+  }, [selectedProjectId]);
+
+  useEffect(() => {
+    setIsRightPanelExpanded(false);
+  }, [selectedProjectId]);
+
   const currentProgressPanel = useMemo(() => {
     const runningModuleEntry = Object.entries(moduleStates).find(([, moduleState]) => moduleState.state === "running") as
       | [WorkspaceModuleId, ModuleState]
@@ -2940,55 +2986,47 @@ export default function Dashboard() {
     setActiveModule(moduleId);
     if (moduleId === "documents") {
       setActiveMainView("table");
-      setIsRightPanelExpanded(true);
       return;
     }
     if (moduleId === "plant_model") {
       setActiveMainView("table");
-      setIsRightPanelExpanded(true);
       return;
     }
     if (moduleId === "control_loops") {
       setActiveMainView("table");
-      setIsRightPanelExpanded(true);
       return;
     }
     if (moduleId === "io_mapping") {
       setMonitoringPanelMode("io_mapping");
       setActiveBottomView("monitoring");
       setActiveMainView("table");
-      setIsRightPanelExpanded(true);
       return;
     }
     if (moduleId === "control_logic") {
       setCodePanelMode("control_logic");
       setActiveBottomView("logic");
       setActiveMainView("logic");
-      setIsRightPanelExpanded(true);
       return;
     }
     if (moduleId === "simulation") {
       setActiveBottomView("simulation");
       setActiveMainView("simulation");
-      setIsRightPanelExpanded(true);
       return;
     }
     if (moduleId === "runtime") {
       setMonitoringPanelMode("runtime");
       setActiveBottomView("monitoring");
       setActiveMainView("monitoring");
-      setIsRightPanelExpanded(true);
       return;
     }
     if (moduleId === "monitoring") {
       setMonitoringPanelMode("runtime");
       setActiveBottomView("monitoring");
       setActiveMainView("monitoring");
-      setIsRightPanelExpanded(true);
       return;
-    }
+      return;
     setActiveMainView("monitoring");
-    setIsRightPanelExpanded(true);
+    }
   };
 
   const handleAutoAssignIOMappingChannels = (): void => {
@@ -3664,7 +3702,7 @@ export default function Dashboard() {
           error={engineeringTableError}
           onRowSelect={handleEngineeringRowSelect}
           onOpenWhyTrace={handleEngineeringOpenWhyTrace}
-          externalSelectedTag={selectedControlLoop?.sensor_tag ?? selectedNode}
+          externalSelectedTag={selectedEngineeringTag ?? selectedControlLoop?.sensor_tag ?? selectedNode}
           highlightedTags={selectedControlLoop ? [selectedControlLoop.sensor_tag, selectedControlLoop.actuator_tag] : []}
           onRowsResolved={(payload) => {
             setLiveEngineeringRows(payload.rows);
@@ -4836,6 +4874,17 @@ export default function Dashboard() {
         <span>Row: {uiState.selectedRow || "none"}</span>
         <span>Connection: {isRuntimeStateLoading ? "syncing" : "ready"}</span>
       </div>
+
+      <BottomPanel
+        projectId={selectedProjectId}
+        selectedTag={selectedEngineeringTag}
+        selectedRow={selectedEngineeringRow}
+        engineeringRows={resolvedEngineeringRowsForWorkspace}
+        graphSummary={activeMainView === "graph" && graphNodes.length > 0 ? {
+          nodeCount: graphNodes.length,
+          edgeCount: plantGraph.edges.length,
+        } : null}
+      />
     </div>
   );
 }

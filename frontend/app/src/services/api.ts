@@ -1,7 +1,13 @@
 import axios from "axios";
 export * from "./pipelineStatus";
 export * from "./panelContracts";
-import type { RuntimeValidationPanelResponse } from "./panelContracts";
+import type {
+  CopilotAsyncRunResponse,
+  CopilotJobStatusResponse,
+  CopilotProviderResponse,
+  CopilotRunResponse,
+  RuntimeValidationPanelResponse,
+} from "./panelContracts";
 
 export type Project = {
   id: string;
@@ -2577,4 +2583,106 @@ export async function exportEngineeringBundle(projectId: string): Promise<Blob> 
     responseType: "blob",
   });
   return response.data;
+}
+
+export async function runCopilotCommand(payload: {
+  command: string;
+  provider?: string;
+  context?: Record<string, unknown>;
+}): Promise<CopilotRunResponse> {
+  try {
+    const response = await api.post<string>(
+      "/copilot/run",
+      {
+        command: payload.command,
+        provider: payload.provider ?? "openai",
+        context: payload.context ?? {},
+      },
+      {
+        transformResponse: [(data) => data],
+      }
+    );
+
+    const raw = response.data;
+    if (typeof raw === "string") {
+      try {
+        return JSON.parse(raw) as CopilotRunResponse;
+      } catch {
+        return {
+          success: false,
+          command: payload.command,
+          provider: payload.provider ?? "openai",
+          mode: "ai_fallback",
+          prompt: null,
+          warnings: ["Backend returned invalid JSON. Raw response captured."],
+          result: {
+            raw_response: raw,
+          },
+          timestamp: new Date().toISOString(),
+        };
+      }
+    }
+
+    if (raw && typeof raw === "object") {
+      return raw as unknown as CopilotRunResponse;
+    }
+
+    return {
+      success: false,
+      command: payload.command,
+      provider: payload.provider ?? "openai",
+      mode: "ai_fallback",
+      prompt: null,
+      warnings: ["Copilot response was empty."],
+      result: {},
+      timestamp: new Date().toISOString(),
+    };
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Copilot request failed."));
+  }
+}
+
+export async function runCopilotCommandAsync(payload: {
+  command: string;
+  provider?: string;
+  context?: Record<string, unknown>;
+}): Promise<CopilotAsyncRunResponse> {
+  try {
+    const response = await api.post<CopilotAsyncRunResponse>("/copilot/run_async", {
+      command: payload.command,
+      provider: payload.provider ?? "openai",
+      context: payload.context ?? {},
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Copilot async request failed."));
+  }
+}
+
+export async function getCopilotJobStatus(jobId: string): Promise<CopilotJobStatusResponse> {
+  try {
+    const response = await api.get<CopilotJobStatusResponse>(`/copilot/status/${jobId}`);
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Copilot job status request failed."));
+  }
+}
+
+export async function registerCopilotProvider(payload: {
+  name: string;
+  systemPrompt?: string;
+  mockResponse?: string;
+  metadata?: Record<string, unknown>;
+}): Promise<CopilotProviderResponse> {
+  try {
+    const response = await api.post<CopilotProviderResponse>("/copilot/provider", {
+      name: payload.name,
+      system_prompt: payload.systemPrompt,
+      mock_response: payload.mockResponse,
+      metadata: payload.metadata ?? {},
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Copilot provider registration failed."));
+  }
 }

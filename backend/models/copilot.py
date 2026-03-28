@@ -1,0 +1,75 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
+
+
+CopilotMode = Literal["ai_fallback"]
+CopilotAsyncJobStatus = Literal["queued", "running", "completed", "failed"]
+CopilotProductionResultType = Literal["ai"]
+
+
+class CopilotRunRequest(BaseModel):
+    command: str = Field(min_length=1)
+    provider: str = Field(default="openai", min_length=1)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class CopilotRunResponse(BaseModel):
+    success: bool = True
+    command: str
+    provider: str
+    mode: CopilotMode
+    prompt: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    result: dict[str, Any] = Field(default_factory=dict)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class CopilotProviderRequest(BaseModel):
+    name: str = Field(min_length=1)
+    system_prompt: str | None = None
+    mock_response: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CopilotProviderResponse(BaseModel):
+    provider: str
+    registered: bool
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class CopilotProductionResult(BaseModel):
+    type: CopilotProductionResultType
+    summary: str
+    warnings: list[str] = Field(default_factory=list)
+    prompt: str | None = None
+    cached: bool = False
+    provider: str
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class CopilotAsyncRunResponse(BaseModel):
+    success: bool = True
+    job_id: str
+    status: CopilotAsyncJobStatus
+    command: str
+    provider: str
+    submitted_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class CopilotJobStatusResponse(BaseModel):
+    success: bool = True
+    job_id: str
+    status: CopilotAsyncJobStatus
+    command: str | None = None
+    provider: str | None = None
+    submitted_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error: str | None = None
+    error_code: str | None = None
+    result: CopilotProductionResult | None = None
