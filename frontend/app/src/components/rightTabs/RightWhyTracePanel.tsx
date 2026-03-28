@@ -255,33 +255,33 @@ export default function RightWhyTracePanel({ tag, onClose, onSelectTag }: RightW
       {!loading && !error && payload ? (
         <>
           <div className="monitor-frame space-y-1 p-3">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Summary</div>
+            <div className="text-[9px] font-semibold text-slate-500">Summary</div>
             <p className="max-w-full whitespace-pre-wrap break-words text-[12px] leading-relaxed text-slate-700">{toText(resolvedExplanation.summary)}</p>
           </div>
 
           <div className="monitor-frame space-y-1 p-3">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Behavior</div>
+            <div className="text-[9px] font-semibold text-slate-500">Behavior</div>
             <p className="max-w-full whitespace-pre-wrap break-words text-[12px] leading-relaxed text-slate-700">{toText(resolvedExplanation.behavior)}</p>
           </div>
 
           <div className="monitor-frame space-y-1 p-3">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Upstream</div>
+            <div className="text-[9px] font-semibold text-slate-500">Upstream</div>
             <p className="max-w-full whitespace-pre-wrap break-words text-[12px] leading-relaxed text-slate-700">{toText(resolvedExplanation.upstream)}</p>
           </div>
 
           <div className="monitor-frame space-y-1 p-3">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Downstream</div>
+            <div className="text-[9px] font-semibold text-slate-500">Downstream</div>
             <p className="max-w-full whitespace-pre-wrap break-words text-[12px] leading-relaxed text-slate-700">{toText(resolvedExplanation.downstream)}</p>
           </div>
 
           <div className="monitor-frame space-y-1 p-3">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">State</div>
+            <div className="text-[9px] font-semibold text-slate-500">State</div>
             <p className="max-w-full whitespace-pre-wrap break-words text-[12px] leading-relaxed text-slate-700">{toText(resolvedExplanation.state)}</p>
           </div>
 
           {resolvedExplanation.warnings.length > 0 ? (
             <div className="monitor-frame space-y-2 border-amber-200 bg-amber-50/40 p-3">
-              <div className="text-[10px] font-semibold uppercase tracking-wide text-amber-700">Warnings</div>
+              <div className="text-[9px] font-semibold text-amber-700">Warnings</div>
               <div className="space-y-1">
                 {resolvedExplanation.warnings.map((warning, index) => (
                   <p key={`narrative-warning-${index}`} className="max-w-full whitespace-pre-wrap break-words text-[11px] leading-relaxed text-amber-800">
@@ -294,7 +294,7 @@ export default function RightWhyTracePanel({ tag, onClose, onSelectTag }: RightW
 
           <div className="monitor-frame p-3">
             <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Why Debug</div>
+              <div className="text-[9px] font-semibold text-slate-500">Why Debug</div>
               <button type="button" className="command-btn" onClick={() => setDebugExpanded((value) => !value)}>
                 {debugExpanded ? "Collapse" : "Expand"}
               </button>
@@ -303,7 +303,7 @@ export default function RightWhyTracePanel({ tag, onClose, onSelectTag }: RightW
             {debugExpanded ? (
               <div className="space-y-3">
                 <section className="rounded border border-slate-200 bg-slate-50 p-2">
-                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Role / Classification</div>
+                  <div className="mb-1 text-[9px] font-semibold text-slate-500">Role / Classification</div>
                   <div className="mb-1 inline-flex items-center rounded border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
                     {toText(payload.debug?.classification?.selected_tag_role)}
                   </div>
@@ -311,7 +311,7 @@ export default function RightWhyTracePanel({ tag, onClose, onSelectTag }: RightW
                 </section>
 
                 <section className="rounded border border-slate-200 bg-slate-50 p-2">
-                  <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Ranked Upstream Chains</div>
+                  <div className="mb-2 text-[9px] font-semibold text-slate-500">Ranked Upstream Chains</div>
                   {resolvedStructure.ranked_upstream.length === 0 ? (
                     <p className="text-[11px] text-slate-500">No ranked upstream chains.</p>
                   ) : (
@@ -342,7 +342,7 @@ export default function RightWhyTracePanel({ tag, onClose, onSelectTag }: RightW
                 </section>
 
                 <section className="rounded border border-slate-200 bg-slate-50 p-2">
-                  <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Ranked Downstream Chains</div>
+                  <div className="mb-2 text-[9px] font-semibold text-slate-500">Ranked Downstream Chains</div>
                   {resolvedStructure.ranked_downstream.length === 0 ? (
                     <p className="text-[11px] text-slate-500">No ranked downstream chains.</p>
                   ) : (
@@ -373,7 +373,7 @@ export default function RightWhyTracePanel({ tag, onClose, onSelectTag }: RightW
                 </section>
 
                 <section className="rounded border border-slate-200 bg-slate-50 p-2">
-                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Merged Context</div>
+                  <div className="mb-1 text-[9px] font-semibold text-slate-500">Merged Context</div>
                   <div className="grid grid-cols-1 gap-1 text-[11px] text-slate-700">
                     <p className="break-all">parallel_upstream: {toText(resolvedStructure.merged_context.parallel_upstream.join(", "))}</p>
                     <p className="break-all">parallel_downstream: {toText(resolvedStructure.merged_context.parallel_downstream.join(", "))}</p>
@@ -381,7 +381,7 @@ export default function RightWhyTracePanel({ tag, onClose, onSelectTag }: RightW
                 </section>
 
                 <section className="rounded border border-slate-200 bg-slate-50 p-2">
-                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Chain Health</div>
+                  <div className="mb-1 text-[9px] font-semibold text-slate-500">Chain Health</div>
                   <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-slate-700">
                     <p>Total chains: {chainHealth.totalChains}</p>
                     <p>Healthy chains: {chainHealth.healthyCount}</p>
@@ -394,7 +394,7 @@ export default function RightWhyTracePanel({ tag, onClose, onSelectTag }: RightW
                 </section>
 
                 <section className="rounded border border-slate-200 bg-slate-50 p-2">
-                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Graph Summary</div>
+                  <div className="mb-1 text-[9px] font-semibold text-slate-500">Graph Summary</div>
                   <div className="grid grid-cols-1 gap-x-3 gap-y-1 text-[11px] text-slate-700 sm:grid-cols-2">
                     <p>Incoming edges: {toText(payload.debug?.graph?.incoming_edge_count)}</p>
                     <p>Outgoing edges: {toText(payload.debug?.graph?.outgoing_edge_count)}</p>
@@ -404,13 +404,13 @@ export default function RightWhyTracePanel({ tag, onClose, onSelectTag }: RightW
                 </section>
 
                 <section className="rounded border border-slate-200 bg-slate-50 p-2">
-                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Connected Edge Details</div>
+                  <div className="mb-1 text-[9px] font-semibold text-slate-500">Connected Edge Details</div>
                   {(payload.debug?.edges ?? []).length === 0 ? (
                     <p className="text-[11px] text-slate-500">No direct edges available.</p>
                   ) : (
                     <div className="max-h-44 overflow-auto rounded border border-slate-200 bg-white">
                       <table className="w-full table-fixed border-collapse text-[11px] text-slate-700">
-                        <thead className="bg-slate-100 text-[10px] uppercase tracking-wide text-slate-500">
+                        <thead className="bg-slate-100 text-[9px] text-slate-500">
                           <tr>
                             <th className="border-b border-slate-200 px-2 py-1 text-left">Edge</th>
                             <th className="border-b border-slate-200 px-2 py-1 text-left">Type</th>
@@ -434,7 +434,7 @@ export default function RightWhyTracePanel({ tag, onClose, onSelectTag }: RightW
                 </section>
 
                 <section className="rounded border border-slate-200 bg-slate-50 p-2">
-                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Neighbor Roles</div>
+                  <div className="mb-1 text-[9px] font-semibold text-slate-500">Neighbor Roles</div>
                   {(payload.debug?.neighbors ?? []).length === 0 ? (
                     <p className="text-[11px] text-slate-500">No immediate neighbors available.</p>
                   ) : (
@@ -444,7 +444,7 @@ export default function RightWhyTracePanel({ tag, onClose, onSelectTag }: RightW
                           <button type="button" className="font-semibold text-slate-800 hover:text-red-600" onClick={() => onSelectTag?.(neighbor.tag)}>
                             {neighbor.tag}
                           </button>
-                          <span className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-600">
+                          <span className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[9px] text-slate-600">
                             {toText(neighbor.role)}
                           </span>
                           <span className="text-slate-500">{toText(neighbor.type)} / {toText(neighbor.subtype)}</span>
@@ -474,7 +474,7 @@ export default function RightWhyTracePanel({ tag, onClose, onSelectTag }: RightW
                 >
                   <div className="flex items-start justify-between gap-3">
                     <span className="max-w-[65%] break-all text-xs font-semibold text-slate-800">{step.tag}</span>
-                    <span className="shrink-0 text-[10px] uppercase tracking-wide text-slate-500">
+                    <span className="shrink-0 text-[9px] text-slate-500">
                       d{step.depth} · {step.direction}
                     </span>
                   </div>

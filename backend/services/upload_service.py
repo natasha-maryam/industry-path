@@ -109,5 +109,18 @@ class UploadService:
 
         return UploadResult(project_id=project_id, files=records)
 
+    def list_files(self, project_id: str) -> list[ProjectFile]:
+        project_service.ensure_project(project_id)
+        rows = postgres_client.fetch_all(
+            """
+            SELECT id, project_id, original_name, stored_name, file_type, document_type, file_path, file_size, upload_status, uploaded_at
+            FROM project_files
+            WHERE project_id = %s
+            ORDER BY uploaded_at DESC, original_name ASC
+            """,
+            (project_id,),
+        )
+        return [ProjectFile.model_validate(row) for row in rows]
+
 
 upload_service = UploadService()

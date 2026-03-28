@@ -16,6 +16,19 @@ export type Project = {
   updated_at: string;
 };
 
+export type ProjectDocument = {
+  id: string;
+  project_id: string;
+  original_name: string;
+  stored_name: string;
+  file_type: string;
+  document_type: string;
+  file_path: string;
+  file_size: number | null;
+  upload_status: string;
+  uploaded_at: string;
+};
+
 export type PLCExportVendor = "siemens" | "rockwell" | "codesys" | "beckhoff" | "openplc" | "generic_st";
 
 export type ExportSourceMode = "live" | "version";
@@ -1189,6 +1202,10 @@ const resolveWsBaseUrl = (): string => {
   }
 
   if (typeof window !== "undefined") {
+    if (window.location.port === "5173") {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      return `${protocol}//${window.location.hostname}:8000`;
+    }
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     return `${protocol}//${window.location.host}`;
   }
@@ -1654,6 +1671,11 @@ export async function uploadDocuments(
   return response.data;
 }
 
+export async function getProjectDocuments(projectId: string): Promise<ProjectDocument[]> {
+  const response = await api.get<ProjectDocument[]>(`/projects/${projectId}/upload`);
+  return response.data;
+}
+
 export async function getGraph(projectId: string): Promise<PlantGraph> {
   const response = await api.get<PlantGraph>(`/projects/${projectId}/graph`);
   return response.data;
@@ -2076,8 +2098,7 @@ export async function analyzeFault(alarmTag: string, projectId?: string, selecte
 }
 
 export function createRuntimeTelemetrySocket(): WebSocket {
-  const base = api.defaults.baseURL ?? "http://127.0.0.1:8000/api";
-  const wsBase = base.replace(/^http:\/\//i, "ws://").replace(/^https:\/\//i, "wss://").replace(/\/$/, "");
+  const wsBase = resolveWsBaseUrl();
   return new WebSocket(`${wsBase}/runtime/stream`);
 }
 
@@ -2117,6 +2138,56 @@ export async function getDeterministicWhyTrace(tag: string, maxDepth = 4): Promi
     snapshot_id: "snapshot-00000000",
     steps: [],
   });
+}
+
+export async function getSystemContextForTag(tag: string, maxDepth = 4): Promise<Record<string, unknown> | null> {
+  const normalizedTag = tag.trim();
+  if (!normalizedTag) {
+    return null;
+  }
+
+  const encodedTag = encodeURIComponent(normalizedTag);
+  const candidateEndpoints = [
+    `/behavior/system-context/${encodedTag}`,
+    `/behavior/context/${encodedTag}`,
+    `/system-context/${encodedTag}`,
+  ];
+
+  for (const endpoint of candidateEndpoints) {
+    try {
+      const response = await api.get<Record<string, unknown>>(endpoint, {
+        params: { max_depth: maxDepth },
+      });
+      return unwrapData(response.data, response.data);
+    } catch (error) {
+      if (!axios.isAxiosError(error)) {
+        continue;
+      }
+      const status = error.response?.status;
+      if (status && status !== 404 && status !== 405) {
+        throw error;
+      }
+    }
+  }
+
+  try {
+    const whyTrace = await getDeterministicWhyTrace(normalizedTag, maxDepth);
+    return {
+      tag: whyTrace.tag,
+      available: whyTrace.available,
+      system_context: (whyTrace as unknown as Record<string, unknown>).system_context ?? null,
+      behavior: whyTrace.explanation?.behavior || whyTrace.behavior_summary || whyTrace.behavior_card || "",
+      impact: (whyTrace as unknown as Record<string, unknown>).impact ?? null,
+      trace: {
+        steps: whyTrace.steps,
+        structure: whyTrace.structure,
+      },
+      diagnostics: whyTrace.debug?.chains?.diagnostics ?? null,
+      why_engine: whyTrace,
+    };
+  } catch {
+    return null;
+  }
 }
 
 const toBehaviorSocketUrl = (wsBase: string): string => {
@@ -2201,8 +2272,7 @@ export async function getUNSRows(): Promise<UNSRow[]> {
 }
 
 export function createUNSSocket(): WebSocket {
-  const base = api.defaults.baseURL ?? "http://127.0.0.1:8000/api";
-  const wsBase = base.replace(/^http:\/\//i, "ws://").replace(/^https:\/\//i, "wss://").replace(/\/$/, "");
+  const wsBase = resolveWsBaseUrl();
   return new WebSocket(`${wsBase}/ws/uns`);
 }
 

@@ -1,9 +1,12 @@
 import type { RuntimeEvaluationCycle } from "../../services/api";
 import type { SimulationTraceIssue } from "../../services/api";
 import type { FaultAnalysisResult } from "../../services/api";
+import type { SystemContext, SystemImpact } from "../../intelligence/systemContext";
 
 type RightDiagnosticsTabProps = {
   diagnostics: RuntimeEvaluationCycle | null;
+  systemContext?: SystemContext | null;
+  impactSummary?: SystemImpact | null;
   simulationIssues?: SimulationTraceIssue[];
   faultAnalysis?: FaultAnalysisResult | null;
   analyzedTag?: string | null;
@@ -14,6 +17,8 @@ type RightDiagnosticsTabProps = {
 
 export default function RightDiagnosticsTab({
   diagnostics,
+  systemContext = null,
+  impactSummary = null,
   simulationIssues = [],
   faultAnalysis = null,
   analyzedTag = null,
@@ -21,9 +26,35 @@ export default function RightDiagnosticsTab({
   loading = false,
   error = null,
 }: RightDiagnosticsTabProps) {
+  const impact = impactSummary || {
+    cause: systemContext?.graph.upstream || [],
+    effect: systemContext?.graph.downstream || [],
+    impact: [
+      ...(systemContext?.graph.downstream || []),
+      ...(systemContext?.safety.alarm_tags || []),
+    ],
+  };
+
   if (!diagnostics) {
     return (
       <>
+        <div className="panel-subtitle">Cause -&gt; Effect -&gt; Impact</div>
+        <ul className="trace-chain trace-chain-compact">
+          <li>Cause: {impact.cause.join(", ") || "none"}</li>
+          <li>Effect: {impact.effect.join(", ") || "none"}</li>
+          <li>Impact: {impact.impact.join(", ") || "none"}</li>
+        </ul>
+
+        <div className="panel-subtitle">Safety Context</div>
+        <ul className="trace-chain">
+          <li>Alarms: {(systemContext?.safety.alarm_tags || []).join(", ") || "none"}</li>
+          <li>Trips: {(systemContext?.safety.trips || []).join(", ") || "none"}</li>
+          <li>Permissives: {(systemContext?.safety.permissives || []).join(", ") || "none"}</li>
+          <li>
+            Interlocks: {(systemContext?.safety.interlocks || []).map((item) => `${item.trigger} -> ${item.action}`).join("; ") || "none"}
+          </li>
+        </ul>
+
         <div className="panel-subtitle">Simulation Diagnostics</div>
         <ul className="trace-chain">
           {simulationIssues.length > 0 ? (
@@ -54,6 +85,23 @@ export default function RightDiagnosticsTab({
 
   return (
     <>
+      <div className="panel-subtitle">Cause -&gt; Effect -&gt; Impact</div>
+      <ul className="trace-chain trace-chain-compact">
+        <li>Cause: {impact.cause.join(", ") || "none"}</li>
+        <li>Effect: {impact.effect.join(", ") || "none"}</li>
+        <li>Impact: {impact.impact.join(", ") || "none"}</li>
+      </ul>
+
+      <div className="panel-subtitle">Safety Context</div>
+      <ul className="trace-chain">
+        <li>Alarms: {(systemContext?.safety.alarm_tags || []).join(", ") || "none"}</li>
+        <li>Trips: {(systemContext?.safety.trips || []).join(", ") || "none"}</li>
+        <li>Permissives: {(systemContext?.safety.permissives || []).join(", ") || "none"}</li>
+        <li>
+          Interlocks: {(systemContext?.safety.interlocks || []).map((item) => `${item.trigger} -> ${item.action}`).join("; ") || "none"}
+        </li>
+      </ul>
+
       <div className="panel-subtitle">Simulation Diagnostics</div>
       <ul className="trace-chain">
         <li>Issue count: {simulationIssues.length}</li>

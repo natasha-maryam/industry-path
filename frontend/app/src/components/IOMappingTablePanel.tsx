@@ -12,7 +12,6 @@ export type IOMappingTablePanelProps = {
   loading?: boolean;
   failedMessage?: string | null;
   onRetry?: () => void;
-  onGenerateMapping?: () => void;
   onAutoAssignChannels?: () => void;
   onExportCsv?: () => void;
   onValidateMapping?: () => void;
@@ -40,7 +39,6 @@ export default function IOMappingTablePanel({
   loading = false,
   failedMessage = null,
   onRetry,
-  onGenerateMapping,
   onAutoAssignChannels,
   onExportCsv,
   onValidateMapping,
@@ -56,7 +54,6 @@ export default function IOMappingTablePanel({
 
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [tagFilter, setTagFilter] = useState<string>("all");
-  const [equipmentFilter, setEquipmentFilter] = useState<string>("all");
   const [pageSize, setPageSize] = useState<number>(defaultPageSize);
   const [page, setPage] = useState<number>(1);
 
@@ -106,19 +103,11 @@ export default function IOMappingTablePanel({
     return [...new Set(options)].sort((left, right) => left.localeCompare(right));
   }, [rows]);
 
-  const equipmentOptions = useMemo<string[]>(() => {
-    const options = rows.map((row) => row.equipment_id).filter((value) => value.trim().length > 0);
-    return [...new Set(options)].sort((left, right) => left.localeCompare(right));
-  }, [rows]);
-
   const filteredRows = useMemo<RowWithValidation[]>(() => {
     const query = normalizeToken(searchQuery);
 
     return rowsWithValidation.filter((row) => {
       if (tagFilter !== "all" && row.tag !== tagFilter) {
-        return false;
-      }
-      if (equipmentFilter !== "all" && row.equipment_id !== equipmentFilter) {
         return false;
       }
 
@@ -142,7 +131,7 @@ export default function IOMappingTablePanel({
 
       return haystack.includes(query);
     });
-  }, [equipmentFilter, rowsWithValidation, searchQuery, tagFilter]);
+  }, [rowsWithValidation, searchQuery, tagFilter]);
 
   const totalPages = useMemo<number>(() => Math.max(1, Math.ceil(filteredRows.length / pageSize)), [filteredRows.length, pageSize]);
 
@@ -151,10 +140,6 @@ export default function IOMappingTablePanel({
     const start = (safePage - 1) * pageSize;
     return filteredRows.slice(start, start + pageSize);
   }, [filteredRows, page, pageSize, totalPages]);
-
-  if (loading) {
-    return <section className="io-mapping-table-panel io-mapping-state">Loading IO mappings...</section>;
-  }
 
   if (failedMessage) {
     return (
@@ -178,9 +163,6 @@ export default function IOMappingTablePanel({
     <section className="io-mapping-table-panel">
       {warningCount > 0 ? <div className="io-mapping-warning">Validation warnings found ({warningCount}). Review highlighted rows; workspace remains active.</div> : null}
       <div className="io-mapping-actions">
-        <button type="button" onClick={onGenerateMapping} disabled={!onGenerateMapping || loading}>
-          Generate Mapping
-        </button>
         <button type="button" onClick={onAutoAssignChannels} disabled={!onAutoAssignChannels || loading || rows.length === 0}>
           Auto-Assign Channels
         </button>
@@ -216,24 +198,6 @@ export default function IOMappingTablePanel({
           >
             <option value="all">All</option>
             {tagOptions.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label>
-          Equipment
-          <select
-            value={equipmentFilter}
-            onChange={(event) => {
-              setEquipmentFilter(event.target.value);
-              setPage(1);
-            }}
-          >
-            <option value="all">All</option>
-            {equipmentOptions.map((option) => (
               <option key={option} value={option}>
                 {option}
               </option>

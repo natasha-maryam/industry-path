@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { ChevronDown } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ControlLoopRecord, EngineeringTableResponseRow, IOMappingTableRow, SimulationTracePoint } from "../../services/api";
 
 type RightControlLoopsTabProps = {
@@ -80,6 +81,35 @@ export default function RightControlLoopsTab({
   onNavigateToST,
   onNavigateToIO,
 }: RightControlLoopsTabProps) {
+  const [openMenuLoopId, setOpenMenuLoopId] = useState<string | null>(null);
+  const openMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!openMenuLoopId) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event: MouseEvent): void => {
+      if (openMenuRef.current && event.target instanceof Node && !openMenuRef.current.contains(event.target)) {
+        setOpenMenuLoopId(null);
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setOpenMenuLoopId(null);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleEscape);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [openMenuLoopId]);
+
   const rowByTagToken = useMemo(() => {
     const map = new Map<string, EngineeringTableResponseRow>();
     for (const row of engineeringRows) {
@@ -224,6 +254,16 @@ export default function RightControlLoopsTab({
                   state: "—",
                   status: "inactive" as const,
                 };
+                const loopActions = [
+                  { label: "View Loop", onClick: () => onViewLoop(loop) },
+                  { label: "Edit Strategy", onClick: () => onEditStrategy(loop) },
+                  { label: "Generate Logic", onClick: () => onGenerateLogic(loop) },
+                  { label: "Trace Loop", onClick: () => onTraceLoop(loop) },
+                  { label: "Simulate", onClick: () => onSimulate(loop) },
+                  ...(onNavigateToST ? [{ label: "Open ST", onClick: () => onNavigateToST(loop) }] : []),
+                  ...(onNavigateToIO ? [{ label: "Open IO", onClick: () => onNavigateToIO(loop) }] : []),
+                ];
+                const isMenuOpen = openMenuLoopId === loop.id;
                 return (
                   <tr
                     key={loop.id}
@@ -250,13 +290,40 @@ export default function RightControlLoopsTab({
                     <td>{runtime.status}</td>
                     <td>
                       <div className="plant-table-actions" onClick={(event) => event.stopPropagation()}>
-                        <button className="command-btn" type="button" onClick={() => onViewLoop(loop)}>View Loop</button>
-                        <button className="command-btn" type="button" onClick={() => onEditStrategy(loop)}>Edit Strategy</button>
-                        <button className="command-btn" type="button" onClick={() => onGenerateLogic(loop)}>Generate Logic</button>
-                        <button className="command-btn" type="button" onClick={() => onTraceLoop(loop)}>Trace Loop</button>
-                        <button className="command-btn" type="button" onClick={() => onSimulate(loop)}>Simulate</button>
-                        <button className="command-btn" type="button" onClick={() => onNavigateToST?.(loop)}>Open ST</button>
-                        <button className="command-btn" type="button" onClick={() => onNavigateToIO?.(loop)}>Open IO</button>
+                        <div className="table-row-menu" ref={isMenuOpen ? openMenuRef : null}>
+                          <button
+                            className={`command-btn table-row-menu-trigger ${isMenuOpen ? "active" : ""}`}
+                            type="button"
+                            aria-haspopup="menu"
+                            aria-expanded={isMenuOpen}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setOpenMenuLoopId((current) => (current === loop.id ? null : loop.id));
+                            }}
+                          >
+                            Actions
+                            <ChevronDown size={11} />
+                          </button>
+                          {isMenuOpen ? (
+                            <div className="table-row-menu-popover" role="menu">
+                              {loopActions.map((action) => (
+                                <button
+                                  key={action.label}
+                                  className="command-btn table-row-menu-item"
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setOpenMenuLoopId(null);
+                                    action.onClick();
+                                  }}
+                                >
+                                  {action.label}
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
                       </div>
                     </td>
                   </tr>

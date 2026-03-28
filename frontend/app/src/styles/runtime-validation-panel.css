@@ -67,7 +67,7 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(130px, 1fr));
   gap: 0.35rem;
-  font-size: 0.64rem;
+  font-size: 0.56rem;
   color: #324150;
 }
 
@@ -79,8 +79,8 @@
 }
 
 .runtime-control-actions .command-btn {
-  font-size: 0.6rem;
-  padding: 0.14rem 0.4rem;
+  font-size: 0.52rem;
+  padding: 0.1rem 0.3rem;
 }
 
 .runtime-validation-content {
@@ -272,22 +272,40 @@
 }
 
 .runtime-force-panel {
-  margin-top: 0.45rem;
-  border-top: 1px solid #d5dee8;
-  padding-top: 0.45rem;
+  margin-top: 0.55rem;
+  border: 1px solid #d5dee8;
+  border-radius: 8px;
+  background: #fbfdff;
+  padding: 0.8rem 0.9rem;
+}
+
+.runtime-force-panel h4 {
+  margin: 0 0 0.7rem;
+  font-size: 0.66rem;
+  color: #2c4155;
 }
 
 .runtime-force-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(140px, 1fr));
-  gap: 0.35rem;
-  align-items: end;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+  align-items: stretch;
 }
 
-.runtime-force-grid label {
+.runtime-force-field {
   display: grid;
-  gap: 0.14rem;
-  font-size: 0.6rem;
+  grid-template-rows: auto 1fr;
+  gap: 0.18rem;
+  font-size: 0.52rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: #4e6478;
+  min-width: 0;
+}
+
+.runtime-force-field-label {
+  font-size: 0.52rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   font-weight: 700;
@@ -299,34 +317,57 @@
   border: 1px solid #bcc8d4;
   background: #f8fbfe;
   border-radius: 4px;
-  padding: 0.26rem 0.36rem;
-  font-size: 0.66rem;
+  padding: 0.22rem 0.34rem;
+  font-size: 0.56rem;
   color: #243648;
+  min-height: 36px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.runtime-force-readout-wrap {
+  min-width: 0;
 }
 
 .runtime-force-readout {
   border: 1px solid #d1d9e2;
   border-radius: 4px;
   background: #f7fbff;
-  padding: 0.26rem 0.34rem;
+  padding: 0.22rem 0.34rem;
   display: grid;
-  gap: 0.12rem;
-  font-size: 0.62rem;
+  gap: 0.08rem;
+  font-size: 0.54rem;
   color: #435a6f;
+  min-height: 36px;
+  align-content: center;
+  box-sizing: border-box;
+  width: 100%;
 }
 
 .runtime-force-actions {
-  display: inline-flex;
-  gap: 0.3rem;
-  margin-top: 0.35rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.38rem;
+  margin-top: 0.7rem;
+}
+
+.runtime-force-actions .command-btn {
+  font-size: 0.52rem;
+  padding: 0.1rem 0.3rem;
 }
 
 .runtime-force-status {
   display: grid;
   gap: 0.14rem;
-  margin-top: 0.35rem;
-  font-size: 0.62rem;
+  margin-top: 0.7rem;
+  font-size: 0.54rem;
   color: #4e6478;
+}
+
+@media (max-width: 900px) {
+  .runtime-force-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .runtime-force-ok {

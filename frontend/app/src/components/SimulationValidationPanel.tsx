@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Clock3, XCircle } from "lucide-react";
 import type { PanelStatus, SimulationValidationPanelResponse } from "../services/api";
+import RuntimeForcePanel from "./RuntimeForcePanel";
 import "../styles/simulation-validation-panel.css";
 
 type ScenarioKey =
@@ -56,6 +57,19 @@ type SimulationValidationPanelProps = {
   loading?: boolean;
   failedMessage?: string | null;
   onRetry?: () => void;
+  forceableInputs?: Array<{
+    tag: string;
+    io_type: string;
+    type: import("../services/api").RuntimeSignalType;
+    current_value: unknown;
+    forced: boolean;
+    forced_at: string | null;
+  }>;
+  actionLoading?: boolean;
+  onApplyInputForce?: (payload: { tag: string; value: unknown; type: import("../services/api").RuntimeSignalType }) => Promise<void>;
+  onClearInputForce?: (tag: string) => Promise<void>;
+  onRefreshInputForceState?: () => Promise<void>;
+  onRunEvaluationCycle?: () => Promise<void>;
   requiredPreviousStep?: string;
 };
 
@@ -148,6 +162,12 @@ export default function SimulationValidationPanel({
   loading = false,
   failedMessage = null,
   onRetry,
+  forceableInputs = [],
+  actionLoading = false,
+  onApplyInputForce,
+  onClearInputForce,
+  onRefreshInputForceState,
+  onRunEvaluationCycle,
   requiredPreviousStep = "Runtime Validation",
 }: SimulationValidationPanelProps) {
   const [expanded, setExpanded] = useState<Record<ScenarioKey, boolean>>({} as Record<ScenarioKey, boolean>);
@@ -180,12 +200,35 @@ export default function SimulationValidationPanel({
         <button className="simulation-validation-retry-btn" onClick={onRetry} type="button" disabled={!onRetry}>
           Retry
         </button>
+        <RuntimeForcePanel
+          title="Input Force Simulation"
+          forceableInputs={forceableInputs}
+          actionLoading={actionLoading}
+          validatedAt={data?.validated_at}
+          onApplyInputForce={onApplyInputForce}
+          onClearInputForce={onClearInputForce}
+          onRefreshInputForceState={onRefreshInputForceState}
+          onRunEvaluationCycle={onRunEvaluationCycle}
+        />
       </section>
     );
   }
 
   if (!data) {
-    return <section className="simulation-validation-panel simulation-validation-state">No simulation validation results yet. Complete {requiredPreviousStep} first.</section>;
+    return (
+      <section className="simulation-validation-panel simulation-validation-state">
+        <span>No simulation validation results yet. Complete {requiredPreviousStep} first.</span>
+        <RuntimeForcePanel
+          title="Input Force Simulation"
+          forceableInputs={forceableInputs}
+          actionLoading={actionLoading}
+          onApplyInputForce={onApplyInputForce}
+          onClearInputForce={onClearInputForce}
+          onRefreshInputForceState={onRefreshInputForceState}
+          onRunEvaluationCycle={onRunEvaluationCycle}
+        />
+      </section>
+    );
   }
 
   return (
@@ -250,6 +293,17 @@ export default function SimulationValidationPanel({
           </article>
         ))}
       </div>
+
+      <RuntimeForcePanel
+        title="Input Force Simulation"
+        forceableInputs={forceableInputs}
+        actionLoading={actionLoading}
+        validatedAt={data.validated_at}
+        onApplyInputForce={onApplyInputForce}
+        onClearInputForce={onClearInputForce}
+        onRefreshInputForceState={onRefreshInputForceState}
+        onRunEvaluationCycle={onRunEvaluationCycle}
+      />
     </section>
   );
 }

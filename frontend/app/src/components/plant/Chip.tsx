@@ -6,6 +6,7 @@ type ChipProps = {
   label: string;
   tone?: ChipTone;
   onClick?: (value: string) => void;
+  compact?: boolean;
 };
 
 type ChipListProps = {
@@ -14,6 +15,7 @@ type ChipListProps = {
   limit?: number;
   emptyLabel?: string;
   onChipClick?: (value: string) => void;
+  compact?: boolean;
 };
 
 const toneClasses: Record<ChipTone, string> = {
@@ -22,11 +24,10 @@ const toneClasses: Record<ChipTone, string> = {
   neutral: "bg-slate-100 text-slate-700 hover:bg-slate-200",
 };
 
-export const Chip = memo(function Chip({ label, tone = "neutral", onClick }: ChipProps): ReactElement {
+export const Chip = memo(function Chip({ label, tone = "neutral", onClick, compact = false }: ChipProps): ReactElement {
   const interactive = typeof onClick === "function";
-  const className = `inline-flex max-w-[150px] items-center truncate rounded px-2 py-0.5 text-xs font-medium ${toneClasses[tone]} ${
-    interactive ? "cursor-pointer" : ""
-  }`;
+  const sizeClasses = compact ? "max-w-full px-1.5 py-0.5 text-[9px] leading-tight whitespace-normal break-words text-left" : "max-w-[150px] px-2 py-0.5 text-xs truncate";
+  const className = `inline-flex items-center rounded font-medium ${sizeClasses} ${toneClasses[tone]} ${interactive ? "cursor-pointer" : ""}`;
 
   if (interactive) {
     return (
@@ -52,24 +53,25 @@ export const ChipList = memo(function ChipList({
   limit = 3,
   emptyLabel = "—",
   onChipClick,
+  compact = false,
 }: ChipListProps): ReactElement {
   const normalizedValues = useMemo(() => values.filter((item) => item && item.trim().length > 0), [values]);
 
   const visibleValues = useMemo(() => normalizedValues.slice(0, limit), [normalizedValues, limit]);
 
   if (normalizedValues.length === 0) {
-    return <span className="text-slate-400">{emptyLabel}</span>;
+    return <span className={`${compact ? "text-[10px]" : "text-sm"} text-slate-400`}>{emptyLabel}</span>;
   }
 
   const overflowCount = Math.max(0, normalizedValues.length - visibleValues.length);
   const allValuesTitle = normalizedValues.join(", ");
 
   return (
-    <div className="flex max-w-[220px] items-center gap-1 overflow-hidden" title={allValuesTitle}>
+    <div className={`${compact ? "flex max-w-full flex-wrap items-start gap-1" : "flex max-w-[220px] items-center gap-1 overflow-hidden"}`} title={allValuesTitle}>
       {visibleValues.map((value) => (
-        <Chip key={value} label={value} tone={tone} onClick={onChipClick} />
+        <Chip key={value} label={value} tone={tone} onClick={onChipClick} compact={compact} />
       ))}
-      {overflowCount > 0 ? <span className="text-xs text-slate-500">+{overflowCount}</span> : null}
+      {overflowCount > 0 ? <span className={`${compact ? "text-[10px]" : "text-xs"} text-slate-500`}>+{overflowCount}</span> : null}
     </div>
   );
 });

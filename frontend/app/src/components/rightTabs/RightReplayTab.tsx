@@ -37,9 +37,9 @@ export default function RightReplayTab({
       />
 
       <dl className="kv kv-technical">
-        <dt>TRACE</dt>
+        <dt>Trace</dt>
         <dd className="value-mono">{hasTrace ? "1" : "0"}</dd>
-        <dt>SAMPLES</dt>
+        <dt>Samples</dt>
         <dd className="value-mono">{sampleCount}</dd>
         <dt>Detected Issues</dt>
         <dd className="value-mono">{replayIssues.length}</dd>

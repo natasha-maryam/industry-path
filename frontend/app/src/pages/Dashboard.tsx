@@ -11,16 +11,27 @@ import {
   Upload,
 } from "lucide-react";
 import { Toaster, toast } from "react-hot-toast";
-import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
-import BottomPanels from "../components/BottomPanels";
-import type { GeneratedLogicFile, STDiagnosticMarker, STJumpLocation } from "../components/CodeExplorerPanel";
+import { Separator } from "react-resizable-panels";
+import ActivityBar from "../components/ActivityBar";
+import CodeExplorerPanel, { type GeneratedLogicFile, type STDiagnosticMarker, type STJumpLocation } from "../components/CodeExplorerPanel";
 import CommandBar, { type ToolbarAction } from "../components/CommandBar";
 import DetailsPanel, { type RightTab } from "../components/DetailsPanel";
+import GraphWorkspace from "../components/GraphWorkspace";
+import IOMappingTablePanel from "../components/IOMappingTablePanel";
+import MainWorkspaceRouter from "../components/MainWorkspaceRouter";
 import EngineeringDeterministicTable from "../components/plant/EngineeringDeterministicTable";
-import ProjectNavigator from "../components/ProjectNavigator";
+import RightControlLoopsTab from "../components/rightTabs/RightControlLoopsTab";
+import RightDiagnosticsTab from "../components/rightTabs/RightDiagnosticsTab";
+import RuntimeValidationPanel from "../components/RuntimeValidationPanel";
+import SidebarModeProjects from "../components/SidebarModeProjects";
+import SidebarModeSettings from "../components/SidebarModeSettings";
+import SimulationValidationPanel from "../components/SimulationValidationPanel";
+import VersionsWorkspace from "../components/versioning/VersionsWorkspace";
+import WorkspaceActionPanel from "../components/WorkspaceActionPanel";
 import type { RuntimeValidationPanelData } from "../components/RuntimeValidationPanel";
-import type { STVerificationIssueItem } from "../components/STVerificationPanel";
 import { useWorkspaceContext } from "../context/WorkspaceContext";
+import { mapSystemContextToPanelView } from "../intelligence/mapSystemContextToPanelView";
+import { buildBehavior, buildImpact, buildSystemContext, type SystemContext, type SystemImpact } from "../intelligence/systemContext";
 import {
   createSnapshot,
   diffVersions,
@@ -47,6 +58,8 @@ import {
   getControlLoop,
   getControlLoops,
   getMonitoring,
+  getProjectDocuments,
+  getSystemContextForTag,
   getReplay,
   getRuntimeTags,
   getRuntimeState,
@@ -102,16 +115,46 @@ import {
   type ExportDeploymentState,
   type EngineeringTableResponse,
   type EngineeringTableResponseRow,
+  type ProjectDocument,
   type Project,
 } from "../services/api";
 import "../styles/dashboard.css";
-import type { ModuleState, WorkspaceModuleId, WorkspacePanelState } from "../types/workspace";
-import { MODULE_DEFAULT_STATE } from "../types/workspace";
+import type { MainWorkspaceViewId, ModuleState, WorkspaceModuleId, WorkspacePanelState } from "../types/workspace";
+import { MODULE_DEFAULT_STATE, MODULE_LABELS } from "../types/workspace";
 
 type EquipmentType = "Tank" | "Pump" | "Sensor" | "Valve";
 type BottomView = "simulation" | "monitoring" | "logic";
 type CodePanelMode = "control_logic" | "generated_st" | "verification" | "version_diff";
 type MonitoringPanelMode = "io_mapping" | "runtime" | "versions";
+type ActivityMode = "projects" | "settings";
+type SettingsNavItemId =
+  | "general"
+  | "project_settings"
+  | "ai_connectors"
+  | "runtime_connections"
+  | "export_integrations";
+type ProjectFeatureId = "versions";
+
+type UIShellState = {
+  activeSidebarMode: ActivityMode;
+  activeWorkspaceModule: WorkspaceModuleId;
+  activeMainView: MainWorkspaceViewId;
+  selectedRowId: string;
+  activeRightTab: RightTab;
+};
+
+type ThinUIState = {
+  activeSidebarMode: ActivityMode;
+  activeView: MainWorkspaceViewId;
+  selectedProject: string;
+  selectedRow: string;
+  activeTab: RightTab;
+};
+
+type NavigatorSelection = {
+  type: "project" | "module" | "feature" | "node";
+  id: string;
+};
 
 type ControlLoopModalState = {
   open: boolean;
@@ -161,6 +204,32 @@ const EMPTY_EQUIPMENT: Equipment = {
   measures: [],
   controlPath: [],
   metadataConfidence: {},
+};
+
+const ACTION_PROGRESS_LABELS: Record<ToolbarAction, string> = {
+  upload_documents: "Uploading Documents",
+  parse_plant_model: "Parsing Plant Model",
+  detect_control_loops: "Detecting Control Loops",
+  generate_logic: "Generating Logic",
+  generate_io_mapping: "Generating IO Mapping",
+  run_simulation: "Running Simulation",
+  export_logic: "Exporting Logic",
+  deploy_runtime: "Deploying Runtime",
+  start_monitoring: "Starting Monitoring",
+  analyze_fault: "Analyzing Fault",
+  replay_event: "Loading Replay Event",
+  versions: "Loading Versions",
+};
+
+const ACTION_MODULE_MAP: Partial<Record<ToolbarAction, WorkspaceModuleId>> = {
+  upload_documents: "documents",
+  parse_plant_model: "plant_model",
+  detect_control_loops: "control_loops",
+  generate_logic: "control_logic",
+  generate_io_mapping: "io_mapping",
+  run_simulation: "simulation",
+  deploy_runtime: "runtime",
+  start_monitoring: "monitoring",
 };
 
 const toEquipmentType = (nodeType: string): EquipmentType => {
@@ -432,6 +501,19 @@ export default function Dashboard() {
 
   const [activeAction, setActiveAction] = useState<ToolbarAction>("upload_documents");
   const [selectedNode, setSelectedNode] = useState<string>("");
+  const [selectedSystemContextPayload, setSelectedSystemContextPayload] = useState<Record<string, unknown> | null>(null);
+  const [systemContextLoading, setSystemContextLoading] = useState<boolean>(false);
+  const [systemContextError, setSystemContextError] = useState<string | null>(null);
+  const [uiShell, setUIShell] = useState<UIShellState>({
+    activeSidebarMode: "projects",
+    activeWorkspaceModule: "plant_model",
+    activeMainView: "table",
+    selectedRowId: "",
+    activeRightTab: "Details",
+  });
+  const [activeSettingsItem, setActiveSettingsItem] = useState<SettingsNavItemId>("general");
+  const [activeProjectFeature, setActiveProjectFeature] = useState<ProjectFeatureId | null>(null);
+  const [navigatorSelection, setNavigatorSelection] = useState<NavigatorSelection | null>({ type: "module", id: "plant_model" });
   const [panelState, setPanelState] = useState<WorkspacePanelState>({
     activeModule: "plant_model",
     activeRightTab: "Details",
@@ -439,20 +521,28 @@ export default function Dashboard() {
     codePanelMode: "control_logic",
     monitoringPanelMode: "io_mapping",
   });
+  const activeActivity = uiShell.activeSidebarMode;
+  const selectedRow = uiShell.selectedRowId;
+  const activeMainView = uiShell.activeMainView;
+  const activeModule = panelState.activeModule;
   const activeTab = panelState.activeRightTab;
   const activeBottomView = panelState.activeBottomView;
   const codePanelMode = panelState.codePanelMode;
   const monitoringPanelMode = panelState.monitoringPanelMode;
+  const uiState = useMemo<ThinUIState>(
+    () => ({
+      activeSidebarMode: activeActivity,
+      activeView: activeMainView,
+      selectedProject: selectedProjectId,
+      selectedRow,
+      activeTab,
+    }),
+    [activeActivity, activeMainView, selectedProjectId, selectedRow, activeTab]
+  );
 
   const setActiveTab = (tab: RightTab): void => {
     setPanelState((previous) => ({ ...previous, activeRightTab: tab }));
-    if (tab === "Versions") {
-      setMonitoringPanelMode("versions");
-      setActiveBottomView("monitoring");
-      if (selectedProjectId) {
-        void refreshVersionHistory(selectedProjectId);
-      }
-    }
+    setUIShell((previous) => ({ ...previous, activeRightTab: tab }));
     if (tab === "P&ID Changes" && selectedProjectId) {
       void refreshPIDChanges();
     }
@@ -472,7 +562,76 @@ export default function Dashboard() {
 
   const setActiveModule = (moduleId: WorkspaceModuleId): void => {
     setPanelState((previous) => ({ ...previous, activeModule: moduleId }));
+    setUIShell((previous) => ({ ...previous, activeWorkspaceModule: moduleId }));
   };
+
+  const setActiveSidebarMode = (mode: ActivityMode): void => {
+    setUIShell((previous) => ({ ...previous, activeSidebarMode: mode }));
+  };
+
+  const setActiveMainView = (view: MainWorkspaceViewId): void => {
+    setUIShell((previous) => ({ ...previous, activeMainView: view }));
+  };
+
+  const setSelectedRowId = (rowId: string): void => {
+    setUIShell((previous) => ({ ...previous, selectedRowId: rowId }));
+  };
+
+  const refreshProjectDocuments = useCallback(async (projectId: string | null): Promise<void> => {
+    if (!projectId) {
+      return;
+    }
+
+    try {
+      const documents = await getProjectDocuments(projectId);
+      setProjectDocumentsById((previous) => ({ ...previous, [projectId]: documents }));
+    } catch {
+      setProjectDocumentsById((previous) => ({ ...previous, [projectId]: [] }));
+    }
+  }, []);
+
+  const handleSettingsNavSelect = (item: SettingsNavItemId): void => {
+    setActiveSettingsItem(item);
+    if (item === "project_settings") {
+      setActiveProjectFeature("versions");
+      setMonitoringPanelMode("versions");
+      setActiveBottomView("monitoring");
+      setActiveModule("monitoring");
+      setActiveMainView("monitoring");
+      return;
+    }
+    if (item === "runtime_connections") {
+      setActiveProjectFeature(null);
+      setMonitoringPanelMode("runtime");
+      setActiveBottomView("monitoring");
+      setActiveTab("Diagnostics");
+      setActiveModule("runtime");
+      setActiveMainView("monitoring");
+      return;
+    }
+    if (item === "export_integrations") {
+      setActiveProjectFeature(null);
+      setCodePanelMode("control_logic");
+      setActiveBottomView("logic");
+      setActiveModule("control_logic");
+      setActiveMainView("logic");
+      return;
+    }
+    setActiveProjectFeature(null);
+    setActiveTab("Details");
+    setActiveModule("plant_model");
+    setActiveMainView("graph");
+  };
+
+  const handleProjectFeatureSelect = (feature: ProjectFeatureId): void => {
+    setNavigatorSelection({ type: "feature", id: feature });
+    setActiveProjectFeature(feature);
+    setMonitoringPanelMode("versions");
+    setActiveBottomView("monitoring");
+    setActiveMainView("monitoring");
+  };
+
+
   const [tracePath, setTracePath] = useState<string[]>([]);
   const [replayPoint, setReplayPoint] = useState<number>(64);
   const [showLogic, setShowLogic] = useState<boolean>(false);
@@ -544,6 +703,7 @@ export default function Dashboard() {
   const [liveEngineeringRowsLoading, setLiveEngineeringRowsLoading] = useState<boolean>(false);
   const [behaviorRefreshKey, setBehaviorRefreshKey] = useState<number>(0);
   const [selectedWhyTraceTag, setSelectedWhyTraceTag] = useState<string | null>(null);
+  const [whyFocusToken, setWhyFocusToken] = useState<number>(0);
   const [unsTableRowsOverride, setUnsTableRowsOverride] = useState<EngineeringTableResponseRow[] | null>(null);
   const [productionAuthToken, setProductionAuthToken] = useState<string>("");
   const [runtimeValidationData, setRuntimeValidationData] = useState<RuntimeValidationPanelData | null>(null);
@@ -566,6 +726,7 @@ export default function Dashboard() {
   const [selectedReplayTag, setSelectedReplayTag] = useState<string>("");
   const [statusText, setStatusText] = useState<string>("Loading projects...");
   const [selectedUploadFiles, setSelectedUploadFiles] = useState<string[]>([]);
+  const [projectDocumentsById, setProjectDocumentsById] = useState<Record<string, ProjectDocument[]>>({});
   const [isParsing, setIsParsing] = useState<boolean>(false);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState<boolean>(false);
@@ -630,6 +791,7 @@ export default function Dashboard() {
   const behaviorHydrationSignatureRef = useRef<string>("");
   const rightResizeStartRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const exportReadinessRequestIdRef = useRef<number>(0);
+  const systemContextRequestIdRef = useRef<number>(0);
 
   const setModuleState = (moduleId: WorkspaceModuleId, state: ModuleState): void => {
     setModuleStates((previous) => ({ ...previous, [moduleId]: state }));
@@ -686,7 +848,8 @@ export default function Dashboard() {
         message,
         updatedAt: new Date().toISOString(),
       });
-      setPanelState((previous) => ({ ...previous, activeModule: "control_loops", activeRightTab: "Control Loops" }));
+      setActiveModule("control_loops");
+      setActiveTab("Control Loops");
       setStatusText(`${message}.`);
     } catch {
       setControlLoopsError("Control loop detection failed.");
@@ -818,11 +981,13 @@ export default function Dashboard() {
       detect_control_loops: !selectedProjectId,
       generate_logic: !selectedProjectId,
       generate_io_mapping: !selectedProjectId,
+      run_simulation: !selectedProjectId,
       export_logic: !selectedProjectId,
       deploy_runtime: !selectedProjectId,
       start_monitoring: !selectedProjectId,
       analyze_fault: !selectedProjectId,
       replay_event: !selectedProjectId,
+      versions: !selectedProjectId,
     }),
     [selectedProjectId]
   );
@@ -843,14 +1008,38 @@ export default function Dashboard() {
     if (pipelineStatuses.io_mapping === "running") {
       return "generate_io_mapping";
     }
+    if (pipelineStatuses.simulation_validation === "running") {
+      return "run_simulation";
+    }
     if (pipelineStatuses.runtime_validation === "running") {
       return "deploy_runtime";
     }
     if (isRuntimeActionBusy) {
       return "start_monitoring";
     }
+    if (isControlLoopsLoading) {
+      return "detect_control_loops";
+    }
+    if (isFaultAnalysisLoading) {
+      return "analyze_fault";
+    }
+    if (versioningLoading) {
+      return "versions";
+    }
     return null;
-  }, [isExportingLogic, isParsing, isRuntimeActionBusy, isUploading, pipelineStatuses.io_mapping, pipelineStatuses.runtime_validation, pipelineStatuses.st_generation]);
+  }, [
+    isControlLoopsLoading,
+    isExportingLogic,
+    isFaultAnalysisLoading,
+    isParsing,
+    isRuntimeActionBusy,
+    isUploading,
+    pipelineStatuses.io_mapping,
+    pipelineStatuses.runtime_validation,
+    pipelineStatuses.simulation_validation,
+    pipelineStatuses.st_generation,
+    versioningLoading,
+  ]);
 
   const directPLCFeatureEnabled = useMemo<boolean>(() => {
     const flag = String(import.meta.env.VITE_DIRECT_PLC_DEPLOYMENT_ENABLED || "false").toLowerCase();
@@ -1152,6 +1341,190 @@ export default function Dashboard() {
     };
   }, [graphNodes, selectedNode]);
 
+  const fallbackSystemContext = useMemo<SystemContext | null>(() => {
+    const tag = selectedNode.trim();
+    if (!tag) {
+      return null;
+    }
+
+    const controlNarrativeText = [controlLogicCode, generatedLogic].filter((item) => item.trim().length > 0).join("\n");
+
+    return buildSystemContext({
+      tag,
+      graphNodes,
+      graphEdges: plantGraph.edges,
+      narrativeText: controlNarrativeText,
+      engineeringRows: engineeringTableData?.rows ?? [],
+      controlLoops,
+      runtimeDiagnostics,
+      runtimeValidation: runtimeValidationData,
+      runtimeTelemetryTags,
+    });
+  }, [
+    selectedNode,
+    controlLogicCode,
+    generatedLogic,
+    graphNodes,
+    plantGraph.edges,
+    engineeringTableData?.rows,
+    controlLoops,
+    runtimeDiagnostics,
+    runtimeValidationData,
+    runtimeTelemetryTags,
+  ]);
+
+  const fallbackBehaviorExplanation = useMemo<string>(() => {
+    return fallbackSystemContext ? buildBehavior(fallbackSystemContext) : "No selected tag context.";
+  }, [fallbackSystemContext]);
+
+  const fallbackImpactSummary = useMemo<SystemImpact | null>(() => {
+    return fallbackSystemContext ? buildImpact(fallbackSystemContext) : null;
+  }, [fallbackSystemContext]);
+
+  const selectedTagEmbeddedPayload = useMemo<Record<string, unknown> | null>(() => {
+    const tag = selectedNode.trim();
+    if (!tag) {
+      return null;
+    }
+
+    const graphNode = graphNodes.find((item) => toComparableToken(item.id) === toComparableToken(tag));
+    const engineeringRow = (engineeringTableData?.rows || []).find((item) => toComparableToken(item.tag) === toComparableToken(tag));
+
+    const nodeMetadata = graphNode?.metadata && typeof graphNode.metadata === "object" ? (graphNode.metadata as Record<string, unknown>) : null;
+    const rowRecord = engineeringRow as unknown as Record<string, unknown> | undefined;
+
+    const embedded =
+      (rowRecord?.system_context as Record<string, unknown> | undefined) ||
+      (rowRecord?.why_engine as Record<string, unknown> | undefined) ||
+      (rowRecord?.behavior as Record<string, unknown> | undefined) ||
+      nodeMetadata?.system_context ||
+      nodeMetadata?.why_engine ||
+      nodeMetadata?.behavior ||
+      null;
+
+    if (!embedded || typeof embedded !== "object") {
+      return null;
+    }
+
+    return embedded as Record<string, unknown>;
+  }, [selectedNode, graphNodes, engineeringTableData?.rows]);
+
+  useEffect(() => {
+    const tag = selectedNode.trim();
+    if (!tag || !selectedProjectId) {
+      setSelectedSystemContextPayload(null);
+      setSystemContextLoading(false);
+      setSystemContextError(null);
+      return;
+    }
+
+    const requestId = systemContextRequestIdRef.current + 1;
+    systemContextRequestIdRef.current = requestId;
+    setSelectedSystemContextPayload(null);
+    setSystemContextLoading(true);
+    setSystemContextError(null);
+
+    if (import.meta.env.DEV) {
+      console.debug("[system-context] selectedTag", { projectId: selectedProjectId, tag });
+    }
+
+    void getSystemContextForTag(tag)
+      .then((payload) => {
+        if (requestId !== systemContextRequestIdRef.current) {
+          return;
+        }
+        setSelectedSystemContextPayload(payload);
+        if (import.meta.env.DEV) {
+          console.debug("[system-context] fetched payload", payload);
+        }
+      })
+      .catch((error: unknown) => {
+        if (requestId !== systemContextRequestIdRef.current) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : "System context load failed.";
+        setSelectedSystemContextPayload(null);
+        setSystemContextError(message);
+        if (import.meta.env.DEV) {
+          console.debug("[system-context] fetch error", { message, error });
+        }
+      })
+      .finally(() => {
+        if (requestId === systemContextRequestIdRef.current) {
+          setSystemContextLoading(false);
+        }
+      });
+  }, [selectedNode, selectedProjectId]);
+
+  const selectedSystemContextPanel = useMemo(() => {
+    return mapSystemContextToPanelView({
+      selectedTag: selectedNode,
+      backendPayload: selectedSystemContextPayload || selectedTagEmbeddedPayload,
+      fallbackContext: fallbackSystemContext,
+      fallbackBehavior: fallbackBehaviorExplanation,
+      fallbackImpact: fallbackImpactSummary,
+    });
+  }, [
+    selectedNode,
+    selectedSystemContextPayload,
+    selectedTagEmbeddedPayload,
+    fallbackSystemContext,
+    fallbackBehaviorExplanation,
+    fallbackImpactSummary,
+  ]);
+
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      console.debug("[system-context] mapped panel model", selectedSystemContextPanel);
+      console.log("WHY DATA:", selectedSystemContextPanel.resolvedContext);
+    }
+  }, [selectedSystemContextPanel]);
+
+  const selectedSystemContext = selectedSystemContextPanel.resolvedContext;
+  const selectedBehaviorExplanation = selectedSystemContextPanel.behaviorText;
+  const selectedImpactSummary: SystemImpact = {
+    cause: selectedSystemContextPanel.cause,
+    effect: selectedSystemContextPanel.effect,
+    impact: selectedSystemContextPanel.impact,
+  };
+
+  const refreshSimulationTraceData = useCallback(async (projectId?: string): Promise<void> => {
+    const activeProjectId = projectId || selectedProjectId;
+    if (!activeProjectId) {
+      setSimulationValidationData(null);
+      setSimulationTrace([]);
+      setSimulationIssues([]);
+      setSelectedReplayTag("");
+      return;
+    }
+    try {
+      const [tracePayload, analysisPayload, monitoringSummary] = await Promise.all([
+        getSimulationTrace(activeProjectId),
+        getSimulationAnalysis(activeProjectId).catch(() => null),
+        getMonitoring(activeProjectId).catch(() => null),
+      ]);
+      const traceRows = tracePayload.trace ?? [];
+      const monitoringSimulation =
+        monitoringSummary && typeof monitoringSummary === "object" && monitoringSummary.simulation && typeof monitoringSummary.simulation === "object"
+          ? (monitoringSummary.simulation as Record<string, unknown>)
+          : null;
+      const issues = monitoringSimulation ? toSimulationIssueList(monitoringSimulation.issues) : analysisPayload?.issues ?? [];
+      const panelData = mapSimulationMetricsToPanelData(activeProjectId, monitoringSimulation ?? { issues });
+
+      setSimulationValidationData(panelData);
+      setSimulationTrace(traceRows);
+      setSimulationIssues(issues);
+      if (traceRows.length === 0) {
+        setSelectedReplayTag("");
+      }
+    } catch {
+      setSimulationValidationData(null);
+      setSimulationTrace([]);
+      setSimulationIssues([]);
+      setSelectedReplayTag("");
+    }
+  }, [selectedProjectId]);
+
   const selectedNodeIOMappingRows = useMemo<IOMappingTableRow[]>(() => {
     if (!selectedNode || ioMappingRows.length === 0) {
       return ioMappingRows;
@@ -1260,8 +1633,18 @@ export default function Dashboard() {
       setPIDChanges(null);
       setPIDChangesError(null);
       setPIDAcceptedConflicts(false);
+      setSelectedSystemContextPayload(null);
+      setSystemContextLoading(false);
+      setSystemContextError(null);
       setPipelineStatuses(createInitialPipelineStatuses());
       setShowLogic(false);
+      setUIShell((previous) => ({
+        ...previous,
+        activeWorkspaceModule: "plant_model",
+        activeMainView: "table",
+        selectedRowId: "",
+        activeRightTab: "Details",
+      }));
       return;
     }
 
@@ -1363,52 +1746,23 @@ export default function Dashboard() {
       }
     };
 
-    const loadLatestSimulationTrace = async (): Promise<void> => {
-      try {
-        const [tracePayload, analysisPayload] = await Promise.all([getSimulationTrace(selectedProjectId), getSimulationAnalysis(selectedProjectId)]);
-        const traceRows = tracePayload.trace ?? [];
-        setSimulationTrace(traceRows);
-        setSimulationIssues(analysisPayload.issues ?? []);
-        if (traceRows.length === 0) {
-          setSelectedReplayTag("");
-        }
-      } catch {
-        setSimulationTrace([]);
-        setSimulationIssues([]);
-        setSelectedReplayTag("");
-      }
-    };
-
     void loadGraph();
     void loadEngineeringTable();
     void loadLatestIOMapping();
-    void loadLatestSimulationTrace();
+    void refreshSimulationTraceData(selectedProjectId);
     void refreshControlLoops(selectedProjectId);
     void loadPersistedRuntimeState();
+    void refreshProjectDocuments(selectedProjectId);
     void refreshVersionHistory(selectedProjectId);
     void refreshPIDChanges();
-  }, [refreshControlLoops, refreshPIDChanges, refreshVersionHistory, selectedProjectId]);
+  }, [refreshControlLoops, refreshPIDChanges, refreshProjectDocuments, refreshSimulationTraceData, refreshVersionHistory, selectedProjectId]);
 
   useEffect(() => {
     if (!selectedProjectId || (activeTab !== "Replay" && activeTab !== "Diagnostics")) {
       return;
     }
-    const refresh = async (): Promise<void> => {
-      try {
-        const [tracePayload, analysisPayload] = await Promise.all([getSimulationTrace(selectedProjectId), getSimulationAnalysis(selectedProjectId)]);
-        const traceRows = tracePayload.trace ?? [];
-        setSimulationTrace(traceRows);
-        setSimulationIssues(analysisPayload.issues ?? []);
-        if (traceRows.length === 0) {
-          setSelectedReplayTag("");
-        }
-      } catch {
-        setSimulationTrace([]);
-        setSimulationIssues([]);
-      }
-    };
-    void refresh();
-  }, [activeTab, selectedProjectId]);
+    void refreshSimulationTraceData(selectedProjectId);
+  }, [activeTab, refreshSimulationTraceData, selectedProjectId]);
 
   useEffect(() => {
     if (!selectedProjectId) {
@@ -1546,7 +1900,7 @@ export default function Dashboard() {
       }
       uploadInputRef.current?.click();
       setStatusText("Select one or more project documents to upload.");
-      setModuleState("plant_model", { state: "running", message: "Awaiting file selection", updatedAt: new Date().toISOString() });
+      setModuleState("documents", { state: "running", message: "Awaiting file selection", updatedAt: new Date().toISOString() });
       return;
     }
 
@@ -1673,6 +2027,42 @@ export default function Dashboard() {
         }
       }
 
+      if (action === "run_simulation") {
+        updatePipelineStage("simulation_validation", "running");
+        setModuleState("simulation", { state: "running", message: "Running simulation", updatedAt: new Date().toISOString() });
+        setActiveMainView("simulation");
+        setActiveBottomView("simulation");
+        setActiveTab("Replay");
+        setStatusText("Running simulation...");
+        try {
+          await runSimulation(selectedProjectId);
+          const analysis = await getSimulationAnalysis(selectedProjectId);
+          await refreshSimulationTraceData(selectedProjectId);
+          const hasIssues = (analysis.issues ?? []).length > 0;
+          updatePipelineStage("simulation_validation", hasIssues ? "warning" : "success");
+          setModuleState("simulation", {
+            state: hasIssues ? "failed" : "success",
+            message: hasIssues ? "Simulation completed with issues" : "Simulation completed",
+            updatedAt: new Date().toISOString(),
+          });
+          setStatusText(hasIssues ? "Simulation completed with issues. Review diagnostics." : "Simulation completed.");
+        } catch {
+          updatePipelineStage("simulation_validation", "failed");
+          setModuleState("simulation", { state: "failed", message: "Simulation failed", updatedAt: new Date().toISOString() });
+          setStatusText("Simulation failed.");
+        }
+      }
+
+      if (action === "versions") {
+        setActiveProjectFeature("versions");
+        setMonitoringPanelMode("versions");
+        setActiveBottomView("monitoring");
+        setActiveModule("monitoring");
+        setActiveMainView("monitoring");
+        await refreshVersionHistory(selectedProjectId);
+        setStatusText("Versions workspace opened.");
+      }
+
       if (action === "export_logic") {
         setShowExportDialog(true);
         setExportResult(null);
@@ -1749,7 +2139,8 @@ export default function Dashboard() {
         setTracePath(analysis.path || []);
         setSelectedNode(analysis.path?.[0] || selectedNode);
         setModuleState("diagnostics", { state: "success", message: "Fault analysis complete", updatedAt: new Date().toISOString() });
-        setPanelState((previous) => ({ ...previous, activeModule: "diagnostics", activeRightTab: "Diagnostics" }));
+        setActiveModule("diagnostics");
+        setActiveTab("Diagnostics");
         setStatusText(`Fault analysis complete for ${analysis.alarm || resolvedTag}.`);
         setIsFaultAnalysisLoading(false);
       }
@@ -1759,7 +2150,9 @@ export default function Dashboard() {
         setModuleState("simulation", { state: "running", message: "Loading replay event", updatedAt: new Date().toISOString() });
         const replay = await getReplay(selectedProjectId);
         setModuleState("simulation", { state: "success", message: "Replay data refreshed", updatedAt: new Date().toISOString() });
-        setPanelState((previous) => ({ ...previous, activeModule: "simulation", activeRightTab: "Replay" }));
+        setActiveModule("simulation");
+        setActiveTab("Replay");
+        setActiveMainView("graph");
         setStatusText(`Replay event loaded (${Object.keys(replay).length} fields).`);
         setIsExportingLogic(false);
       }
@@ -1770,11 +2163,13 @@ export default function Dashboard() {
         detect_control_loops: "control_loops",
         generate_logic: "control_logic",
         generate_io_mapping: "io_mapping",
+        run_simulation: "simulation",
         export_logic: "control_logic",
         deploy_runtime: "runtime",
         start_monitoring: "monitoring",
         analyze_fault: "diagnostics",
         replay_event: "simulation",
+        versions: "monitoring",
       };
       const targetModule = actionToModule[action];
       if (targetModule) {
@@ -2306,10 +2701,13 @@ export default function Dashboard() {
           return "unknown_document" as const;
         });
         await uploadDocuments(created.id, projectForm.importFiles, inferredTypes);
+        await refreshProjectDocuments(created.id);
       }
 
       setProjects((value) => [...value, created]);
       setSelectedProjectId(created.id);
+      setActiveModule("documents");
+      setActiveMainView("table");
       setShowCreateProjectModal(false);
       setProjectForm({
         name: "",
@@ -2337,6 +2735,7 @@ export default function Dashboard() {
   const handleTrace = useCallback(async (nodeId: string): Promise<void> => {
     setSelectedWhyTraceTag(null);
     setSelectedNode(nodeId);
+    setSelectedRowId(nodeId);
     if (!selectedProjectId) {
       setTracePath([]);
       setActiveTab("Trace");
@@ -2355,6 +2754,7 @@ export default function Dashboard() {
   const handleEngineeringRowSelect = useCallback(
     (row: EngineeringTableResponseRow): void => {
       setSelectedNode(row.tag);
+      setSelectedRowId(row.id?.trim() || row.tag);
       if (activeTab === "Trace") {
         void handleTrace(row.tag);
       }
@@ -2364,9 +2764,12 @@ export default function Dashboard() {
 
   const handleEngineeringOpenWhyTrace = useCallback((row: EngineeringTableResponseRow): void => {
     setSelectedNode(row.tag);
-    setSelectedWhyTraceTag(row.tag);
-    setActiveTab("Trace");
+    setSelectedRowId(row.id?.trim() || row.tag);
+    setSelectedWhyTraceTag(null);
+    setActiveModule("plant_model");
+    setActiveTab("Why");
     setIsRightPanelExpanded(true);
+    setWhyFocusToken((value) => value + 1);
   }, []);
 
   const handleCloseWhyTrace = useCallback((): void => {
@@ -2413,10 +2816,43 @@ export default function Dashboard() {
   const resolvedEngineeringRowsSource = liveEngineeringRows.length > 0 ? "deterministic_behavior" : unsTableRowsOverride ? "uns_override" : "engineering_table_response";
   const resolvedEngineeringFilteredCount =
     liveEngineeringRows.length > 0 ? liveEngineeringRowsFilteredCount : resolvedEngineeringRowsForWorkspace.length;
-  const activeModuleState = moduleStates[panelState.activeModule];
-  const layoutStorage = typeof window === "undefined" ? undefined : window.localStorage;
-  const workspaceRowsLayout = useDefaultLayout({ id: "crosslayerx-workspace-rows", storage: layoutStorage });
+  const currentProjectDocuments = selectedProjectId ? projectDocumentsById[selectedProjectId] ?? [] : [];
+  const hasUploadedDocuments = currentProjectDocuments.length > 0;
+  const hasParsedPlantModel = graphNodes.length > 0 || resolvedEngineeringRowsForWorkspace.length > 0;
+  const hasGeneratedLogic = generatedSTFiles.length > 0 || generatedLogic.trim().length > 0;
+  const hasIOMapping = ioMappingRows.length > 0;
+  const hasSimulationResults = simulationTrace.length > 0 || Boolean(simulationValidationData);
+  const currentProgressPanel = useMemo(() => {
+    const runningModuleEntry = Object.entries(moduleStates).find(([, moduleState]) => moduleState.state === "running") as
+      | [WorkspaceModuleId, ModuleState]
+      | undefined;
 
+    if (!loadingAction && !runningModuleEntry) {
+      return null;
+    }
+
+    const [runningModuleId, moduleState] = runningModuleEntry ?? [null, null];
+    const moduleId = loadingAction ? ACTION_MODULE_MAP[loadingAction] ?? runningModuleId : runningModuleId;
+    const title = loadingAction
+      ? ACTION_PROGRESS_LABELS[loadingAction]
+      : moduleId
+        ? MODULE_LABELS[moduleId]
+        : "Processing";
+
+    const detailLines = [
+      statusText,
+      moduleState?.message,
+      selectedUploadFiles.length > 0 ? `Selected files: ${selectedUploadFiles.join(", ")}` : null,
+      currentProject ? `Project: ${currentProject.name}` : "No project selected",
+    ].filter((value): value is string => Boolean(value));
+
+    return {
+      action: loadingAction,
+      moduleId,
+      title,
+      detailLines,
+    };
+  }, [currentProject, loadingAction, moduleStates, selectedUploadFiles, statusText]);
   const handleLeftPanelToggle = (): void => {
     setIsLeftPanelCollapsed((value) => !value);
   };
@@ -2457,51 +2893,60 @@ export default function Dashboard() {
   };
 
   const handleModuleSelect = (moduleId: WorkspaceModuleId): void => {
+    setNavigatorSelection({ type: "module", id: moduleId });
+    setActiveSidebarMode("projects");
+    setActiveProjectFeature(null);
     setActiveModule(moduleId);
+    if (moduleId === "documents") {
+      setActiveMainView("table");
+      setIsRightPanelExpanded(true);
+      return;
+    }
     if (moduleId === "plant_model") {
-      setActiveTab("Details");
+      setActiveMainView("table");
       setIsRightPanelExpanded(true);
       return;
     }
     if (moduleId === "control_loops") {
-      setActiveTab("Control Loops");
+      setActiveMainView("table");
       setIsRightPanelExpanded(true);
       return;
     }
     if (moduleId === "io_mapping") {
       setMonitoringPanelMode("io_mapping");
       setActiveBottomView("monitoring");
-      setActiveTab("IO Mapping");
+      setActiveMainView("table");
       setIsRightPanelExpanded(true);
       return;
     }
     if (moduleId === "control_logic") {
       setCodePanelMode("control_logic");
       setActiveBottomView("logic");
+      setActiveMainView("logic");
       setIsRightPanelExpanded(true);
       return;
     }
     if (moduleId === "simulation") {
       setActiveBottomView("simulation");
-      setActiveTab("Replay");
+      setActiveMainView("simulation");
       setIsRightPanelExpanded(true);
       return;
     }
     if (moduleId === "runtime") {
       setMonitoringPanelMode("runtime");
       setActiveBottomView("monitoring");
-      setActiveTab("Diagnostics");
+      setActiveMainView("monitoring");
       setIsRightPanelExpanded(true);
       return;
     }
     if (moduleId === "monitoring") {
       setMonitoringPanelMode("runtime");
       setActiveBottomView("monitoring");
-      setActiveTab("Signals");
+      setActiveMainView("monitoring");
       setIsRightPanelExpanded(true);
       return;
     }
-    setActiveTab("Diagnostics");
+    setActiveMainView("monitoring");
     setIsRightPanelExpanded(true);
   };
 
@@ -2710,6 +3155,124 @@ export default function Dashboard() {
     };
   };
 
+  const toSimulationIssueList = (value: unknown): SimulationTraceIssue[] => {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.flatMap((item) => {
+      if (!item || typeof item !== "object") {
+        return [];
+      }
+
+      const row = item as Record<string, unknown>;
+      const tag = typeof row.tag === "string" ? row.tag.trim() : "";
+      const issue = typeof row.issue === "string" ? row.issue.trim() : "";
+
+      if (!tag && !issue) {
+        return [];
+      }
+
+      return [{ tag: tag || "unknown", issue: issue || "unspecified_issue" }];
+    });
+  };
+
+  const toSimulationScenarioStatus = (value: unknown): "idle" | "running" | "success" | "failed" | "warning" => {
+    if (value === "running" || value === "success" || value === "failed" || value === "warning") {
+      return value;
+    }
+    if (value === "completed" || value === "passed" || value === "pass") {
+      return "success";
+    }
+    if (value === "error" || value === "fail") {
+      return "failed";
+    }
+    return "idle";
+  };
+
+  const mapSimulationMetricsToPanelData = (
+    projectId: string,
+    metricsSource: unknown,
+    validatedAt?: string
+  ): SimulationValidationPanelResponse | null => {
+    if (!metricsSource || typeof metricsSource !== "object") {
+      return null;
+    }
+
+    const metrics = metricsSource as Record<string, unknown>;
+    const issues = toSimulationIssueList(metrics.issues);
+    const rawScenarios = Array.isArray(metrics.scenarios) ? metrics.scenarios : [];
+
+    const scenarios = rawScenarios.flatMap((scenario, index) => {
+      if (!scenario || typeof scenario !== "object") {
+        return [];
+      }
+
+      const row = scenario as Record<string, unknown>;
+      const scenarioId = typeof row.scenario_id === "string" && row.scenario_id.trim().length > 0 ? row.scenario_id : `simulation-scenario-${index + 1}`;
+      const scenarioName =
+        typeof row.scenario_name === "string" && row.scenario_name.trim().length > 0 ? row.scenario_name : `Scenario ${index + 1}`;
+
+      return [{
+        scenario_id: scenarioId,
+        scenario_name: scenarioName,
+        status: toSimulationScenarioStatus(row.status),
+        cycle_time_ms: typeof row.cycle_time_ms === "number" ? row.cycle_time_ms : 0,
+        duration_s: typeof row.duration_s === "number" ? row.duration_s : 0,
+        alarms_triggered: typeof row.alarms_triggered === "number" ? row.alarms_triggered : issues.length,
+        message:
+          typeof row.message === "string" && row.message.trim().length > 0
+            ? row.message
+            : issues.length > 0
+              ? `Trace analysis found ${issues.length} issue(s).`
+              : "Trace analysis completed.",
+      }];
+    });
+
+    const normalizedScenarios =
+      scenarios.length > 0
+        ? scenarios
+        : issues.length > 0
+          ? [{
+              scenario_id: "trace_stability",
+              scenario_name: "Signal Stability Check",
+              status: "warning" as const,
+              cycle_time_ms: 100,
+              duration_s: 3,
+              alarms_triggered: issues.length,
+              message: `Trace analysis found ${issues.length} issue(s).`,
+            }]
+          : [];
+
+    if (normalizedScenarios.length === 0) {
+      return null;
+    }
+
+    const scenariosPassed = normalizedScenarios.filter((scenario) => scenario.status === "success").length;
+    const scenariosFailed = normalizedScenarios.filter((scenario) => scenario.status === "failed").length;
+    const scenariosWarning = normalizedScenarios.filter((scenario) => scenario.status === "warning").length;
+
+    const overallStatus: "idle" | "running" | "success" | "failed" | "warning" =
+      scenariosFailed > 0
+        ? "failed"
+        : normalizedScenarios.some((scenario) => scenario.status === "running")
+          ? "running"
+          : scenariosWarning > 0 || issues.length > 0
+            ? "warning"
+            : "success";
+
+    return {
+      project_id: projectId,
+      simulation_run_id: `simulation-${Date.now()}`,
+      validated_at: validatedAt || new Date().toISOString(),
+      overall_status: overallStatus,
+      scenarios_passed: scenariosPassed,
+      scenarios_failed: scenariosFailed,
+      scenarios_warning: scenariosWarning,
+      scenarios: normalizedScenarios,
+    };
+  };
+
   const refreshRuntimeTags = async (): Promise<void> => {
     try {
       const tags = await getRuntimeTags();
@@ -2750,28 +3313,6 @@ export default function Dashboard() {
       setRuntimeDiagnostics(response.diagnostics ?? null);
     } catch {
       setRuntimeDiagnostics(null);
-    }
-  };
-
-  const refreshSimulationTraceData = async (projectId?: string): Promise<void> => {
-    const activeProjectId = projectId || selectedProjectId;
-    if (!activeProjectId) {
-      setSimulationTrace([]);
-      setSimulationIssues([]);
-      setSelectedReplayTag("");
-      return;
-    }
-    try {
-      const [tracePayload, analysisPayload] = await Promise.all([getSimulationTrace(activeProjectId), getSimulationAnalysis(activeProjectId)]);
-      const traceRows = tracePayload.trace ?? [];
-      setSimulationTrace(traceRows);
-      setSimulationIssues(analysisPayload.issues ?? []);
-      if (traceRows.length === 0) {
-        setSelectedReplayTag("");
-      }
-    } catch {
-      setSimulationTrace([]);
-      setSimulationIssues([]);
     }
   };
 
@@ -3007,6 +3548,392 @@ export default function Dashboard() {
     }
   };
 
+  const getProgressLinesForModules = (...moduleIds: WorkspaceModuleId[]): string[] => {
+    if (!currentProgressPanel?.moduleId) {
+      return [];
+    }
+    return moduleIds.includes(currentProgressPanel.moduleId) ? currentProgressPanel.detailLines : [];
+  };
+
+  const documentsWorkspaceView = (
+    <div className="workspace-module-stack">
+      <WorkspaceActionPanel
+        eyebrow="Project documents"
+        title={currentProject ? `${currentProject.name} documents` : "Documents"}
+        description={
+          selectedProjectId
+            ? "Upload source documents here. These files become the basis for parsing the plant model and the downstream engineering steps."
+            : "Select or create a project to upload source documents."
+        }
+        actionLabel="Upload Documents"
+        onAction={() => {
+          void handleToolbarAction("upload_documents");
+        }}
+        actionDisabled={Boolean(disabledActions.upload_documents)}
+        actionLoading={loadingAction === "upload_documents"}
+        progressLines={getProgressLinesForModules("documents")}
+      />
+
+      <div className="workspace-documents-list-panel">
+        {currentProjectDocuments.length > 0 ? (
+          <div className="workspace-documents-list">
+            {currentProjectDocuments.map((document) => (
+              <div key={document.id} className="workspace-documents-list-item">
+                <span className="workspace-documents-file-name">{document.original_name}</span>
+                <span className="workspace-documents-file-meta">{document.document_type.replace(/_/g, " ")}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="workspace-placeholder-panel">
+            <h3>No documents uploaded yet</h3>
+            <p>Upload P&amp;ID files, narratives, or other source documents to start the engineering flow.</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const plantModelWorkspaceView = (
+    <div className="workspace-module-stack">
+      <WorkspaceActionPanel
+        eyebrow="Plant model"
+        title={hasParsedPlantModel ? "Plant model ready" : hasUploadedDocuments ? "Parse the plant model" : "Upload documents first"}
+        description={
+          hasParsedPlantModel
+            ? "The plant model is available in the workspace. You can re-run parsing after document changes."
+            : hasUploadedDocuments
+              ? "Your source documents are uploaded. Parse them to build the plant graph and engineering table."
+              : "This project does not have uploaded documents yet. Start by uploading source files from the Documents module."
+        }
+        actionLabel={hasUploadedDocuments ? "Parse Plant Model" : "Upload Documents"}
+        onAction={() => {
+          void handleToolbarAction(hasUploadedDocuments ? "parse_plant_model" : "upload_documents");
+        }}
+        actionDisabled={Boolean(disabledActions[hasUploadedDocuments ? "parse_plant_model" : "upload_documents"])}
+        actionLoading={loadingAction === (hasUploadedDocuments ? "parse_plant_model" : "upload_documents")}
+        progressLines={getProgressLinesForModules("documents", "plant_model")}
+      />
+
+      {hasParsedPlantModel ? (
+        <EngineeringDeterministicTable
+          projectId={selectedProjectId}
+          reloadKey={behaviorRefreshKey}
+          loading={engineeringTableLoading}
+          error={engineeringTableError}
+          onRowSelect={handleEngineeringRowSelect}
+          onOpenWhyTrace={handleEngineeringOpenWhyTrace}
+          externalSelectedTag={selectedControlLoop?.sensor_tag ?? selectedNode}
+          highlightedTags={selectedControlLoop ? [selectedControlLoop.sensor_tag, selectedControlLoop.actuator_tag] : []}
+          onRowsResolved={(payload) => {
+            setLiveEngineeringRows(payload.rows);
+            setLiveEngineeringRowsFilteredCount(payload.filteredRows);
+          }}
+          onLoadingStateChange={setLiveEngineeringRowsLoading}
+        />
+      ) : (
+        <div className="workspace-placeholder-panel">
+          <h3>Plant model not parsed</h3>
+          <p>Choose the trigger above to upload documents or parse the active project using the same existing endpoints.</p>
+        </div>
+      )}
+    </div>
+  );
+
+  const controlLoopsWorkspaceView = (
+    <div className="workspace-module-stack">
+      <WorkspaceActionPanel
+        eyebrow="Control loops"
+        title={hasParsedPlantModel ? "Detect control loops" : "Plant model required"}
+        description={
+          hasParsedPlantModel
+            ? "Run control loop detection for the active project. The same detection endpoint used in the top bar is now triggered here."
+            : "Parse the plant model before detecting loops so the engineering graph has the required source data."
+        }
+        actionLabel={hasParsedPlantModel ? "Detect Control Loops" : "Parse Plant Model"}
+        onAction={() => {
+          void handleToolbarAction(hasParsedPlantModel ? "detect_control_loops" : "parse_plant_model");
+        }}
+        actionDisabled={Boolean(disabledActions[hasParsedPlantModel ? "detect_control_loops" : "parse_plant_model"])}
+        actionLoading={loadingAction === (hasParsedPlantModel ? "detect_control_loops" : "parse_plant_model")}
+        progressLines={getProgressLinesForModules("plant_model", "control_loops")}
+      />
+
+      {hasParsedPlantModel ? (
+        <RightControlLoopsTab
+          loops={controlLoops}
+          ioMappingRows={ioMappingRows}
+          engineeringRows={resolvedEngineeringRowsForWorkspace}
+          replayTrace={simulationTrace}
+          loading={isControlLoopsLoading}
+          error={controlLoopsError}
+          selectedLoopTag={selectedControlLoopTag}
+          onSelectLoop={handleControlLoopSelect}
+          onDetectLoops={() => {
+            void runControlLoopDetection();
+          }}
+          onViewLoop={(loop) => {
+            void handleControlLoopView(loop);
+          }}
+          onEditStrategy={handleControlLoopEditStrategy}
+          onGenerateLogic={(loop) => {
+            void handleControlLoopGenerateLogic(loop);
+          }}
+          onTraceLoop={handleControlLoopTrace}
+          onSimulate={(loop) => {
+            void handleControlLoopSimulate(loop);
+          }}
+          onNavigateToST={handleControlLoopNavigateToST}
+          onNavigateToIO={handleControlLoopNavigateToIO}
+        />
+      ) : (
+        <div className="workspace-placeholder-panel">
+          <h3>Control loop detection is not ready</h3>
+          <p>Parse the plant model first, then run loop detection from the trigger above.</p>
+        </div>
+      )}
+    </div>
+  );
+
+  const ioMappingWorkspaceView = (
+    <div className="workspace-module-stack">
+      <WorkspaceActionPanel
+        eyebrow="IO mapping"
+        title={!hasParsedPlantModel ? "Plant model required" : !hasGeneratedLogic ? "Logic generation required" : "Generate IO mapping"}
+        description={
+          !hasParsedPlantModel
+            ? "Parse the plant model before generating IO mapping."
+            : !hasGeneratedLogic
+              ? "Generate logic first so IO mapping can resolve against the latest control artifacts."
+              : "Generate or refresh IO mapping for the active project."
+        }
+        actionLabel={!hasParsedPlantModel ? "Parse Plant Model" : !hasGeneratedLogic ? "Generate Logic" : "Generate IO Mapping"}
+        onAction={() => {
+          void handleToolbarAction(!hasParsedPlantModel ? "parse_plant_model" : !hasGeneratedLogic ? "generate_logic" : "generate_io_mapping");
+        }}
+        actionDisabled={Boolean(disabledActions[!hasParsedPlantModel ? "parse_plant_model" : !hasGeneratedLogic ? "generate_logic" : "generate_io_mapping"])}
+        actionLoading={loadingAction === (!hasParsedPlantModel ? "parse_plant_model" : !hasGeneratedLogic ? "generate_logic" : "generate_io_mapping")}
+        progressLines={getProgressLinesForModules("plant_model", "control_logic", "io_mapping")}
+      />
+
+      {hasIOMapping ? (
+        <IOMappingTablePanel
+          rows={ioMappingRows}
+          selectedTag={selectedIOMappingTag}
+          onSelectRow={setSelectedIOMappingTag}
+          loading={isGeneratingIOMapping}
+          failedMessage={ioMappingFailedMessage}
+          onRetry={() => {
+            void handleToolbarAction("generate_io_mapping");
+          }}
+          onAutoAssignChannels={handleAutoAssignIOMappingChannels}
+          onExportCsv={handleExportIOMappingCsv}
+          onValidateMapping={handleValidateIOMapping}
+          forcedTags={forcedTagNames}
+        />
+      ) : (
+        <div className="workspace-placeholder-panel">
+          <h3>No IO mapping generated yet</h3>
+          <p>Use the trigger above once the plant model and control logic are ready.</p>
+        </div>
+      )}
+    </div>
+  );
+
+  const logicWorkspaceView = (
+    <div className="workspace-module-stack">
+      <WorkspaceActionPanel
+        eyebrow="Control logic"
+        title={!hasParsedPlantModel ? "Plant model required" : "Generate control logic"}
+        description={
+          !hasParsedPlantModel
+            ? "Parse the plant model before generating control logic."
+            : "Generate or refresh ST logic for the active project using the same endpoint that was previously on the top bar."
+        }
+        actionLabel={!hasParsedPlantModel ? "Parse Plant Model" : "Generate Logic"}
+        onAction={() => {
+          void handleToolbarAction(!hasParsedPlantModel ? "parse_plant_model" : "generate_logic");
+        }}
+        actionDisabled={Boolean(disabledActions[!hasParsedPlantModel ? "parse_plant_model" : "generate_logic"])}
+        actionLoading={loadingAction === (!hasParsedPlantModel ? "parse_plant_model" : "generate_logic")}
+        progressLines={getProgressLinesForModules("plant_model", "control_logic")}
+      />
+
+      {generatedSTFiles.length > 0 || generatedLogic.trim().length > 0 ? (
+        <CodeExplorerPanel
+          files={generatedSTFiles}
+          bundledCode={generatedLogic}
+          selectedFilePath={selectedSTFilePath}
+          onSelectFile={setSelectedSTFilePath}
+          diagnosticsByFile={stDiagnosticsByFile}
+          jumpToLocation={stJumpLocation}
+          loading={pipelineStatuses.st_generation === "running"}
+          requiredPreviousStep="Generate ST"
+        />
+      ) : (
+        <div className="workspace-placeholder-panel">
+          <h3>No logic artifact available yet</h3>
+          <p>Generate logic from the trigger above to populate the ST workspace.</p>
+        </div>
+      )}
+    </div>
+  );
+
+  const simulationWorkspaceView = (
+    <div className="workspace-module-stack">
+      <WorkspaceActionPanel
+        eyebrow="Simulation"
+        title={!hasParsedPlantModel ? "Plant model required" : "Run simulation"}
+        description={
+          !hasParsedPlantModel
+            ? "Parse the plant model before running the simulation flow."
+            : "Run the existing simulation endpoint for the active project from here instead of the removed top bar button."
+        }
+        actionLabel={!hasParsedPlantModel ? "Parse Plant Model" : "Run Simulation"}
+        onAction={() => {
+          void handleToolbarAction(!hasParsedPlantModel ? "parse_plant_model" : "run_simulation");
+        }}
+        actionDisabled={Boolean(disabledActions[!hasParsedPlantModel ? "parse_plant_model" : "run_simulation"])}
+        actionLoading={loadingAction === (!hasParsedPlantModel ? "parse_plant_model" : "run_simulation")}
+        progressLines={getProgressLinesForModules("plant_model", "simulation")}
+      />
+
+      {hasSimulationResults ? (
+        <SimulationValidationPanel
+          data={simulationValidationData}
+          actionLoading={isRuntimeActionBusy}
+          failedMessage={simulationFailedMessage}
+          forceableInputs={runtimeForceableInputs}
+          onApplyInputForce={handleApplyRuntimeInputForce}
+          onClearInputForce={handleClearRuntimeInputForce}
+          onRefreshInputForceState={refreshRuntimeForceState}
+          onRunEvaluationCycle={handleRunRuntimeEvaluationCycle}
+          onRetry={() => {
+            void handleToolbarAction("run_simulation");
+          }}
+          requiredPreviousStep="Runtime Check"
+        />
+      ) : (
+        <div className="workspace-placeholder-panel">
+          <h3>No simulation run yet</h3>
+          <p>Run a simulation from the trigger above to populate this workspace.</p>
+        </div>
+      )}
+    </div>
+  );
+
+  const runtimeAction = activeModule === "monitoring" ? "start_monitoring" : "deploy_runtime";
+  const diagnosticsWorkspaceView = (
+    <div className="workspace-module-stack">
+      <section className="workspace-documents-list-panel">
+        <div className="workspace-documents-list-header">
+          <h3>Diagnostics</h3>
+          <p>Runtime diagnostics, impact context, and fault analysis for the active project.</p>
+        </div>
+        <RightDiagnosticsTab
+          diagnostics={runtimeDiagnostics}
+          systemContext={selectedSystemContext}
+          impactSummary={selectedImpactSummary}
+          simulationIssues={simulationIssues}
+          faultAnalysis={faultAnalysis}
+          analyzedTag={faultAnalysisTag}
+          inputMessage={faultAnalysisInputMessage}
+          loading={isFaultAnalysisLoading}
+          error={faultAnalysisError}
+        />
+      </section>
+    </div>
+  );
+
+  const versionsWorkspaceView = (
+    <VersionsWorkspace
+      versions={versions}
+      selectedVersion={selectedVersion}
+      selectedVersionTags={selectedVersionTags}
+      diff={versionDiff}
+      loading={versioningLoading}
+      errorMessage={versioningError}
+      busyAction={versionBusyAction}
+      settings={versioningSettings}
+      onSelectVersion={setSelectedVersion}
+      onToggleCompareSelection={handleVersionToggleCompareSelection}
+      onCreateSnapshot={() => {
+        void handleVersionCreateSnapshot();
+      }}
+      onLoadSnapshot={(version) => {
+        void handleVersionLoadSnapshot(version);
+      }}
+      onRollback={(version) => {
+        void handleVersionRollback(version);
+      }}
+      onCompare={() => {
+        void handleVersionCompare();
+      }}
+      onExport={(version) => {
+        void handleVersionExport(version);
+      }}
+      onSettingsChange={setVersioningSettings}
+    />
+  );
+
+  const runtimeWorkspaceView = (
+    <div className="workspace-module-stack">
+      <WorkspaceActionPanel
+        eyebrow={activeModule === "monitoring" ? "Monitoring" : "Runtime"}
+        title={!hasIOMapping ? "IO mapping required" : activeModule === "monitoring" ? "Start monitoring" : "Deploy runtime"}
+        description={
+          !hasIOMapping
+            ? "Generate IO mapping before deploying or starting runtime monitoring."
+            : activeModule === "monitoring"
+              ? "Start monitoring using the same endpoint previously exposed in the top bar."
+              : "Deploy runtime for the active project from this middle-panel trigger."
+        }
+        actionLabel={!hasIOMapping ? "Generate IO Mapping" : activeModule === "monitoring" ? "Start Monitoring" : "Deploy Runtime"}
+        onAction={() => {
+          void handleToolbarAction(!hasIOMapping ? "generate_io_mapping" : runtimeAction);
+        }}
+        actionDisabled={Boolean(disabledActions[!hasIOMapping ? "generate_io_mapping" : runtimeAction])}
+        actionLoading={loadingAction === (!hasIOMapping ? "generate_io_mapping" : runtimeAction)}
+        progressLines={getProgressLinesForModules("io_mapping", "runtime", "monitoring")}
+      />
+
+      {runtimeValidationData || runtimeFailedMessage ? (
+        <RuntimeValidationPanel
+          data={runtimeValidationData}
+          loading={isRuntimeStateLoading}
+          actionLoading={isRuntimeActionBusy}
+          failedMessage={runtimeFailedMessage}
+          onDeploy={() => {
+            void handleConfirmRuntimeDeploy();
+          }}
+          onStart={() => {
+            void handleRuntimeStart();
+          }}
+          onStop={() => {
+            void handleRuntimeStop();
+          }}
+          forceableInputs={runtimeForceableInputs}
+          onApplyInputForce={handleApplyRuntimeInputForce}
+          onClearInputForce={handleClearRuntimeInputForce}
+          onRefreshInputForceState={refreshRuntimeForceState}
+          onRunEvaluationCycle={handleRunRuntimeEvaluationCycle}
+          requiredPreviousStep="IO Mapping"
+        />
+      ) : (
+        <div className="workspace-placeholder-panel">
+          <h3>Runtime has not been started yet</h3>
+          <p>Deploy runtime or start monitoring from the trigger above once IO mapping is available.</p>
+        </div>
+      )}
+    </div>
+  );
+
+  const monitoringWorkspaceView = activeProjectFeature === "versions"
+    ? versionsWorkspaceView
+    : activeModule === "diagnostics"
+      ? diagnosticsWorkspaceView
+      : runtimeWorkspaceView;
+
   return (
     <div className="dashboard">
       <Toaster
@@ -3017,33 +3944,7 @@ export default function Dashboard() {
         }}
       />
 
-      <CommandBar
-        activeAction={activeAction}
-        loadingAction={loadingAction}
-        disabledActions={disabledActions}
-        onAction={(action) => {
-          void handleToolbarAction(action);
-        }}
-      />
-
-      <div className="project-status-line">
-        <div className="status-left">
-          {isParsing || isUploading ? (
-            <span className="activity-chip">
-              <LoaderCircle size={12} className="activity-spinner" />
-              {isParsing ? "Parsing in progress" : "Uploading files"}
-            </span>
-          ) : null}
-          <span>{statusText}</span>
-          {activeModuleState?.message ? <span className="selected-files-inline">{`${activeModuleState.state.toUpperCase()}: ${activeModuleState.message}`}</span> : null}
-          {selectedUploadFiles.length > 0 ? (
-            <span className="selected-files-inline" title={selectedUploadFiles.join(", ")}>
-              Selected: {selectedUploadFiles.join(", ")}
-            </span>
-          ) : null}
-        </div>
-        <strong>{currentProject ? `${currentProject.name} (${currentProject.id})` : "No project selected"}</strong>
-      </div>
+      <CommandBar />
 
       {showCreateProjectModal ? (
         <div className="modal-backdrop" onClick={() => setShowCreateProjectModal(false)}>
@@ -3607,10 +4508,11 @@ export default function Dashboard() {
           });
 
           setIsUploading(true);
-          setModuleState("plant_model", { state: "running", message: "Uploading documents", updatedAt: new Date().toISOString() });
+          setModuleState("documents", { state: "running", message: "Uploading documents", updatedAt: new Date().toISOString() });
           void uploadDocuments(selectedProjectId, files, inferredTypes)
-            .then(() => {
-              setModuleState("plant_model", { state: "success", message: `Uploaded ${files.length} file(s)`, updatedAt: new Date().toISOString() });
+            .then(async () => {
+              await refreshProjectDocuments(selectedProjectId);
+              setModuleState("documents", { state: "success", message: `Uploaded ${files.length} file(s)`, updatedAt: new Date().toISOString() });
               setStatusText(`Uploaded ${files.length} file(s) to active project.`);
               toast.success(`Uploaded ${files.length} file(s)`, {
                 className: "industrial-toast",
@@ -3618,7 +4520,7 @@ export default function Dashboard() {
               });
             })
             .catch(() => {
-              setModuleState("plant_model", { state: "failed", message: "Document upload failed", updatedAt: new Date().toISOString() });
+              setModuleState("documents", { state: "failed", message: "Document upload failed", updatedAt: new Date().toISOString() });
               setStatusText("Upload failed. Ensure backend server is running and accepts multipart uploads.");
               toast.error("Upload failed", {
                 className: "industrial-toast industrial-toast-error",
@@ -3633,74 +4535,112 @@ export default function Dashboard() {
       />
 
       <div className="workspace-shell">
-        <Group
-          id="crosslayerx-workspace-rows"
-          orientation="vertical"
-          defaultLayout={workspaceRowsLayout.defaultLayout}
-          onLayoutChanged={workspaceRowsLayout.onLayoutChanged}
+        <div
+          className={`main-shell ${isLeftPanelCollapsed ? "left-collapsed" : ""} ${isRightPanelExpanded ? "right-expanded" : ""}`}
+          style={{
+            ["--right-panel-width" as string]: `${isRightPanelExpanded ? rightPanelWidth : 38}px`,
+          }}
         >
-          <Panel id="workspace-top" defaultSize="74%" minSize="42%">
-            <div
-              className={`main-shell ${isLeftPanelCollapsed ? "left-collapsed" : ""} ${isRightPanelExpanded ? "right-expanded" : ""}`}
-              style={{
-                ["--right-panel-width" as string]: `${isRightPanelExpanded ? rightPanelWidth : 38}px`,
-              }}
-            >
               <div className="main-shell-content">
                 <aside className={`left-panel ${isLeftPanelCollapsed ? "collapsed" : ""}`}>
-                  <button
-                    className="side-panel-toggle left"
-                    type="button"
-                    aria-label={isLeftPanelCollapsed ? "Expand navigator panel" : "Collapse navigator panel"}
-                    onClick={handleLeftPanelToggle}
-                  >
-                    {isLeftPanelCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
-                  </button>
-
-                  {!isLeftPanelCollapsed ? (
-                    <ProjectNavigator
-                      projects={projects}
-                      graphNodes={graphNodes}
-                      selectedProjectId={selectedProjectId}
-                      onCreateProject={() => {
-                        setShowCreateProjectModal(true);
+                  <div className="left-shell">
+                    <ActivityBar
+                      activeActivity={uiState.activeSidebarMode}
+                      isSidebarCollapsed={isLeftPanelCollapsed}
+                      onSelectActivity={(activity) => {
+                        setActiveSidebarMode(activity);
+                        if (activity === "settings") {
+                          setActiveSettingsItem("general");
+                        }
+                        if (isLeftPanelCollapsed) {
+                          setIsLeftPanelCollapsed(false);
+                        }
                       }}
-                      onRequestDeleteProject={(projectId) => {
-                        const target = projects.find((project) => project.id === projectId) ?? null;
-                        setProjectToDelete(target);
-                      }}
-                      onSelectProject={(projectId) => {
-                        void setActiveProject(projectId)
-                          .catch(() => null)
-                          .finally(() => {
-                            setSelectedProjectId(projectId);
-                          });
-                      }}
-                      selectedNode={selectedNode}
-                      onSelectNode={setSelectedNode}
-                      activeModule={panelState.activeModule}
-                      onSelectModule={handleModuleSelect}
+                      onOpenSidebar={() => setIsLeftPanelCollapsed(false)}
                     />
-                  ) : null}
+
+                    <div className={`primary-sidebar ${isLeftPanelCollapsed ? "collapsed" : ""}`}>
+                      {!isLeftPanelCollapsed ? (
+                        <button
+                          className="side-panel-toggle left"
+                          type="button"
+                          aria-label="Collapse navigator panel"
+                          onClick={handleLeftPanelToggle}
+                        >
+                          <ChevronLeft size={14} />
+                        </button>
+                      ) : null}
+
+                      {!isLeftPanelCollapsed ? (
+                        activeActivity === "projects" ? (
+                          <SidebarModeProjects
+                            projects={projects}
+                            graphNodes={graphNodes}
+                            selectedProjectId={uiState.selectedProject}
+                            activeSelection={navigatorSelection}
+                            onCreateProject={() => {
+                              setShowCreateProjectModal(true);
+                            }}
+                            onRequestDeleteProject={(projectId) => {
+                              const target = projects.find((project) => project.id === projectId) ?? null;
+                              setProjectToDelete(target);
+                            }}
+                            onSelectProject={(projectId) => {
+                              setNavigatorSelection({ type: "project", id: projectId });
+                              void setActiveProject(projectId)
+                                .catch(() => null)
+                                .finally(() => {
+                                  setSelectedProjectId(projectId);
+                                });
+                            }}
+                            selectedNode={selectedNode}
+                            onSelectNode={(nodeId) => {
+                              setNavigatorSelection({ type: "node", id: nodeId });
+                              setSelectedNode(nodeId);
+                              setSelectedRowId(nodeId);
+                            }}
+                            activeModule={panelState.activeModule}
+                            onSelectModule={handleModuleSelect}
+                            activeFeature={activeProjectFeature}
+                            onSelectFeature={handleProjectFeatureSelect}
+                          />
+                        ) : (
+                          <SidebarModeSettings activeItem={activeSettingsItem} onSelectItem={handleSettingsNavSelect} />
+                        )
+                      ) : null}
+                    </div>
+                  </div>
                 </aside>
 
-                <section className="graph-shell">
-                  <EngineeringDeterministicTable
-                    projectId={selectedProjectId}
-                    reloadKey={behaviorRefreshKey}
-                    loading={engineeringTableLoading}
-                    error={engineeringTableError}
-                    onRowSelect={handleEngineeringRowSelect}
-                    onOpenWhyTrace={handleEngineeringOpenWhyTrace}
-                    externalSelectedTag={selectedControlLoop?.sensor_tag ?? selectedNode}
-                    highlightedTags={selectedControlLoop ? [selectedControlLoop.sensor_tag, selectedControlLoop.actuator_tag] : []}
-                    onRowsResolved={(payload) => {
-                      setLiveEngineeringRows(payload.rows);
-                      setLiveEngineeringRowsFilteredCount(payload.filteredRows);
-                    }}
-                    onLoadingStateChange={setLiveEngineeringRowsLoading}
-                  />
-                </section>
+                <MainWorkspaceRouter
+                  activeView={uiState.activeView}
+                  hasProject={Boolean(selectedProjectId)}
+                  graphView={(
+                    <GraphWorkspace
+                      graphNodes={graphNodes.map((node) => ({
+                        ...node,
+                        label: node.id,
+                      }))}
+                      graphEdges={plantGraph.edges}
+                      replayMode={activeTab === "Replay"}
+                      replayPoint={replayPoint}
+                      selectedNode={selectedNode}
+                      tracePath={tracePath}
+                      onNodeSelect={(nodeId) => {
+                        setSelectedNode(nodeId);
+                        setSelectedRowId(nodeId);
+                      }}
+                      onReplayPointChange={setReplayPoint}
+                      onTraceNode={(nodeId) => {
+                        void handleTrace(nodeId);
+                      }}
+                    />
+                  )}
+                  tableView={activeModule === "documents" ? documentsWorkspaceView : activeModule === "control_loops" ? controlLoopsWorkspaceView : activeModule === "io_mapping" ? ioMappingWorkspaceView : plantModelWorkspaceView}
+                  logicView={logicWorkspaceView}
+                  simulationView={simulationWorkspaceView}
+                  monitoringView={monitoringWorkspaceView}
+                />
               </div>
 
               <div
@@ -3723,7 +4663,7 @@ export default function Dashboard() {
 
                 {isRightPanelExpanded ? (
                   <DetailsPanel
-                    activeTab={activeTab}
+                    activeTab={uiState.activeTab}
                     replayPoint={replayPoint}
                     selectedReplayTag={selectedReplayTag}
                     replayTrace={simulationTrace}
@@ -3734,6 +4674,12 @@ export default function Dashboard() {
                     controlLoopsError={controlLoopsError}
                     selectedControlLoopTag={selectedControlLoopTag}
                     selectedEquipment={selectedEquipment}
+                    systemContext={selectedSystemContext}
+                    behaviorExplanation={selectedBehaviorExplanation}
+                    impactSummary={selectedImpactSummary}
+                    systemContextLoading={systemContextLoading}
+                    systemContextError={selectedSystemContext ? null : systemContextError}
+                    whyFocusToken={whyFocusToken}
                     selectedNodeId={selectedNode}
                     tracePath={tracePath}
                     whyTraceTag={selectedWhyTraceTag}
@@ -3775,11 +4721,6 @@ export default function Dashboard() {
                     }}
                     onNavigateControlLoopToST={handleControlLoopNavigateToST}
                     onNavigateControlLoopToIO={handleControlLoopNavigateToIO}
-                    onOpenVersionsWorkspace={() => {
-                      setMonitoringPanelMode("versions");
-                      setActiveBottomView("monitoring");
-                      setActiveTab("Versions");
-                    }}
                     pidChanges={pidChanges}
                     pidChangesLoading={pidChangesLoading}
                     pidChangesError={pidChangesError}
@@ -3804,11 +4745,13 @@ export default function Dashboard() {
                     onWorkspaceRowsUpdate={setUnsTableRowsOverride}
                     onWorkspaceSelectTag={(tag) => {
                       setSelectedNode(tag);
+                      setSelectedRowId(tag);
                     }}
                     onWorkspaceTracePath={(path) => {
                       setTracePath(path);
                       if (path[0]) {
                         setSelectedNode(path[0]);
+                        setSelectedRowId(path[0]);
                       }
                       setSelectedWhyTraceTag(null);
                       setActiveTab("Trace");
@@ -3816,6 +4759,7 @@ export default function Dashboard() {
                     }}
                     onTraceStepSelect={(tag) => {
                       setSelectedNode(tag);
+                      setSelectedRowId(tag);
                       void handleTrace(tag);
                       setActiveTab("Trace");
                       setIsRightPanelExpanded(true);
@@ -3824,148 +4768,14 @@ export default function Dashboard() {
                   />
                 ) : null}
               </aside>
-            </div>
-          </Panel>
+        </div>
+      </div>
 
-          <Separator className="panel-resize-handle panel-resize-handle-horizontal" />
-
-          <Panel id="workspace-bottom" defaultSize="26%" minSize="14%" maxSize="58%">
-            <BottomPanels
-              activeView={activeBottomView}
-              codePanelMode={codePanelMode}
-              monitoringPanelMode={monitoringPanelMode}
-              controlLogicCode={controlLogicCode}
-              generatedSTCode={generatedLogic}
-              generatedSTFiles={generatedSTFiles}
-              selectedSTFilePath={selectedSTFilePath}
-              onSelectSTFile={setSelectedSTFilePath}
-              stDiagnosticsByFile={stDiagnosticsByFile}
-              stJumpLocation={stJumpLocation}
-              logicWarnings={logicWarnings}
-              logicValidationIssues={logicValidationIssues}
-              stVerificationData={stVerificationData}
-              isVerifyingST={isVerifyingST}
-              stVerificationFailedMessage={stVerificationFailedMessage}
-              onSelectVerificationIssue={(issue: STVerificationIssueItem) => {
-                if (issue.file) {
-                  const normalizedFile = normalizeVerifierFilePath(issue.file);
-                  setSelectedSTFilePath(normalizedFile);
-                  setSTJumpLocation({
-                    file: normalizedFile,
-                    line: issue.line ?? 1,
-                    column: issue.column ?? 1,
-                    nonce: Date.now(),
-                  });
-                  setCodePanelMode("generated_st");
-                  setActiveBottomView("logic");
-                }
-              }}
-              ioMappingRows={ioMappingRows}
-              selectedIOMappingTag={selectedIOMappingTag}
-              onSelectIOMappingTag={setSelectedIOMappingTag}
-              ioMappingSummary={ioMappingSummary}
-              isGeneratingIOMapping={isGeneratingIOMapping}
-              ioMappingFailedMessage={ioMappingFailedMessage}
-              runtimeValidationData={runtimeValidationData}
-              runtimeLoading={isRuntimeStateLoading}
-              runtimeFailedMessage={runtimeFailedMessage}
-              runtimeActionLoading={isRuntimeActionBusy}
-              runtimeForceableInputs={runtimeForceableInputs}
-              forcedTagNames={forcedTagNames}
-              simulationValidationData={simulationValidationData}
-              simulationFailedMessage={simulationFailedMessage}
-              onRetryIOMapping={() => {
-                void handleToolbarAction("generate_io_mapping");
-              }}
-              onGenerateIOMapping={() => {
-                void handleToolbarAction("generate_io_mapping");
-              }}
-              onAutoAssignIOMappingChannels={handleAutoAssignIOMappingChannels}
-              onExportIOMappingCsv={handleExportIOMappingCsv}
-              onValidateIOMapping={handleValidateIOMapping}
-              onRetrySTVerification={() => {
-                void handleToolbarAction("generate_logic");
-              }}
-              onRetryRuntime={() => {
-                void handleConfirmRuntimeDeploy();
-              }}
-              onRuntimeStart={() => {
-                void handleRuntimeStart();
-              }}
-              onRuntimeStop={() => {
-                void handleRuntimeStop();
-              }}
-              onRuntimeApplyForce={handleApplyRuntimeInputForce}
-              onRuntimeClearForce={handleClearRuntimeInputForce}
-              onRuntimeRefreshForceState={refreshRuntimeForceState}
-              onRuntimeRunEvaluationCycle={handleRunRuntimeEvaluationCycle}
-              onRetrySimulation={() => {
-                void handleToolbarAction("replay_event");
-              }}
-              versions={versions}
-              selectedVersion={selectedVersion}
-              selectedVersionTags={selectedVersionTags}
-              versionDiff={versionDiff}
-              versionsLoading={versioningLoading}
-              versionsError={versioningError}
-              versionBusyAction={versionBusyAction}
-              versionSettings={versioningSettings}
-              onVersionSelect={(version) => {
-                setSelectedVersion(version);
-              }}
-              onVersionToggleCompareSelection={handleVersionToggleCompareSelection}
-              onVersionCreateSnapshot={() => {
-                void handleVersionCreateSnapshot();
-              }}
-              onVersionLoadSnapshot={(version) => {
-                void handleVersionLoadSnapshot(version);
-              }}
-              onVersionRollback={(version) => {
-                void handleVersionRollback(version);
-              }}
-              onVersionCompare={() => {
-                void handleVersionCompare();
-              }}
-              onVersionExport={(version) => {
-                void handleVersionExport(version);
-              }}
-              onVersionSettingsChange={setVersioningSettings}
-              showControlLogic={showLogic}
-              isGeneratingST={pipelineStatuses.st_generation === "running" && activeAction === "generate_logic"}
-              isGenerating={pipelineStatuses.logic_completion === "running"}
-              onViewChange={(view) => {
-                setActiveBottomView(view);
-                if (view === "logic") {
-                  setShowLogic(true);
-                  if (!controlLogicCode.trim() && selectedProjectId) {
-                    void getLogic(selectedProjectId)
-                      .then((artifact) => {
-                        const code = artifact.code || artifact.st_preview || "";
-                        const validationIssues = (artifact.st_validation?.issues ?? []).map((issue) => {
-                          const location = issue.line ? `${issue.file}:${issue.line}` : issue.file;
-                          return `${location} [${issue.rule}] ${issue.message}`;
-                        });
-                        if (code.trim()) {
-                          setControlLogicCode(code);
-                          setGeneratedLogic(code);
-                          const files = parseGeneratedLogicFiles(code);
-                          setGeneratedSTFiles(files);
-                          const mainFile = files.find((item) => item.path.toLowerCase() === "main.st");
-                          setSelectedSTFilePath((current) => current || mainFile?.path || files[0]?.path || null);
-                          setLogicWarnings(artifact.warnings ?? []);
-                          setLogicValidationIssues(validationIssues);
-                          setShowLogic(true);
-                        }
-                      })
-                      .catch(() => {
-                        setStatusText("No stored logic found for selected project yet.");
-                      });
-                  }
-                }
-              }}
-            />
-          </Panel>
-        </Group>
+      <div className="workspace-status-bar" role="status" aria-live="polite">
+        <span>{currentProject ? `Project: ${currentProject.name}` : "Project: none"}</span>
+        <span>Module: {uiShell.activeWorkspaceModule.replace(/_/g, " ")}</span>
+        <span>Row: {uiState.selectedRow || "none"}</span>
+        <span>Connection: {isRuntimeStateLoading ? "syncing" : "ready"}</span>
       </div>
     </div>
   );

@@ -674,19 +674,19 @@ export default function EngineeringDeterministicTable({
   return (
     <div className="flex h-full min-h-0 w-full gap-3 overflow-hidden rounded border border-slate-300 bg-slate-50 p-2">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded border border-slate-300 bg-white">
-        <div className="grid grid-cols-1 items-center gap-2 border-b border-slate-200 p-2 md:grid-cols-[1fr_auto_auto]">
+        <div className="deterministic-toolbar grid grid-cols-1 items-center gap-2 border-b border-slate-200 p-2 md:grid-cols-[1fr_auto_auto]">
           <input
             value={searchInput}
             onChange={(event) => setSearchInput(event.target.value)}
             placeholder="Search behavior, equipment, controls, upstream, downstream..."
-            className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-800 outline-none ring-slate-400 focus:ring"
+            className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-[10px] text-slate-800 outline-none ring-slate-400 focus:ring"
           />
-          <div className="text-xs text-slate-600">
+          <div className="text-[10px] text-slate-600">
             {filteredRows.length} / {orderedRows.length} rows
           </div>
-          <div className="flex items-center gap-2 text-xs text-slate-600">
+          <div className="deterministic-toolbar-actions flex items-center gap-2 text-[10px] text-slate-600">
             <span
-              className={`rounded border px-1.5 py-0.5 ${
+              className={`rounded border px-1.5 py-0.5 text-[9px] ${
                 wsStatus === "connected"
                   ? "border-emerald-300 bg-emerald-50 text-emerald-700"
                   : wsStatus === "reconnecting"
@@ -696,17 +696,17 @@ export default function EngineeringDeterministicTable({
             >
               {wsStatus === "connected" ? "Live Connected" : wsStatus === "reconnecting" ? "Reconnecting" : "Disconnected"}
             </span>
-            <button type="button" className="command-btn" onClick={() => void handleExportCsv()} disabled={exporting !== null}>
+            <button type="button" className="command-btn deterministic-toolbar-btn" onClick={() => void handleExportCsv()} disabled={exporting !== null}>
               {exporting === "csv" ? "Exporting CSV..." : "Export CSV"}
             </button>
-            <button type="button" className="command-btn" onClick={() => void handleExportJson()} disabled={exporting !== null}>
+            <button type="button" className="command-btn deterministic-toolbar-btn" onClick={() => void handleExportJson()} disabled={exporting !== null}>
               {exporting === "json" ? "Exporting JSON..." : "Export JSON"}
             </button>
           </div>
           {(isLoading || activeError) && orderedRows.length > 0 ? (
-            <div className="text-xs text-slate-600">{isLoading ? "Refreshing…" : activeError}</div>
+            <div className="text-[10px] text-slate-600">{isLoading ? "Refreshing…" : activeError}</div>
           ) : null}
-          {exportError ? <div className="text-xs text-red-700">{exportError}</div> : null}
+          {exportError ? <div className="text-[10px] text-red-700">{exportError}</div> : null}
         </div>
 
         <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto">
@@ -769,20 +769,20 @@ export default function EngineeringDeterministicTable({
           {selectedRow ? (
             <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
               <section className="rounded border border-slate-200 bg-slate-50 p-2">
-                <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">Cause Chain</h4>
-                <ChipList values={selectedRow.cause_chain} tone="relation" limit={8} onChipClick={applyChipSearch} emptyLabel="No upstream causes" />
+                <h4 className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-slate-600">Cause Chain</h4>
+                <ChipList values={selectedRow.cause_chain} tone="relation" limit={8} onChipClick={applyChipSearch} emptyLabel="No upstream causes" compact />
               </section>
               <section className="rounded border border-slate-200 bg-slate-50 p-2">
-                <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">Effect Chain</h4>
-                <ChipList values={selectedRow.effect_chain} tone="relation" limit={8} onChipClick={applyChipSearch} emptyLabel="No downstream effects" />
+                <h4 className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-slate-600">Effect Chain</h4>
+                <ChipList values={selectedRow.effect_chain} tone="relation" limit={8} onChipClick={applyChipSearch} emptyLabel="No downstream effects" compact />
               </section>
               <section className="rounded border border-slate-200 bg-slate-50 p-2 md:col-span-2">
-                <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">Impact</h4>
-                <p className="text-xs text-slate-700">{toText(selectedRow.impact_summary)}</p>
+                <h4 className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-slate-600">Impact</h4>
+                <p className="text-[10px] leading-tight text-slate-700">{toText(selectedRow.impact_summary)}</p>
               </section>
               <section className="rounded border border-slate-200 bg-slate-50 p-2 md:col-span-2">
-                <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">Live State</h4>
-                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-700 md:grid-cols-5">
+                <h4 className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-slate-600">Live State</h4>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] leading-tight text-slate-700 md:grid-cols-5">
                   <p>Tag: {selectedRow.tag}</p>
                   <p>Current: {toText(selectedRow.current_value)}</p>
                   <p>State: {toText(selectedRow.state)}</p>
@@ -792,7 +792,7 @@ export default function EngineeringDeterministicTable({
               </section>
             </div>
           ) : (
-            <p className="text-xs text-slate-500">Select a row tag to inspect deterministic cause/effect and live behavior details.</p>
+            <p className="text-[10px] text-slate-500">Select a row tag to inspect deterministic cause/effect and live behavior details.</p>
           )}
         </div>
       </div>

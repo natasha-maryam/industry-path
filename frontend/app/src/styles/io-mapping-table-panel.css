@@ -12,7 +12,7 @@
   background: #edf2f6;
   padding: 0.48rem 0.56rem;
   display: grid;
-  grid-template-columns: 1.3fr repeat(2, minmax(150px, 0.8fr));
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
   gap: 0.4rem;
   align-items: end;
 }
@@ -29,7 +29,8 @@
   border-bottom: 1px solid #d4dde6;
   background: #f1f5f9;
   padding: 0.36rem 0.56rem;
-  display: inline-flex;
+  display: flex;
+  width: 100%;
   gap: 0.34rem;
   flex-wrap: wrap;
 }
@@ -43,6 +44,8 @@
   font-weight: 700;
   color: #243648;
   cursor: pointer;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .io-mapping-actions button:disabled {
@@ -78,6 +81,7 @@
   text-transform: uppercase;
   font-weight: 700;
   color: #516578;
+  min-width: 0;
 }
 
 .io-mapping-toolbar select {
@@ -87,6 +91,8 @@
   padding: 0.26rem 0.36rem;
   font-size: 0.67rem;
   color: #243648;
+  width: 100%;
+  min-width: 0;
 }
 
 .io-mapping-table-wrap {

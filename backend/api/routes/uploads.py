@@ -1,9 +1,14 @@
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from models.file import UploadResult
+from models.file import ProjectFile, UploadResult
 from services.upload_service import upload_service
 
 router = APIRouter(prefix="/projects/{project_id}/upload", tags=["uploads"])
+
+
+@router.get("", response_model=list[ProjectFile])
+def list_project_documents(project_id: str) -> list[ProjectFile]:
+    return upload_service.list_files(project_id)
 
 
 @router.post("", response_model=UploadResult)

@@ -10,6 +10,7 @@ import type {
   SimulationTracePoint,
   PIDReconcileSummary,
 } from "../services/api";
+import type { SystemContext, SystemImpact } from "../intelligence/systemContext";
 import type { Equipment } from "./rightTabs/types";
 import type { RightPanelTabId } from "../types/workspace";
 
@@ -20,7 +21,6 @@ const RightReplayTab = lazy(() => import("./rightTabs/RightReplayTab"));
 const RightIOMappingTab = lazy(() => import("./rightTabs/RightIOMappingTab"));
 const RightControlLoopsTab = lazy(() => import("./rightTabs/RightControlLoopsTab"));
 const RightDiagnosticsTab = lazy(() => import("./rightTabs/RightDiagnosticsTab"));
-const RightVersionsTab = lazy(() => import("./rightTabs/RightVersionsTab"));
 const RightPIDChangesTab = lazy(() => import("./rightTabs/RightPIDChangesTab"));
 const RightWorkspaceToolsTab = lazy(() => import("./rightTabs/RightWorkspaceToolsTab"));
 
@@ -31,6 +31,12 @@ type DetailsPanelProps = {
   replayPoint: number;
   selectedReplayTag?: string;
   selectedEquipment: Equipment;
+  systemContext?: SystemContext | null;
+  behaviorExplanation?: string;
+  impactSummary?: SystemImpact | null;
+  systemContextLoading?: boolean;
+  systemContextError?: string | null;
+  whyFocusToken?: number;
   selectedNodeId?: string;
   tracePath: string[];
   whyTraceTag?: string | null;
@@ -66,7 +72,6 @@ type DetailsPanelProps = {
   onNavigateControlLoopToIO?: (loop: ControlLoopRecord) => void;
   onReplayPointChange?: (point: number) => void;
   onCloseWhyTrace?: () => void;
-  onOpenVersionsWorkspace?: () => void;
   pidChanges?: PIDReconcileSummary | null;
   pidChangesLoading?: boolean;
   pidChangesError?: string | null;
@@ -91,13 +96,19 @@ type DetailsPanelProps = {
   onTabChange: (tab: RightTab) => void;
 };
 
-const TABS: RightTab[] = ["Details", "Signals", "Trace", "Replay", "IO Mapping", "Control Loops", "Diagnostics", "Versions", "Workspace"];
+const TABS: RightTab[] = ["Details", "Why", "Signals", "Trace", "Replay", "IO Mapping", "Control Loops", "Diagnostics"];
 
 export default function DetailsPanel({
   activeTab,
   replayPoint,
   selectedReplayTag = "",
   selectedEquipment,
+  systemContext = null,
+  behaviorExplanation = "",
+  impactSummary = null,
+  systemContextLoading = false,
+  systemContextError = null,
+  whyFocusToken = 0,
   selectedNodeId = "",
   tracePath,
   whyTraceTag = null,
@@ -133,7 +144,6 @@ export default function DetailsPanel({
   onNavigateControlLoopToIO,
   onReplayPointChange,
   onCloseWhyTrace,
-  onOpenVersionsWorkspace,
   pidChanges = null,
   pidChangesLoading = false,
   pidChangesError = null,
@@ -158,14 +168,29 @@ export default function DetailsPanel({
   onTabChange,
 }: DetailsPanelProps) {
   const renderActiveTab = () => {
-    if (activeTab === "Details") {
-      return <RightDetailsTab selectedEquipment={selectedEquipment} />;
+    if (activeTab === "Details" || activeTab === "Why") {
+      return (
+        <RightDetailsTab
+          selectedEquipment={selectedEquipment}
+          systemContext={systemContext}
+          behaviorExplanation={behaviorExplanation}
+          whyFocusToken={whyFocusToken}
+        />
+      );
     }
     if (activeTab === "Signals") {
       return <RightSignalsTab selectedEquipment={selectedEquipment} runtimeTelemetryTags={runtimeTelemetryTags} forcedTags={forcedTagNames} />;
     }
     if (activeTab === "Trace") {
-      return <RightTraceTab tracePath={tracePath} whyTraceTag={whyTraceTag} onCloseWhyTrace={onCloseWhyTrace} onSelectTraceTag={onTraceStepSelect} />;
+      return (
+        <RightTraceTab
+          tracePath={tracePath}
+          systemContext={systemContext}
+          whyTraceTag={whyTraceTag}
+          onCloseWhyTrace={onCloseWhyTrace}
+          onSelectTraceTag={onTraceStepSelect}
+        />
+      );
     }
     if (activeTab === "Replay") {
       return (
@@ -212,9 +237,6 @@ export default function DetailsPanel({
         />
       );
     }
-    if (activeTab === "Versions") {
-      return <RightVersionsTab onOpenVersionsWorkspace={onOpenVersionsWorkspace} />;
-    }
     if (activeTab === "P&ID Changes") {
       return (
         <RightPIDChangesTab
@@ -250,6 +272,8 @@ export default function DetailsPanel({
     return (
       <RightDiagnosticsTab
         diagnostics={runtimeDiagnostics}
+        systemContext={systemContext}
+        impactSummary={impactSummary}
         simulationIssues={replayIssues}
         faultAnalysis={faultAnalysis}
         analyzedTag={faultAnalysisTag}
@@ -261,8 +285,11 @@ export default function DetailsPanel({
   };
 
   return (
-    <div>
+    <div className="engineering-panel">
       <h3 className="panel-title">Engineering Panel</h3>
+
+      {systemContextLoading ? <div className="monitor-frame">Loading engineering intelligence...</div> : null}
+      {!systemContextLoading && systemContextError ? <div className="monitor-frame">{systemContextError}</div> : null}
 
       <div className="right-tabs">
         {TABS.map((tab) => (

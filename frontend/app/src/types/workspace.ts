@@ -1,6 +1,7 @@
 import type { GraphEdge, GraphNode } from "../services/api";
 
 export type WorkspaceModuleId =
+  | "documents"
   | "plant_model"
   | "control_loops"
   | "io_mapping"
@@ -12,6 +13,7 @@ export type WorkspaceModuleId =
 
 export type RightPanelTabId =
   | "Details"
+  | "Why"
   | "Signals"
   | "Trace"
   | "Replay"
@@ -28,11 +30,15 @@ export type TopToolbarActionId =
   | "detect_control_loops"
   | "generate_logic"
   | "generate_io_mapping"
+  | "run_simulation"
   | "export_logic"
   | "deploy_runtime"
   | "start_monitoring"
   | "analyze_fault"
-  | "replay_event";
+  | "replay_event"
+  | "versions";
+
+export type MainWorkspaceViewId = "graph" | "table" | "logic" | "simulation" | "monitoring";
 
 export type ModuleRunState = "idle" | "running" | "success" | "failed";
 
@@ -56,6 +62,7 @@ export type PlantGraphState = {
 };
 
 export const MODULE_LABELS: Record<WorkspaceModuleId, string> = {
+  documents: "Documents",
   plant_model: "Plant Model",
   control_loops: "Control Loops",
   io_mapping: "IO Mapping",
@@ -67,6 +74,7 @@ export const MODULE_LABELS: Record<WorkspaceModuleId, string> = {
 };
 
 export const MODULE_DEFAULT_STATE: Record<WorkspaceModuleId, ModuleState> = {
+  documents: { state: "idle" },
   plant_model: { state: "idle" },
   control_loops: { state: "idle" },
   io_mapping: { state: "idle" },
