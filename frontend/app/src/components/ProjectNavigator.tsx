@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState, type ComponentType } from "react";
 import { Activity, AlertTriangle, Boxes, ChevronDown, ChevronRight, CircleDot, Cpu, Database, FileText, Folder, FolderOpen, Gauge, Network, Radar, Plus, SlidersHorizontal, Trash2 } from "lucide-react";
 import type { WorkspaceModuleId } from "../types/workspace";
 
+type ProjectFeatureId = "versions" | "pid";
+
 type ProjectItem = {
   id: string;
   name: string;
@@ -31,8 +33,8 @@ type ProjectNavigatorProps = {
   onSelectNode: (nodeId: string) => void;
   activeModule: WorkspaceModuleId;
   onSelectModule: (moduleId: WorkspaceModuleId) => void;
-  activeFeature: "versions" | null;
-  onSelectFeature: (feature: "versions") => void;
+  activeFeature: ProjectFeatureId | null;
+  onSelectFeature: (feature: ProjectFeatureId) => void;
 };
 
 const WORKSPACE_MODULES: Array<{ id: WorkspaceModuleId; label: string; icon: ComponentType<{ size?: number; className?: string }> }> = [
@@ -47,8 +49,13 @@ const WORKSPACE_MODULES: Array<{ id: WorkspaceModuleId; label: string; icon: Com
   { id: "diagnostics", label: "Diagnostics", icon: AlertTriangle },
 ];
 
-const PROJECT_FEATURES: Array<{ id: "versions"; label: string; icon: ComponentType<{ size?: number; className?: string }> }> = [
+const PROJECT_FEATURES: Array<{
+  id: ProjectFeatureId;
+  label: string;
+  icon: ComponentType<{ size?: number; className?: string }>;
+}> = [
   { id: "versions", label: "Versions", icon: Activity },
+  { id: "pid", label: "PID", icon: Network },
 ];
 
 export default function ProjectNavigator({
@@ -59,9 +66,7 @@ export default function ProjectNavigator({
   onCreateProject,
   onRequestDeleteProject,
   onSelectProject,
-  selectedNode,
   onSelectNode,
-  activeModule,
   onSelectModule,
   activeFeature,
   onSelectFeature,
@@ -303,7 +308,7 @@ export default function ProjectNavigator({
                     return (
                       <li key={feature.id}>
                         <button
-                          className={`tree-item ${activeSelection?.type === "feature" && activeSelection.id === feature.id ? "active" : ""} ${!hasSelectedProject ? "disabled" : ""}`}
+                          className={`tree-item ${activeFeature === feature.id ? "active" : ""} ${!hasSelectedProject ? "disabled" : ""}`}
                           onClick={() => onSelectFeature(feature.id)}
                           type="button"
                           disabled={!hasSelectedProject}

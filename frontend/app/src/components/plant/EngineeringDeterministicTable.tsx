@@ -540,7 +540,7 @@ export default function EngineeringDeterministicTable({
       }),
       columnHelper.accessor("type", {
         header: "Type",
-        cell: (info) => <TypeBadge type={toText(info.getValue())} />,
+        cell: (info) => <TypeBadge type={toText(info.getValue())} compact />,
       }),
       columnHelper.accessor("subtype", {
         header: "Subtype",
@@ -572,17 +572,17 @@ export default function EngineeringDeterministicTable({
       }),
       columnHelper.accessor("controls", {
         header: "Controls",
-        cell: (info) => <ChipList values={info.getValue()} tone="relation" limit={3} onChipClick={applyChipSearch} />,
+        cell: (info) => <ChipList values={info.getValue()} tone="relation" limit={3} onChipClick={applyChipSearch} compact />,
         sortingFn: (left, right) => left.original.controls.length - right.original.controls.length,
       }),
       columnHelper.accessor("upstream", {
         header: "Upstream",
-        cell: (info) => <ChipList values={info.getValue()} tone="relation" limit={3} onChipClick={applyChipSearch} />,
+        cell: (info) => <ChipList values={info.getValue()} tone="relation" limit={3} onChipClick={applyChipSearch} compact />,
         sortingFn: (left, right) => left.original.upstream.length - right.original.upstream.length,
       }),
       columnHelper.accessor("downstream", {
         header: "Downstream",
-        cell: (info) => <ChipList values={info.getValue()} tone="relation" limit={3} onChipClick={applyChipSearch} />,
+        cell: (info) => <ChipList values={info.getValue()} tone="relation" limit={3} onChipClick={applyChipSearch} compact />,
         sortingFn: (left, right) => left.original.downstream.length - right.original.downstream.length,
       }),
       columnHelper.display({
@@ -594,7 +594,7 @@ export default function EngineeringDeterministicTable({
           return (
             <button
               type="button"
-              className="rounded border border-red-300 bg-red-50 px-2 py-1 text-[11px] font-medium text-red-700 hover:bg-red-100"
+              className="rounded border border-red-300 bg-red-50 px-1.5 py-0.5 text-[8px] font-medium text-red-700 hover:bg-red-100"
               onClick={(event) => {
                 event.stopPropagation();
                 onOpenWhyTrace?.(row);
@@ -710,8 +710,8 @@ export default function EngineeringDeterministicTable({
         </div>
 
         <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto">
-          <table className="min-w-[1850px] w-full table-fixed border-collapse text-left text-[11px] text-slate-700">
-            <thead className="sticky top-0 z-10 bg-slate-100 text-[10px] uppercase tracking-wide text-slate-600">
+          <table className="min-w-[1850px] w-full table-fixed border-collapse text-left text-[8px] text-slate-700">
+            <thead className="sticky top-0 z-10 bg-slate-100 text-[8px] uppercase tracking-wide text-slate-600">
               {table.getHeaderGroups().map((headerGroup) => (
                 <tr key={headerGroup.id}>
                   {headerGroup.headers.map((header) => {
@@ -754,7 +754,7 @@ export default function EngineeringDeterministicTable({
                     }}
                   >
                     {row.getVisibleCells().map((cell) => (
-                      <td key={cell.id} className="truncate px-2 py-1.5 align-top text-[11px]">
+                      <td key={cell.id} className="truncate px-2 py-1.5 align-top text-[8px]">
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </td>
                     ))}

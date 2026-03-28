@@ -13,7 +13,7 @@ type GraphNode = {
   node_type: string;
 };
 
-type ProjectFeatureId = "versions";
+type ProjectFeatureId = "versions" | "pid";
 
 type NavigatorSelection = {
   type: "project" | "module" | "feature" | "node";

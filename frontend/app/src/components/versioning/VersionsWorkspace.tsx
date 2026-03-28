@@ -1,9 +1,13 @@
 import { useMemo } from "react";
+import type { PIDReconcileSummary } from "../../services/api";
+import RightPIDChangesTab from "../rightTabs/RightPIDChangesTab";
 import type { VersionDiffResponse, VersionRecord } from "../../types/versioning";
 import LogicDiffViewer from "./LogicDiffViewer";
 import SnapshotManager from "./SnapshotManager";
 import VersionDetailsCard from "./VersionDetailsCard";
 import VersionHistoryPanel from "./VersionHistoryPanel";
+
+export type VersionsWorkspaceSection = "history" | "pid";
 
 type VersioningSettings = {
   enableAutoVersioning: boolean;
@@ -15,6 +19,7 @@ type VersioningSettings = {
 };
 
 type VersionsWorkspaceProps = {
+  activeSection: VersionsWorkspaceSection;
   versions: VersionRecord[];
   selectedVersion: VersionRecord | null;
   selectedVersionTags: string[];
@@ -23,6 +28,12 @@ type VersionsWorkspaceProps = {
   errorMessage: string | null;
   busyAction: "snapshot" | "rollback" | "compare" | "export" | null;
   settings: VersioningSettings;
+  pidChanges: PIDReconcileSummary | null;
+  pidChangesLoading: boolean;
+  pidChangesError: string | null;
+  pidApplying: boolean;
+  pidSnapshotCreating: boolean;
+  pidAcceptedConflicts: boolean;
   onSelectVersion: (version: VersionRecord) => void;
   onToggleCompareSelection: (versionTag: string) => void;
   onCreateSnapshot: () => void;
@@ -31,9 +42,15 @@ type VersionsWorkspaceProps = {
   onCompare: () => void;
   onExport: (version: VersionRecord) => void;
   onSettingsChange: (settings: VersioningSettings) => void;
+  onRefreshPIDChanges: () => void;
+  onPIDAcceptChanges: () => void;
+  onPIDReviewConflicts: () => void;
+  onPIDApplyUpdate: () => void;
+  onPIDCreateSnapshot: () => void;
 };
 
 export default function VersionsWorkspace({
+  activeSection,
   versions,
   selectedVersion,
   selectedVersionTags,
@@ -42,6 +59,12 @@ export default function VersionsWorkspace({
   errorMessage,
   busyAction,
   settings,
+  pidChanges,
+  pidChangesLoading,
+  pidChangesError,
+  pidApplying,
+  pidSnapshotCreating,
+  pidAcceptedConflicts,
   onSelectVersion,
   onToggleCompareSelection,
   onCreateSnapshot,
@@ -50,6 +73,11 @@ export default function VersionsWorkspace({
   onCompare,
   onExport,
   onSettingsChange,
+  onRefreshPIDChanges,
+  onPIDAcceptChanges,
+  onPIDReviewConflicts,
+  onPIDApplyUpdate,
+  onPIDCreateSnapshot,
 }: VersionsWorkspaceProps) {
   const selectedCountLabel = useMemo(() => {
     if (selectedVersionTags.length === 0) {
@@ -57,6 +85,76 @@ export default function VersionsWorkspace({
     }
     return `Compare selection: ${selectedVersionTags.join(" vs ")}`;
   }, [selectedVersionTags]);
+
+  const pidSummary = useMemo(
+    () => [
+      { label: "New devices", value: pidChanges?.new_devices.length ?? 0 },
+      { label: "Connection changes", value: pidChanges?.topology_changes.length ?? 0 },
+      { label: "Deprecated devices", value: pidChanges?.deprecated_devices.length ?? 0 },
+      { label: "Possible conflicts", value: pidChanges?.possible_conflicts.length ?? 0 },
+    ],
+    [pidChanges]
+  );
+
+  if (activeSection === "pid") {
+    return (
+      <section className="versions-workspace versions-workspace-pid">
+        <div className="versions-grid-left">
+          <section className="snapshot-manager versions-summary-panel">
+            <div className="snapshot-manager-head">
+              <h4>P&ID Reconciliation</h4>
+              <button className="command-btn" type="button" disabled={pidChangesLoading} onClick={onRefreshPIDChanges}>
+                {pidChangesLoading ? "Refreshing…" : "Refresh"}
+              </button>
+            </div>
+
+            <div className="versions-summary-grid">
+              {pidSummary.map((item) => (
+                <article key={item.label} className="versions-summary-card">
+                  <span className="versions-summary-label">{item.label}</span>
+                  <strong className="versions-summary-value">{item.value}</strong>
+                </article>
+              ))}
+            </div>
+
+            <div className="version-summary-stack">
+              <div className="version-summary-meta-row">
+                <span>Apply ready</span>
+                <strong>{pidChanges?.apply_ready ? "Yes" : "No"}</strong>
+              </div>
+              <div className="version-summary-meta-row">
+                <span>Similarity threshold</span>
+                <strong>{pidChanges?.similarity_threshold ?? "-"}</strong>
+              </div>
+              <div className="version-summary-meta-row">
+                <span>Generated at</span>
+                <strong>{pidChanges?.generated_at ? new Date(pidChanges.generated_at).toLocaleString() : "Not available"}</strong>
+              </div>
+            </div>
+
+            <p className="modal-help-text versions-summary-copy">
+              Review extracted P&ID reconciliation output here before applying graph updates or creating a new snapshot.
+            </p>
+          </section>
+        </div>
+
+        <div className="versions-grid-center">
+          <RightPIDChangesTab
+            changes={pidChanges}
+            loading={pidChangesLoading}
+            error={pidChangesError}
+            applying={pidApplying}
+            creatingSnapshot={pidSnapshotCreating}
+            acceptedConflicts={pidAcceptedConflicts}
+            onAcceptChanges={onPIDAcceptChanges}
+            onReviewConflicts={onPIDReviewConflicts}
+            onApplyUpdate={onPIDApplyUpdate}
+            onCreateSnapshot={onPIDCreateSnapshot}
+          />
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="versions-workspace">

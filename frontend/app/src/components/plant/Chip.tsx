@@ -26,7 +26,9 @@ const toneClasses: Record<ChipTone, string> = {
 
 export const Chip = memo(function Chip({ label, tone = "neutral", onClick, compact = false }: ChipProps): ReactElement {
   const interactive = typeof onClick === "function";
-  const sizeClasses = compact ? "max-w-full px-1.5 py-0.5 text-[9px] leading-tight whitespace-normal break-words text-left" : "max-w-[150px] px-2 py-0.5 text-xs truncate";
+  const sizeClasses = compact
+    ? "max-w-full px-1.5 py-0.5 text-[8px] leading-tight whitespace-normal break-words text-left"
+    : "max-w-[150px] px-2 py-0.5 text-xs truncate";
   const className = `inline-flex items-center rounded font-medium ${sizeClasses} ${toneClasses[tone]} ${interactive ? "cursor-pointer" : ""}`;
 
   if (interactive) {
@@ -60,7 +62,7 @@ export const ChipList = memo(function ChipList({
   const visibleValues = useMemo(() => normalizedValues.slice(0, limit), [normalizedValues, limit]);
 
   if (normalizedValues.length === 0) {
-    return <span className={`${compact ? "text-[10px]" : "text-sm"} text-slate-400`}>{emptyLabel}</span>;
+    return <span className={`${compact ? "text-[8px]" : "text-sm"} text-slate-400`}>{emptyLabel}</span>;
   }
 
   const overflowCount = Math.max(0, normalizedValues.length - visibleValues.length);
@@ -71,7 +73,7 @@ export const ChipList = memo(function ChipList({
       {visibleValues.map((value) => (
         <Chip key={value} label={value} tone={tone} onClick={onChipClick} compact={compact} />
       ))}
-      {overflowCount > 0 ? <span className={`${compact ? "text-[10px]" : "text-xs"} text-slate-500`}>+{overflowCount}</span> : null}
+      {overflowCount > 0 ? <span className={`${compact ? "text-[8px]" : "text-xs"} text-slate-500`}>+{overflowCount}</span> : null}
     </div>
   );
 });

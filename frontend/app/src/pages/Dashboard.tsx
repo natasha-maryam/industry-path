@@ -26,7 +26,7 @@ import RuntimeValidationPanel from "../components/RuntimeValidationPanel";
 import SidebarModeProjects from "../components/SidebarModeProjects";
 import SidebarModeSettings from "../components/SidebarModeSettings";
 import SimulationValidationPanel from "../components/SimulationValidationPanel";
-import VersionsWorkspace from "../components/versioning/VersionsWorkspace";
+import VersionsWorkspace, { type VersionsWorkspaceSection } from "../components/versioning/VersionsWorkspace";
 import WorkspaceActionPanel from "../components/WorkspaceActionPanel";
 import type { RuntimeValidationPanelData } from "../components/RuntimeValidationPanel";
 import { useWorkspaceContext } from "../context/WorkspaceContext";
@@ -133,7 +133,7 @@ type SettingsNavItemId =
   | "ai_connectors"
   | "runtime_connections"
   | "export_integrations";
-type ProjectFeatureId = "versions";
+type ProjectFeatureId = "versions" | "pid";
 
 type UIShellState = {
   activeSidebarMode: ActivityMode;
@@ -495,6 +495,13 @@ const PIPELINE_STAGE_LABELS: Record<PipelineStageKey, string> = {
   version_snapshot: "Version snapshot",
 };
 
+type PipelineToastCopy = {
+  running?: string;
+  success?: string;
+  failed?: string;
+  warning?: string;
+};
+
 export default function Dashboard() {
   const { activeProjectId: selectedProjectId, setActiveProjectId: setSelectedProjectId, plantGraph, setPlantGraph } = useWorkspaceContext();
   const graphNodes = plantGraph.nodes;
@@ -629,6 +636,9 @@ export default function Dashboard() {
     setMonitoringPanelMode("versions");
     setActiveBottomView("monitoring");
     setActiveMainView("monitoring");
+    if (feature === "pid" && selectedProjectId) {
+      void refreshPIDChanges();
+    }
   };
 
 
@@ -788,10 +798,21 @@ export default function Dashboard() {
   });
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const previousPipelineStatusesRef = useRef<PipelineStageStatusMap>(pipelineStatuses);
+  const pendingPipelineToastCopyRef = useRef<Partial<Record<PipelineStageKey, PipelineToastCopy>>>({});
   const behaviorHydrationSignatureRef = useRef<string>("");
   const rightResizeStartRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const exportReadinessRequestIdRef = useRef<number>(0);
   const systemContextRequestIdRef = useRef<number>(0);
+
+  const queuePipelineToastCopy = useCallback((stage: PipelineStageKey, copy: PipelineToastCopy): void => {
+    pendingPipelineToastCopyRef.current = {
+      ...pendingPipelineToastCopyRef.current,
+      [stage]: {
+        ...pendingPipelineToastCopyRef.current[stage],
+        ...copy,
+      },
+    };
+  }, []);
 
   const setModuleState = (moduleId: WorkspaceModuleId, state: ModuleState): void => {
     setModuleStates((previous) => ({ ...previous, [moduleId]: state }));
@@ -941,33 +962,38 @@ export default function Dashboard() {
 
       const toastId = `pipeline-${stage}`;
       const label = PIPELINE_STAGE_LABELS[stage];
+      const customCopy = pendingPipelineToastCopyRef.current[stage];
 
       if (nextState === "running") {
-        toast.loading(`${label} running...`, {
+        toast.loading(customCopy?.running ?? `${label} running...`, {
           id: toastId,
           className: "industrial-toast",
           icon: <LoaderCircle size={14} className="toast-icon" />,
         });
       } else if (nextState === "success") {
-        toast.success(`${label} completed`, {
+        toast.success(customCopy?.success ?? `${label} completed`, {
           id: toastId,
           className: "industrial-toast",
           icon: <CheckCircle2 size={14} className="toast-icon" />,
         });
       } else if (nextState === "failed") {
-        toast.error(`${label} failed`, {
+        toast.error(customCopy?.failed ?? `${label} failed`, {
           id: toastId,
           className: "industrial-toast industrial-toast-error",
           icon: <AlertTriangle size={14} className="toast-icon toast-icon-error" />,
         });
       } else if (nextState === "warning") {
-        toast(`${label} completed with warnings`, {
+        toast(customCopy?.warning ?? `${label} completed with warnings`, {
           id: toastId,
           className: "industrial-toast",
           icon: <AlertTriangle size={14} className="toast-icon" />,
         });
       } else {
         toast.dismiss(toastId);
+      }
+
+      if (customCopy) {
+        delete pendingPipelineToastCopyRef.current[stage];
       }
     }
 
@@ -1112,6 +1138,9 @@ export default function Dashboard() {
       setLogicValidationIssues(validationIssues);
 
       if (verification.status === "failed") {
+        if (options.silent) {
+          queuePipelineToastCopy("st_verification", { failed: "Saved ST verification failed during refresh" });
+        }
         updatePipelineStage("st_verification", "failed");
         if (!options.silent) {
           setStatusText(`ST verification failed with ${verification.summary.error_count} error(s).`);
@@ -1120,6 +1149,9 @@ export default function Dashboard() {
       }
 
       if (verification.status === "passed_with_warnings") {
+        if (options.silent) {
+          queuePipelineToastCopy("st_verification", { warning: "Saved ST verification refreshed with warnings" });
+        }
         updatePipelineStage("st_verification", "warning");
         if (!options.silent) {
           setStatusText(`ST verification passed with warnings (${verification.summary.warning_count}).`);
@@ -1127,11 +1159,17 @@ export default function Dashboard() {
         return;
       }
 
+      if (options.silent) {
+        queuePipelineToastCopy("st_verification", { success: "Saved ST verification refreshed" });
+      }
       updatePipelineStage("st_verification", "success");
       if (!options.silent) {
         setStatusText("ST verification passed.");
       }
     } catch {
+      if (options.silent) {
+        queuePipelineToastCopy("st_verification", { failed: "Saved ST verification failed during refresh" });
+      }
       updatePipelineStage("st_verification", "failed");
       setSTVerificationData(null);
       setSTDiagnosticsByFile({});
@@ -1736,6 +1774,7 @@ export default function Dashboard() {
         setIOMappingSummary(mapping.summary);
         setIOMappingFailedMessage(null);
         if (mapping.rows.length > 0) {
+          queuePipelineToastCopy("io_mapping", { success: "Saved IO mapping loaded" });
           updatePipelineStage("io_mapping", "success");
         }
       } catch {
@@ -1846,6 +1885,8 @@ export default function Dashboard() {
           const mainFile = files.find((item) => item.path.toLowerCase() === "main.st");
           setSelectedSTFilePath((current) => current || mainFile?.path || files[0]?.path || null);
           setShowLogic(true);
+          queuePipelineToastCopy("st_generation", { success: "Saved logic loaded" });
+          queuePipelineToastCopy("st_verification", { running: "Refreshing saved ST verification..." });
           setPipelineStatuses((previous) =>
             withDerivedPipelineStatuses({
               ...previous,
@@ -3847,6 +3888,7 @@ export default function Dashboard() {
 
   const versionsWorkspaceView = (
     <VersionsWorkspace
+      activeSection={(activeProjectFeature === "pid" ? "pid" : "history") as VersionsWorkspaceSection}
       versions={versions}
       selectedVersion={selectedVersion}
       selectedVersionTags={selectedVersionTags}
@@ -3855,6 +3897,12 @@ export default function Dashboard() {
       errorMessage={versioningError}
       busyAction={versionBusyAction}
       settings={versioningSettings}
+      pidChanges={pidChanges}
+      pidChangesLoading={pidChangesLoading}
+      pidChangesError={pidChangesError}
+      pidApplying={pidApplying}
+      pidSnapshotCreating={pidCreatingSnapshot}
+      pidAcceptedConflicts={pidAcceptedConflicts}
       onSelectVersion={setSelectedVersion}
       onToggleCompareSelection={handleVersionToggleCompareSelection}
       onCreateSnapshot={() => {
@@ -3873,6 +3921,17 @@ export default function Dashboard() {
         void handleVersionExport(version);
       }}
       onSettingsChange={setVersioningSettings}
+      onRefreshPIDChanges={() => {
+        void refreshPIDChanges();
+      }}
+      onPIDAcceptChanges={() => setPIDAcceptedConflicts((value) => !value)}
+      onPIDReviewConflicts={handlePIDReviewConflicts}
+      onPIDApplyUpdate={() => {
+        void handlePIDApplyUpdate();
+      }}
+      onPIDCreateSnapshot={() => {
+        void handlePIDCreateSnapshot();
+      }}
     />
   );
 
@@ -3928,7 +3987,7 @@ export default function Dashboard() {
     </div>
   );
 
-  const monitoringWorkspaceView = activeProjectFeature === "versions"
+  const monitoringWorkspaceView = activeProjectFeature === "versions" || activeProjectFeature === "pid"
     ? versionsWorkspaceView
     : activeModule === "diagnostics"
       ? diagnosticsWorkspaceView

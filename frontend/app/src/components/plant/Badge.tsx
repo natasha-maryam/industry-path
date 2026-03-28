@@ -4,11 +4,15 @@ type BadgeProps = {
   label: string;
   className: string;
   title?: string;
+  compact?: boolean;
 };
 
-const Pill = memo(function Pill({ label, className, title }: BadgeProps): ReactElement {
+const Pill = memo(function Pill({ label, className, title, compact = false }: BadgeProps): ReactElement {
   return (
-    <span className={`inline-flex max-w-[120px] items-center truncate rounded px-2 py-0.5 text-xs font-medium ${className}`} title={title || label}>
+    <span
+      className={`inline-flex max-w-[120px] items-center truncate rounded font-medium ${compact ? "px-1.5 py-0.5 text-[8px]" : "px-2 py-0.5 text-xs"} ${className}`}
+      title={title || label}
+    >
       {label}
     </span>
   );
@@ -33,10 +37,11 @@ const resolveTypeClass = (typeValue: string): string => {
 
 type TypeBadgeProps = {
   type: string;
+  compact?: boolean;
 };
 
-export const TypeBadge = memo(function TypeBadge({ type }: TypeBadgeProps): ReactElement {
-  return <Pill label={type || "unknown"} className={resolveTypeClass(type || "")} />;
+export const TypeBadge = memo(function TypeBadge({ type, compact = false }: TypeBadgeProps): ReactElement {
+  return <Pill label={type || "unknown"} className={resolveTypeClass(type || "")} compact={compact} />;
 });
 
 type StatusBadgeProps = {
