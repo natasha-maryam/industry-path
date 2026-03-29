@@ -21,6 +21,7 @@ class GraphBuildService:
             "level_transmitter",
             "pressure_transmitter",
             "differential_pressure_transmitter",
+            "temperature_transmitter",
             "level_switch",
         }
         self.process_edge_types = {
@@ -61,6 +62,7 @@ class GraphBuildService:
             "level_transmitter": "level_measurement",
             "pressure_transmitter": "pressure_measurement",
             "differential_pressure_transmitter": "pressure_measurement",
+            "temperature_transmitter": "temperature_measurement",
             "level_switch": "level_switch",
             "analyzer": "analyzer",
         }
@@ -235,7 +237,8 @@ class GraphBuildService:
                     is_synthetic=entity.is_synthetic,
                     explanation=entity.explanation,
                     source_references=entity.source_references,
-                    equipment_type=str(enriched_metadata.get("equipment_type") or device_type_from_tag(entity.id, entity.canonical_type)),
+                    equipment_type=str(enriched_metadata.get("equipment_type") or entity.canonical_type),
+                    normalized_type=str(enriched_metadata.get("normalized_type") or entity.canonical_type),
                     signal_type=(
                         str(enriched_metadata.get("signal_type"))
                         if enriched_metadata.get("signal_type") is not None

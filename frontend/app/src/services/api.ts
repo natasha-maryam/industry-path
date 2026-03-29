@@ -207,6 +207,12 @@ export type EngineeringTraceabilityItem = {
   confidence?: number | null;
 };
 
+export type EngineeringLinkReference = {
+  tag: string;
+  provenance: "explicit" | "inferred_from_topology" | "inferred_from_behavioral_chain" | "inferred_from_context" | "sentinel_fallback";
+  inferred: boolean;
+};
+
 export type EngineeringTableWarning = {
   code: string;
   severity: string;
@@ -242,6 +248,10 @@ export type EngineeringTableResponseRow = {
   signal_outputs: string[];
   upstream: string[];
   downstream: string[];
+  upstream_links: EngineeringLinkReference[];
+  downstream_links: EngineeringLinkReference[];
+  has_inferred_upstream: boolean;
+  has_inferred_downstream: boolean;
   flow_path: string[];
   current_value: string | null;
   state: string | null;
@@ -274,6 +284,69 @@ export type EngineeringTableResponse = {
   rows: EngineeringTableResponseRow[];
   warnings: EngineeringTableWarning[];
   summary: EngineeringTableSummary;
+};
+
+export type FinalValidationDiagnostics = {
+  total_tags: number;
+  rejected_tags: number;
+  total_relationships: number;
+  rejected_relationships: number;
+  total_loops: number;
+  rejected_loops: number;
+  inferred_links: number;
+  duplicate_edges_removed: number;
+  duplicate_loops_removed: number;
+};
+
+export type FinalTagOutput = Omit<EngineeringTableResponseRow, "equipment"> & {
+  equipment: string;
+  upstream: string[];
+  downstream: string[];
+};
+
+export type FinalLoopOutput = {
+  loop_id: string;
+  sensor: string;
+  actuator: string;
+  process: string;
+  chain: string[];
+  confidence: number;
+  tuning_confidence: number;
+  controller?: string | null;
+  sensor_tag?: string;
+  actuator_tag?: string;
+  process_node?: string;
+  controller_tag?: string | null;
+  name?: string;
+  support?: string[];
+  support_count?: number;
+  tuning?: Record<string, unknown>;
+};
+
+export type ParseUnifiedModel = Record<string, unknown> & {
+  tags: FinalTagOutput[];
+  tag_rows: FinalTagOutput[];
+  rejected_tag_rows: EngineeringTableResponseRow[];
+  control_loops: FinalLoopOutput[];
+  rejected_control_loops: FinalLoopOutput[];
+  final_validation_diagnostics: FinalValidationDiagnostics;
+};
+
+export type ParseBatchResponse = {
+  project_id: string;
+  parse_job_id: string;
+  parse_batch_id: string;
+  parsed_at: string;
+  documents_seen: number;
+  documents: string[];
+  document_types: string[];
+  entities_count: number;
+  nodes_count: number;
+  edges_count: number;
+  final_validation_diagnostics: FinalValidationDiagnostics;
+  unified_model: ParseUnifiedModel;
+  warnings: string[];
+  summary: string;
 };
 
 export type DeterministicBehaviorRow = EngineeringTableResponseRow & {
@@ -640,6 +713,14 @@ export type ControlLoopRecord = {
   status: string;
   confidence: number;
   created_at: string;
+  loop_id?: string;
+  sensor?: string;
+  actuator?: string;
+  process?: string;
+  controller?: string | null;
+  chain?: string[];
+  tuning_confidence?: number;
+  tuning?: Record<string, unknown>;
 };
 
 export type ControlRule = {
@@ -1653,8 +1734,8 @@ export function buildExportDownloadUrl(exportId: string): string {
   return `${base}/exports/${encodeURIComponent(exportId)}/download`;
 }
 
-export async function parseProject(projectId: string, fileIds: string[] = []): Promise<Record<string, unknown>> {
-  const response = await api.post<Record<string, unknown>>(`/projects/${projectId}/parse`, { file_ids: fileIds });
+export async function parseProject(projectId: string, fileIds: string[] = []): Promise<ParseBatchResponse> {
+  const response = await api.post<ParseBatchResponse>(`/projects/${projectId}/parse`, { file_ids: fileIds });
   return response.data;
 }
 

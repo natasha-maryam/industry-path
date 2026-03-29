@@ -8,9 +8,11 @@ from uuid import uuid4
 from psycopg2.extras import Json
 
 from db.postgres import postgres_client
+from models.document_pipeline import DocumentParsingPipelineResult
 from models.pipeline import DetectedTag, EngineeringEntity
 from services.document_ingestion_service import document_ingestion_service
 from services.deterministic_signal_extraction_service import deterministic_signal_extraction_service
+from services.document_parsing_pipeline import parse_documents_pipeline
 from services.engineering_inference import engineering_inference_service
 from services.entity_classification_service import entity_classification_service
 from services.graph_build_service import graph_build_service
@@ -29,11 +31,67 @@ from services.project_service import project_service
 from services.relationship_refinement_service import relationship_refinement_service
 from services.relationship_inference_service import relationship_inference_service
 from services.tag_normalization_service import tag_normalization_service
+from services.validation_control_loop_layer import validation_control_loop_layer
 
 
 class ParseService:
     def __init__(self) -> None:
         self.logger = logging.getLogger(__name__)
+
+    @staticmethod
+    def _final_tag_payloads(pipeline_result: DocumentParsingPipelineResult) -> list[dict[str, object]]:
+        payloads: list[dict[str, object]] = []
+        for row in pipeline_result.final_validation.tag_rows:
+            payload = row.model_dump()
+            payload.update(
+                {
+                    "tag": row.tag,
+                    "equipment": row.equipment,
+                    "upstream": list(row.upstream),
+                    "downstream": list(row.downstream),
+                }
+            )
+            payloads.append(payload)
+        return payloads
+
+    @staticmethod
+    def _final_loop_payloads(loops) -> list[dict[str, object]]:
+        payloads: list[dict[str, object]] = []
+        for loop in loops:
+            payload = loop.model_dump()
+            payload.update(
+                {
+                    "loop_id": loop.loop_id,
+                    "sensor": loop.sensor_tag,
+                    "actuator": loop.actuator_tag,
+                    "process": loop.process_node,
+                    "controller": loop.controller_tag,
+                    "chain": list(loop.chain),
+                    "confidence": float(loop.confidence),
+                    "tuning_confidence": float(loop.tuning_confidence),
+                }
+            )
+            payloads.append(payload)
+        return payloads
+
+    @staticmethod
+    def _loop_definition_payloads(pipeline_result: DocumentParsingPipelineResult) -> list[dict[str, object]]:
+        payloads: list[dict[str, object]] = []
+        for loop in pipeline_result.final_validation.control_loops:
+            payloads.append(
+                {
+                    "name": loop.name,
+                    "source_sentence": " | ".join(loop.source_texts)[:400],
+                    "page_number": 0,
+                    "related_tags": [
+                        tag
+                        for tag in dict.fromkeys([*loop.chain, loop.sensor_tag, loop.controller_tag, loop.actuator_tag, loop.process_node])
+                        if tag
+                    ],
+                    "confidence": loop.confidence,
+                }
+            )
+        return payloads
 
     @staticmethod
     def _infer_document_type_from_name(file_name: str) -> str:
@@ -142,6 +200,7 @@ class ParseService:
         relationships,
         low_confidence_relationships,
         rule_bundle: dict[str, list],
+        pipeline_result: DocumentParsingPipelineResult,
         warnings: list[str],
     ) -> None:
         now = datetime.now(timezone.utc)
@@ -191,7 +250,168 @@ class ParseService:
                 ),
             )
 
-        for control_loop in rule_bundle.get("control_loops", []):
+        for tag in pipeline_result.structured_extraction.extracted_tags:
+            postgres_client.execute(
+                """
+                INSERT INTO extracted_metadata (id, project_id, parse_batch_id, source_file_id, category, tag, payload, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    str(uuid4()),
+                    project_id,
+                    parse_batch_id,
+                    tag.source_file_id,
+                    "extracted_tag",
+                    tag.normalized_tag,
+                    Json(tag.model_dump()),
+                    now,
+                ),
+            )
+
+        for equipment in pipeline_result.structured_extraction.equipment_detections:
+            postgres_client.execute(
+                """
+                INSERT INTO extracted_metadata (id, project_id, parse_batch_id, source_file_id, category, tag, payload, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    str(uuid4()),
+                    project_id,
+                    parse_batch_id,
+                    equipment.source_file_id,
+                    "normalized_equipment",
+                    equipment.normalized_tag,
+                    Json(equipment.model_dump()),
+                    now,
+                ),
+            )
+
+        for extracted_relationship in pipeline_result.structured_extraction.extracted_relationships:
+            postgres_client.execute(
+                """
+                INSERT INTO extracted_metadata (id, project_id, parse_batch_id, source_file_id, category, tag, payload, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    str(uuid4()),
+                    project_id,
+                    parse_batch_id,
+                    extracted_relationship.source_file_id,
+                    "extracted_relationship",
+                    f"{extracted_relationship.source_tag}->{extracted_relationship.target_tag}",
+                    Json(extracted_relationship.model_dump()),
+                    now,
+                ),
+            )
+
+        for intent in pipeline_result.semantic_behavior.semantic_intents:
+            postgres_client.execute(
+                """
+                INSERT INTO extracted_metadata (id, project_id, parse_batch_id, source_file_id, category, tag, payload, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    str(uuid4()),
+                    project_id,
+                    parse_batch_id,
+                    intent.source_file_id,
+                    "semantic_intent",
+                    intent.intent_id,
+                    Json(intent.model_dump()),
+                    now,
+                ),
+            )
+
+        for chain in pipeline_result.semantic_behavior.behavioral_chains:
+            postgres_client.execute(
+                """
+                INSERT INTO extracted_metadata (id, project_id, parse_batch_id, source_file_id, category, tag, payload, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    str(uuid4()),
+                    project_id,
+                    parse_batch_id,
+                    None,
+                    "behavioral_chain",
+                    chain.chain_id,
+                    Json(chain.model_dump()),
+                    now,
+                ),
+            )
+
+        for debug_item in pipeline_result.semantic_behavior.relationship_validation_debug:
+            postgres_client.execute(
+                """
+                INSERT INTO extracted_metadata (id, project_id, parse_batch_id, source_file_id, category, tag, payload, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    str(uuid4()),
+                    project_id,
+                    parse_batch_id,
+                    None,
+                    "relationship_validation_debug",
+                    debug_item.candidate_id,
+                    Json(debug_item.model_dump()),
+                    now,
+                ),
+            )
+
+        for debug_item in pipeline_result.validation_control_loop.loop_validation_debug:
+            postgres_client.execute(
+                """
+                INSERT INTO extracted_metadata (id, project_id, parse_batch_id, source_file_id, category, tag, payload, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    str(uuid4()),
+                    project_id,
+                    parse_batch_id,
+                    None,
+                    "loop_validation_debug",
+                    debug_item.candidate_id,
+                    Json(debug_item.model_dump()),
+                    now,
+                ),
+            )
+
+        for tuning_data in pipeline_result.final_validation.tuning_data:
+            postgres_client.execute(
+                """
+                INSERT INTO extracted_metadata (id, project_id, parse_batch_id, source_file_id, category, tag, payload, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    str(uuid4()),
+                    project_id,
+                    parse_batch_id,
+                    None,
+                    "tuning_data",
+                    tuning_data.tuning_id,
+                    Json(tuning_data.model_dump()),
+                    now,
+                ),
+            )
+
+        postgres_client.execute(
+            """
+            INSERT INTO extracted_metadata (id, project_id, parse_batch_id, source_file_id, category, tag, payload, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                str(uuid4()),
+                project_id,
+                parse_batch_id,
+                None,
+                "parser_relationship_graph",
+                "validated",
+                    Json(pipeline_result.final_validation.validated_graph.parser_graph.model_dump()),
+                now,
+            ),
+        )
+
+        for control_loop in self._loop_definition_payloads(pipeline_result):
             postgres_client.execute(
                 """
                 INSERT INTO control_loop_definitions (
@@ -202,11 +422,11 @@ class ParseService:
                     str(uuid4()),
                     project_id,
                     parse_batch_id,
-                    control_loop.name,
-                    control_loop.source_sentence,
-                    control_loop.page_number,
-                    Json(control_loop.related_tags),
-                    control_loop.confidence,
+                    control_loop["name"],
+                    control_loop["source_sentence"],
+                    control_loop["page_number"],
+                    Json(control_loop["related_tags"]),
+                    control_loop["confidence"],
                     now,
                 ),
             )
@@ -271,6 +491,44 @@ class ParseService:
             warnings.append(
                 f"LOW edge suggestion {rel.source_entity} {rel.relationship_type} {rel.target_entity}: {rel.explanation}"
             )
+
+        for loop in pipeline_result.final_validation.rejected_control_loops:
+            postgres_client.execute(
+                """
+                INSERT INTO extracted_metadata (id, project_id, parse_batch_id, source_file_id, category, tag, payload, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    str(uuid4()),
+                    project_id,
+                    parse_batch_id,
+                    None,
+                    "rejected_control_loop",
+                    loop.loop_id,
+                    Json(loop.model_dump()),
+                    now,
+                ),
+            )
+            warnings.append(
+                f"Rejected control loop {loop.loop_id}: support_count={loop.support_count} support={','.join(loop.support)}"
+            )
+
+        postgres_client.execute(
+            """
+            INSERT INTO extracted_metadata (id, project_id, parse_batch_id, source_file_id, category, tag, payload, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                str(uuid4()),
+                project_id,
+                parse_batch_id,
+                None,
+                "final_validation_diagnostics",
+                "summary",
+                Json(pipeline_result.final_validation.diagnostics.model_dump()),
+                now,
+            ),
+        )
 
         for warning in warnings:
             postgres_client.execute(
@@ -372,10 +630,46 @@ class ParseService:
         if not files:
             return {
                 "project_id": project_id,
+                "parse_job_id": "",
+                "parse_batch_id": "",
+                "parsed_at": datetime.now(timezone.utc).isoformat(),
                 "summary": "No files available to parse for this project.",
                 "documents_seen": 0,
+                "documents": [],
+                "document_types": [],
+                "entities_count": 0,
                 "nodes_count": 0,
                 "edges_count": 0,
+                "final_validation_diagnostics": {
+                    "total_tags": 0,
+                    "rejected_tags": 0,
+                    "total_relationships": 0,
+                    "rejected_relationships": 0,
+                    "total_loops": 0,
+                    "rejected_loops": 0,
+                    "inferred_links": 0,
+                    "duplicate_edges_removed": 0,
+                    "duplicate_loops_removed": 0,
+                },
+                "unified_model": {
+                    "tags": [],
+                    "tag_rows": [],
+                    "rejected_tag_rows": [],
+                    "control_loops": [],
+                    "rejected_control_loops": [],
+                    "final_validation_diagnostics": {
+                        "total_tags": 0,
+                        "rejected_tags": 0,
+                        "total_relationships": 0,
+                        "rejected_relationships": 0,
+                        "total_loops": 0,
+                        "rejected_loops": 0,
+                        "inferred_links": 0,
+                        "duplicate_edges_removed": 0,
+                        "duplicate_loops_removed": 0,
+                    },
+                },
+                "warnings": [],
             }
 
         parse_batch_id = str(uuid4())
@@ -399,187 +693,46 @@ class ParseService:
         )
 
         try:
-            self._update_parse_job_stage(
-                parse_job_id,
-                status="running",
-                current_stage="ingestion",
-                stage_message="Classifying uploaded documents",
-                progress_percent=10,
-            )
-
-            ingested = document_ingestion_service.ingest_batch(files)
-
-            self._update_parse_job_stage(
-                parse_job_id,
-                status="running",
-                current_stage="raw_extraction",
-                stage_message="Extracting text and OCR chunks",
-                progress_percent=25,
-            )
-            pid_chunks = pid_extraction_service.extract(ingested["pid_files"], self._resolve_file_path)
-            narrative_chunks = narrative_extraction_service.extract(ingested["narrative_files"], self._resolve_file_path)
-
             warnings: list[str] = []
+            ingested = document_ingestion_service.ingest_batch(files)
             if not ingested["pid_files"]:
                 warnings.append("No P&ID documents in parse batch; process-flow edges may be incomplete.")
             if not ingested["narrative_files"]:
                 warnings.append("No control narrative documents in parse batch; control semantics may be incomplete.")
-
             self._update_parse_job_stage(
                 parse_job_id,
                 status="running",
-                current_stage="tag_detection",
-                stage_message="Detecting and normalizing engineering tags",
-                progress_percent=45,
-            )
-            all_chunks = [*pid_chunks, *narrative_chunks]
-            detected_tags = self._detect_tags(all_chunks)
-
-            self._update_parse_job_stage(
-                parse_job_id,
-                status="running",
-                current_stage="entity_classification",
-                stage_message="Building normalized engineering entities",
-                progress_percent=58,
-            )
-            entities = entity_classification_service.build_entities(detected_tags)
-            narrative_blob = "\n".join(chunk.text for chunk in narrative_chunks)
-            entities = entity_classification_service.assign_process_units(entities, narrative_blob)
-
-            self._update_parse_job_stage(
-                parse_job_id,
-                status="running",
-                current_stage="process_unit_detection",
-                stage_message="Detecting process-unit topology nodes",
-                progress_percent=62,
-            )
-            process_units, synthetic_nodes = process_unit_detection_service.detect(
-                pid_chunks=pid_chunks,
-                narrative_chunks=narrative_chunks,
-                entities=entities,
+                current_stage="layer_1_structured_extraction",
+                stage_message="Segmenting uploaded documents",
+                progress_percent=15,
             )
 
-            for unit in process_units:
-                entities.append(
-                    EngineeringEntity(
-                        id=unit.id,
-                        tag=unit.id,
-                        canonical_type="process_unit",
-                        display_name=unit.name,
-                        aliases=unit.aliases,
-                        process_unit=unit.id,
-                        source_documents=[],
-                        source_pages=[],
-                        source_snippets=[],
-                        confidence=unit.confidence,
-                        is_synthetic=True,
-                        explanation=f"Process unit node ({unit.canonical_type})",
-                        source_references=unit.source_references,
-                        parse_notes=["Detected process unit node"],
-                    )
-                )
+            pipeline_result = parse_documents_pipeline(
+                files,
+                self._resolve_file_path,
+                stage_callback=lambda stage, message, progress: self._update_parse_job_stage(
+                    parse_job_id,
+                    status="running",
+                    current_stage=stage,
+                    stage_message=message,
+                    progress_percent=progress,
+                ),
+            )
 
-            for synthetic in synthetic_nodes:
-                entities.append(
-                    EngineeringEntity(
-                        id=synthetic.id,
-                        tag=synthetic.id,
-                        canonical_type=synthetic.canonical_type,
-                        display_name=synthetic.label,
-                        aliases=[],
-                        process_unit=synthetic.process_unit,
-                        source_documents=[],
-                        source_pages=[],
-                        source_snippets=[],
-                        confidence=synthetic.confidence,
-                        is_synthetic=True,
-                        explanation=synthetic.explanation,
-                        source_references=synthetic.source_references,
-                        parse_notes=["Synthetic topology node"],
-                    )
-                )
-
-            entities, part_of_relationships, assignment_warnings = process_unit_assignment_service.assign(
-                entities=entities,
-                process_units=process_units,
-            )
-            warnings.extend(assignment_warnings)
-
-            self._update_parse_job_stage(
-                parse_job_id,
-                status="running",
-                current_stage="parse_pid",
-                stage_message="Parsing P&ID geometry, symbols, and labels",
-                progress_percent=70,
-            )
-            pid_parser_relationships, pid_parser_metadata, pid_parser_warnings = pid_parser_service.parse(
-                pid_files=ingested["pid_files"],
-                resolve_file_path=self._resolve_file_path,
-            )
-            warnings.extend(pid_parser_warnings)
-
-            self._update_parse_job_stage(
-                parse_job_id,
-                status="running",
-                current_stage="extract_entities",
-                stage_message="Extracting engineering entities and metadata",
-                progress_percent=75,
-            )
-            rule_bundle = narrative_rule_extraction_service.extract_rules(narrative_chunks)
-
-            engineering_relationships, engineering_metadata, engineering_warnings = engineering_inference_service.infer(
-                entities=entities,
-                pid_chunks=pid_chunks,
-                narrative_chunks=narrative_chunks,
-                pid_parser_relationships=pid_parser_relationships,
-                pid_parser_metadata=pid_parser_metadata,
-                rule_bundle=rule_bundle,
-            )
-            warnings.extend(engineering_warnings)
-
-            deterministic_relationships, deterministic_metadata, deterministic_warnings = deterministic_signal_extraction_service.extract(
-                entities=entities,
-                pid_chunks=pid_chunks,
-                narrative_chunks=narrative_chunks,
-            )
-            warnings.extend(deterministic_warnings)
-            engineering_relationships = [*engineering_relationships, *deterministic_relationships]
-            engineering_metadata = self._merge_metadata(engineering_metadata, deterministic_metadata)
-
-            self._update_parse_job_stage(
-                parse_job_id,
-                status="running",
-                current_stage="infer_relationships",
-                stage_message="Inferring engineering relationships and control paths",
-                progress_percent=82,
-            )
-            relationships, low_conf_relationships, rel_warnings = relationship_inference_service.infer(
-                entities=entities,
-                rule_bundle=rule_bundle,
-                pid_chunks=pid_chunks,
-            )
-            warnings.extend(rel_warnings)
-
-            self._update_parse_job_stage(
-                parse_job_id,
-                status="running",
-                current_stage="relationship_refinement",
-                stage_message="Refining engineering edge semantics and directionality",
-                progress_percent=88,
-            )
-            relationships = relationship_refinement_service.refine(
-                entities=entities,
-                process_units=process_units,
-                base_relationships=[*relationships, *engineering_relationships, *part_of_relationships],
-                rule_bundle=rule_bundle,
-            )
+            warnings.extend(pipeline_result.warnings)
+            entities = pipeline_result.final_validation.validated_graph.entities
+            process_units = pipeline_result.semantic_behavior.process_units
+            relationships = pipeline_result.final_validation.validated_graph.relationships
+            low_conf_relationships = pipeline_result.final_validation.validated_graph.rejected_relationships
+            rule_bundle = pipeline_result.semantic_behavior.rule_bundle
+            engineering_metadata = pipeline_result.semantic_behavior.metadata_by_entity
 
             self._update_parse_job_stage(
                 parse_job_id,
                 status="running",
                 current_stage="pid_reconciliation",
                 stage_message="Reconciling normalized instrumentation against active plant graph",
-                progress_percent=90,
+                progress_percent=92,
             )
             reconcile_summary = pid_reconciliation_service.reconcile_from_entities(
                 project_id=project_id,
@@ -593,13 +746,6 @@ class ParseService:
                     for item in reconcile_summary.possible_conflicts
                 ]
             )
-
-            relationships, validation_warnings, validation_low = graph_validation_service.validate(
-                entities=entities,
-                relationships=relationships,
-            )
-            low_conf_relationships.extend(validation_low)
-            warnings.extend([item.message for item in validation_warnings])
 
             entities = graph_layout_hint_service.assign(entities, process_units)
 
@@ -640,13 +786,20 @@ class ParseService:
                 relationships=relationships,
                 low_confidence_relationships=low_conf_relationships,
                 rule_bundle=rule_bundle,
+                pipeline_result=pipeline_result,
                 warnings=warnings,
             )
 
             completed_at = datetime.now(timezone.utc)
+            tag_payloads = self._final_tag_payloads(pipeline_result)
+            control_loop_payloads = self._final_loop_payloads(pipeline_result.final_validation.control_loops)
+            rejected_loop_payloads = self._final_loop_payloads(pipeline_result.final_validation.rejected_control_loops)
             unified_model = {
             "equipment": [entity.id for entity in entities if entity.canonical_type in {"pump", "valve", "control_valve", "blower", "tank", "basin", "clarifier", "chemical_system_device", "generic_device"}],
-            "instruments": [entity.id for entity in entities if entity.canonical_type in {"flow_transmitter", "level_transmitter", "level_switch", "pressure_transmitter", "differential_pressure_transmitter", "analyzer"}],
+            "instruments": [entity.id for entity in entities if entity.canonical_type in {"flow_transmitter", "level_transmitter", "level_switch", "pressure_transmitter", "differential_pressure_transmitter", "temperature_transmitter", "analyzer"}],
+            "tags": tag_payloads,
+            "tag_rows": tag_payloads,
+            "rejected_tag_rows": [item.model_dump() for item in pipeline_result.final_validation.rejected_tag_rows],
             "process_units": [
                 {
                     "id": unit.id,
@@ -659,7 +812,8 @@ class ParseService:
             ],
             "process_flow_relationships": [edge for edge in edges if edge["edge_type"] in {"PROCESS_FLOW", "FEEDS", "DISCHARGES_TO", "CONNECTED_TO"}],
             "signal_control_relationships": [edge for edge in edges if edge["edge_type"] in {"SIGNAL_TO", "CONTROLS", "MEASURES", "MONITORS", "SUPPLIES_AIR_TO"}],
-            "control_loops": [item.model_dump() for item in rule_bundle.get("control_loops", [])],
+            "control_loops": control_loop_payloads,
+            "control_loop_visibility_threshold": validation_control_loop_layer.DEFAULT_VISIBLE_LOOP_CONFIDENCE_THRESHOLD,
             "interlocks": [item.model_dump() for item in rule_bundle.get("interlocks", [])],
             "alarms": [item.model_dump() for item in rule_bundle.get("alarms", [])],
             "sequences": {
@@ -667,6 +821,16 @@ class ParseService:
                 "shutdown": [item.model_dump() for item in rule_bundle.get("sequences", []) if item.sequence_type == "shutdown"],
             },
             "operating_modes": [item.model_dump() for item in rule_bundle.get("modes", [])],
+            "semantic_intents": [item.model_dump() for item in pipeline_result.semantic_behavior.semantic_intents],
+            "normalized_intents": [item.model_dump() for item in pipeline_result.semantic_behavior.normalized_intents],
+            "behavioral_chains": [item.model_dump() for item in pipeline_result.semantic_behavior.behavioral_chains],
+            "rejected_relationships": [item.model_dump() for item in pipeline_result.final_validation.validated_graph.rejected_relationships],
+            "relationship_graph": pipeline_result.final_validation.validated_graph.parser_graph.model_dump(),
+            "tuning_data": [item.model_dump() for item in pipeline_result.final_validation.tuning_data],
+            "rejected_control_loops": rejected_loop_payloads,
+            "relationship_validation_debug": [item.model_dump() for item in pipeline_result.semantic_behavior.relationship_validation_debug],
+            "loop_validation_debug": [item.model_dump() for item in pipeline_result.validation_control_loop.loop_validation_debug],
+            "final_validation_diagnostics": pipeline_result.final_validation.diagnostics.model_dump(),
             "clusters": [
                 {
                     "cluster_id": entity.cluster_id,
@@ -684,8 +848,10 @@ class ParseService:
             "documents_seen": len(files),
             "document_types": sorted({item.get("document_type", "unknown_document") for item in files}),
             "entities_count": len(entities),
+            "validated_tag_rows_count": len(pipeline_result.final_validation.tag_rows),
             "nodes_count": len(nodes),
             "edges_count": len(edges),
+            "final_validation_diagnostics": pipeline_result.final_validation.diagnostics.model_dump(),
             "warnings_count": len(warnings),
         }
 
@@ -749,14 +915,14 @@ class ParseService:
             "nodes_count": len(nodes),
             "edges_count": len(edges),
             "warnings": warnings,
+            "final_validation_diagnostics": pipeline_result.final_validation.diagnostics.model_dump(),
             "unified_model": unified_model,
-            "summary": "Deterministic engineering parse completed: staged extraction, normalization, rule inference, and graph build.",
+            "summary": "Deterministic engineering parse completed: staged extraction, normalization, graph reconstruction, and final response validation.",
             "pipeline_stages": [
-                "documents",
-                "ocr_extraction",
-                "engineering_entity_extraction",
-                "relationship_inference",
-                "plant_graph",
+                "layer_1_structured_extraction",
+                "layer_2_semantic_behavior",
+                "layer_3_validation_control_loop",
+                "layer_4_final_validation",
             ],
         }
 

@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from statistics import mean
 
 from db.postgres import postgres_client
+from models.document_pipeline import BehavioralChainRecord
 from models.engineering_table import (
+    EngineeringLinkReference,
     EngineeringTableRequest,
     EngineeringTableResponse,
     EngineeringTableRow,
@@ -28,6 +30,15 @@ class IngestedProjectData:
     metadata_rows: list[dict]
 
 
+@dataclass(frozen=True)
+class _CandidateLink:
+    tag: str
+    provenance: str
+    inferred: bool
+    priority: int
+    rank: tuple[object, ...]
+
+
 class EngineeringTableParser:
     def build(self, payload: EngineeringTableRequest) -> EngineeringTableResponse:
         project_service.ensure_project(payload.project_id)
@@ -42,9 +53,17 @@ class EngineeringTableParser:
             documents=ingested.documents,
             metadata_rows=ingested.metadata_rows,
         )
+        behavioral_chains = self._behavioral_chain_extraction(ingested.metadata_rows)
         relationships = self._relationship_extraction(canonical_entities, ingested.edges)
-        loops = self._control_loop_detection(canonical_entities, relationships)
-        updown = self._upstream_downstream_calculation(relationships, max_depth=max(2, payload.max_flow_depth))
+        loops = self._control_loop_detection(canonical_entities, relationships, behavioral_chains=behavioral_chains)
+        updown = self._upstream_downstream_calculation(
+            entities=canonical_entities,
+            relationships=relationships,
+            loops=loops,
+            behavioral_chains=behavioral_chains,
+            metadata_rows=ingested.metadata_rows,
+            max_depth=max(2, payload.max_flow_depth),
+        )
         metadata = self._engineering_metadata_extraction(canonical_entities)
         traceability = self._traceability_mapping(canonical_entities, context, relationships)
         derived = self._derived_field_generation(canonical_entities, relationships, loops, updown)
@@ -144,11 +163,11 @@ class EngineeringTableParser:
                 {
                     "id": node.id,
                     "tag": node.id,
-                    "type": node.node_type,
-                    "subtype": node.signal_type or node.equipment_type,
+                    "type": node.normalized_type or node.node_type,
+                    "subtype": node.node_type,
                     "description": node.description or node.label,
                     "system": node.process_unit,
-                    "equipment": node.equipment_type or node.label,
+                    "equipment": node.equipment_type or node.normalized_type or node.node_type,
                     "process_role": role,
                     "status": node.status,
                     "mode": node.mode,
@@ -255,13 +274,26 @@ class EngineeringTableParser:
 
         return relations
 
-    def _control_loop_detection(self, entities: list[dict], relationships: dict[str, dict[str, set[str]]]) -> dict[str, list[str]]:
+    def _control_loop_detection(
+        self,
+        entities: list[dict],
+        relationships: dict[str, dict[str, set[str]]],
+        behavioral_chains: list[BehavioralChainRecord] | None = None,
+    ) -> dict[str, list[str]]:
         by_role: dict[str, list[str]] = defaultdict(list)
         for entity in entities:
             role = str(entity.get("process_role") or "unknown")
             by_role[role].append(self._normalize_token(entity["tag"]))
 
         loops_by_tag: dict[str, list[str]] = defaultdict(list)
+        for chain in behavioral_chains or []:
+            chain_path = [self._normalize_token(item) for item in (chain.chain or [chain.sensor, chain.actuator, chain.process]) if item]
+            if len(chain_path) != 3:
+                continue
+            chain_value = "->".join(chain_path)
+            for tag in {chain.sensor, chain.actuator, chain.process}:
+                loops_by_tag[self._normalize_token(tag)].append(chain_value)
+
         processes = by_role.get("process", [])
 
         for process_tag in processes:
@@ -271,7 +303,7 @@ class EngineeringTableParser:
             ]
             for sensor in sensors:
                 for actuator in actuators:
-                    chain = f"{sensor}->{process_tag}->{actuator}"
+                    chain = f"{sensor}->{actuator}->{process_tag}"
                     loops_by_tag[sensor].append(chain)
                     loops_by_tag[process_tag].append(chain)
                     loops_by_tag[actuator].append(chain)
@@ -280,21 +312,291 @@ class EngineeringTableParser:
 
     def _upstream_downstream_calculation(
         self,
+        *,
+        entities: list[dict],
         relationships: dict[str, dict[str, set[str]]],
+        loops: dict[str, list[str]],
+        behavioral_chains: list[BehavioralChainRecord] | None = None,
+        metadata_rows: list[dict],
         max_depth: int,
-    ) -> dict[str, dict[str, list[str]]]:
-        result: dict[str, dict[str, list[str]]] = {}
+    ) -> dict[str, dict[str, object]]:
+        entity_map = {self._normalize_token(item["tag"]): item for item in entities}
+        context_neighbors = self._context_neighbors(metadata_rows)
+        result: dict[str, dict[str, object]] = {}
 
-        for tag in relationships.keys():
-            upstream = self._walk_graph(relationships, start=tag, key="upstream", max_depth=max_depth)
-            downstream = self._walk_graph(relationships, start=tag, key="downstream", max_depth=max_depth)
+        for tag in sorted(entity_map):
+            explicit_upstream = self._walk_graph(relationships, start=tag, key="upstream", max_depth=max_depth)
+            explicit_downstream = self._walk_graph(relationships, start=tag, key="downstream", max_depth=max_depth)
+
+            upstream_links = [EngineeringLinkReference(tag=item, provenance="explicit", inferred=False) for item in explicit_upstream]
+            downstream_links = [EngineeringLinkReference(tag=item, provenance="explicit", inferred=False) for item in explicit_downstream]
+
+            if not upstream_links:
+                inferred = self._infer_directional_links(
+                    tag=tag,
+                    direction="upstream",
+                    entity_map=entity_map,
+                    relationships=relationships,
+                    loops=loops,
+                    behavioral_chains=behavioral_chains or [],
+                    context_neighbors=context_neighbors,
+                )
+                upstream_links = [EngineeringLinkReference(tag=item.tag, provenance=item.provenance, inferred=item.inferred) for item in inferred]
+
+            if not downstream_links:
+                inferred = self._infer_directional_links(
+                    tag=tag,
+                    direction="downstream",
+                    entity_map=entity_map,
+                    relationships=relationships,
+                    loops=loops,
+                    behavioral_chains=behavioral_chains or [],
+                    context_neighbors=context_neighbors,
+                )
+                downstream_links = [EngineeringLinkReference(tag=item.tag, provenance=item.provenance, inferred=item.inferred) for item in inferred]
+
+            if not upstream_links:
+                upstream_links = [EngineeringLinkReference(tag=self._sentinel_tag(entity_map[tag], "upstream"), provenance="sentinel_fallback", inferred=True)]
+            if not downstream_links:
+                downstream_links = [EngineeringLinkReference(tag=self._sentinel_tag(entity_map[tag], "downstream"), provenance="sentinel_fallback", inferred=True)]
+
+            upstream = [item.tag for item in upstream_links]
+            downstream = [item.tag for item in downstream_links]
             result[tag] = {
                 "upstream": upstream,
                 "downstream": downstream,
-                "flow_chain": [*upstream, tag, *downstream] if upstream or downstream else [tag],
+                "upstream_links": upstream_links,
+                "downstream_links": downstream_links,
+                "has_inferred_upstream": any(item.inferred for item in upstream_links),
+                "has_inferred_downstream": any(item.inferred for item in downstream_links),
+                "flow_chain": [*upstream, tag, *downstream],
             }
 
         return result
+
+    def _infer_directional_links(
+        self,
+        *,
+        tag: str,
+        direction: str,
+        entity_map: dict[str, dict],
+        relationships: dict[str, dict[str, set[str]]],
+        loops: dict[str, list[str]],
+        behavioral_chains: list[BehavioralChainRecord],
+        context_neighbors: dict[str, dict[str, list[str]]],
+    ) -> list[_CandidateLink]:
+        topology_candidates = self._topology_candidates(tag=tag, direction=direction, entity_map=entity_map, relationships=relationships)
+        if topology_candidates:
+            return topology_candidates
+
+        behavioral_candidates = self._behavioral_chain_candidates(tag=tag, direction=direction, behavioral_chains=behavioral_chains, loops=loops)
+        if behavioral_candidates:
+            return behavioral_candidates
+
+        context_candidates = self._context_candidates(tag=tag, direction=direction, context_neighbors=context_neighbors)
+        if context_candidates:
+            return context_candidates
+
+        return []
+
+    def _topology_candidates(
+        self,
+        *,
+        tag: str,
+        direction: str,
+        entity_map: dict[str, dict],
+        relationships: dict[str, dict[str, set[str]]],
+    ) -> list[_CandidateLink]:
+        entity = entity_map.get(tag, {})
+        role = str(entity.get("process_role") or "unknown")
+        system = self._normalize_token(str(entity.get("system") or ""))
+        rel = relationships.get(tag, {})
+        candidate_tags: set[str] = set()
+        if direction == "upstream":
+            candidate_tags.update(rel.get("controlled_by", set()))
+            candidate_tags.update(rel.get("signal_inputs", set()))
+            candidate_tags.update(rel.get("connections", set()))
+        else:
+            candidate_tags.update(rel.get("controls", set()))
+            candidate_tags.update(rel.get("signal_outputs", set()))
+            candidate_tags.update(rel.get("measures", set()))
+            candidate_tags.update(rel.get("connections", set()))
+
+        scored: list[_CandidateLink] = []
+        for candidate in sorted(candidate_tags):
+            if candidate == tag or candidate not in entity_map:
+                continue
+            candidate_entity = entity_map[candidate]
+            candidate_system = self._normalize_token(str(candidate_entity.get("system") or ""))
+            candidate_role = str(candidate_entity.get("process_role") or "unknown")
+            same_system = candidate_system == system and bool(system)
+            compatibility = self._directional_role_rank(role, candidate_role, direction)
+            rank = (
+                0 if same_system else 1,
+                compatibility,
+                0 if candidate in rel.get("connections", set()) else 1,
+                candidate,
+            )
+            scored.append(_CandidateLink(tag=candidate, provenance="inferred_from_topology", inferred=True, priority=1, rank=rank))
+
+        return self._select_best_candidates(scored)
+
+    def _behavioral_chain_candidates(
+        self,
+        *,
+        tag: str,
+        direction: str,
+        behavioral_chains: list[BehavioralChainRecord],
+        loops: dict[str, list[str]],
+    ) -> list[_CandidateLink]:
+        candidates: list[_CandidateLink] = []
+        normalized_tag = self._normalize_token(tag)
+        for chain in behavioral_chains:
+            chain_path = [self._normalize_token(item) for item in (chain.chain or [chain.sensor, chain.actuator, chain.process]) if item]
+            if len(chain_path) != 3:
+                continue
+            sensor, actuator, process = chain_path
+            candidate = None
+            if normalized_tag == sensor:
+                candidate = process if direction == "upstream" else actuator
+            elif normalized_tag == actuator:
+                candidate = sensor if direction == "upstream" else process
+            elif normalized_tag == process:
+                candidate = actuator if direction == "upstream" else sensor
+            if candidate and candidate != normalized_tag:
+                candidates.append(
+                    _CandidateLink(
+                        tag=candidate,
+                        provenance="inferred_from_behavioral_chain",
+                        inferred=True,
+                        priority=2,
+                        rank=(0, -int(chain.confidence * 1000), tuple(chain_path), candidate),
+                    )
+                )
+
+        if candidates:
+            return self._select_best_candidates(candidates)
+
+        for chain in sorted(loops.get(tag, [])):
+            parts = [segment.strip() for segment in chain.split("->") if segment.strip()]
+            if len(parts) != 3:
+                continue
+            sensor, actuator, process = parts
+            candidate = None
+            if tag == sensor:
+                candidate = process if direction == "upstream" else actuator
+            elif tag == actuator:
+                candidate = sensor if direction == "upstream" else process
+            elif tag == process:
+                candidate = actuator if direction == "upstream" else sensor
+            if candidate and candidate != tag:
+                candidates.append(
+                    _CandidateLink(
+                        tag=candidate,
+                        provenance="inferred_from_behavioral_chain",
+                        inferred=True,
+                        priority=2,
+                        rank=(chain, candidate),
+                    )
+                )
+        return self._select_best_candidates(candidates)
+
+    def _behavioral_chain_extraction(self, metadata_rows: list[dict]) -> list[BehavioralChainRecord]:
+        chains_by_id: dict[str, BehavioralChainRecord] = {}
+        for row in metadata_rows:
+            if str(row.get("category") or "") != "behavioral_chain":
+                continue
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            if not payload:
+                continue
+            try:
+                chain = BehavioralChainRecord.model_validate(payload)
+            except Exception:
+                continue
+            normalized_chain = chain.model_copy(
+                update={
+                    "sensor": self._normalize_token(chain.sensor),
+                    "actuator": self._normalize_token(chain.actuator),
+                    "process": self._normalize_token(chain.process),
+                    "chain": [self._normalize_token(item) for item in (chain.chain or [chain.sensor, chain.actuator, chain.process]) if item],
+                }
+            )
+            existing = chains_by_id.get(normalized_chain.chain_id)
+            if existing is None or normalized_chain.confidence >= existing.confidence:
+                chains_by_id[normalized_chain.chain_id] = normalized_chain
+        return sorted(chains_by_id.values(), key=lambda item: (item.process, item.sensor, item.actuator))
+
+    def _context_candidates(self, *, tag: str, direction: str, context_neighbors: dict[str, dict[str, list[str]]]) -> list[_CandidateLink]:
+        candidates: list[_CandidateLink] = []
+        for index, candidate in enumerate(context_neighbors.get(tag, {}).get(direction, [])):
+            if candidate == tag:
+                continue
+            candidates.append(
+                _CandidateLink(
+                    tag=candidate,
+                    provenance="inferred_from_context",
+                    inferred=True,
+                    priority=3,
+                    rank=(index, candidate),
+                )
+            )
+        return self._select_best_candidates(candidates)
+
+    def _context_neighbors(self, metadata_rows: list[dict]) -> dict[str, dict[str, list[str]]]:
+        context: dict[str, dict[str, list[tuple[tuple[object, ...], str]]]] = defaultdict(lambda: {"upstream": [], "downstream": []})
+        for row in metadata_rows:
+            if str(row.get("category") or "") != "extracted_relationship":
+                continue
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            source = self._normalize_token(str(payload.get("source_tag") or ""))
+            target = self._normalize_token(str(payload.get("target_tag") or ""))
+            if not source or not target or source == target:
+                continue
+            page = payload.get("source_page") or 0
+            section_reference = str(payload.get("source_section_reference") or "")
+            relationship_type = str(payload.get("relationship_type") or "")
+            rank = (int(page) if isinstance(page, int) or str(page).isdigit() else 0, section_reference, relationship_type, source, target)
+            context[source]["downstream"].append((rank, target))
+            context[target]["upstream"].append((rank, source))
+
+        normalized: dict[str, dict[str, list[str]]] = {}
+        for tag, directions in context.items():
+            normalized[tag] = {}
+            for direction, values in directions.items():
+                ordered = sorted(values, key=lambda item: item[0])
+                deduped: list[str] = []
+                for _, candidate in ordered:
+                    if candidate not in deduped:
+                        deduped.append(candidate)
+                normalized[tag][direction] = deduped
+        return normalized
+
+    @staticmethod
+    def _directional_role_rank(role: str, candidate_role: str, direction: str) -> int:
+        priority_map = {
+            ("sensor", "upstream"): {"process": 0, "actuator": 1, "sensor": 2, "unknown": 3},
+            ("sensor", "downstream"): {"actuator": 0, "process": 1, "sensor": 2, "unknown": 3},
+            ("actuator", "upstream"): {"sensor": 0, "process": 1, "actuator": 2, "unknown": 3},
+            ("actuator", "downstream"): {"process": 0, "actuator": 1, "sensor": 2, "unknown": 3},
+            ("process", "upstream"): {"actuator": 0, "sensor": 1, "process": 2, "unknown": 3},
+            ("process", "downstream"): {"actuator": 0, "sensor": 1, "process": 2, "unknown": 3},
+        }
+        return priority_map.get((role, direction), {}).get(candidate_role, 4)
+
+    @staticmethod
+    def _select_best_candidates(candidates: list[_CandidateLink]) -> list[_CandidateLink]:
+        if not candidates:
+            return []
+        unique: dict[str, _CandidateLink] = {}
+        for item in sorted(candidates, key=lambda candidate: (candidate.priority, candidate.rank)):
+            unique.setdefault(item.tag, item)
+        ordered = sorted(unique.values(), key=lambda candidate: (candidate.priority, candidate.rank))
+        return ordered[:1]
+
+    def _sentinel_tag(self, entity: dict, direction: str) -> str:
+        system = self._normalize_token(str(entity.get("system") or "global")) or "global"
+        prefix = "system_source" if direction == "upstream" else "system_sink"
+        return f"{prefix}:{system}"
 
     def _engineering_metadata_extraction(self, entities: list[dict]) -> dict[str, dict]:
         out: dict[str, dict] = {}
@@ -383,7 +685,7 @@ class EngineeringTableParser:
                 "num_downstream": len(downstream),
                 "control_chain": chain,
                 "flow_chain": updown.get(tag, {}).get("flow_chain", [tag]),
-                "is_orphan": len(connections) == 0,
+                "is_orphan": False,
                 "is_controlled": len(controlled_by) > 0,
                 "is_actuated": len(controls) > 0,
                 "inferred": bool(entity.get("is_synthetic")),
@@ -447,6 +749,10 @@ class EngineeringTableParser:
                     signal_outputs=sorted(rel.get("signal_outputs", set())),
                     upstream=updown.get(tag, {}).get("upstream", []),
                     downstream=updown.get(tag, {}).get("downstream", []),
+                    upstream_links=updown.get(tag, {}).get("upstream_links", []),
+                    downstream_links=updown.get(tag, {}).get("downstream_links", []),
+                    has_inferred_upstream=bool(updown.get(tag, {}).get("has_inferred_upstream", False)),
+                    has_inferred_downstream=bool(updown.get(tag, {}).get("has_inferred_downstream", False)),
                     flow_path=updown.get(tag, {}).get("flow_chain", [tag]),
                     current_value=self._to_optional_string(meta.get("current_value")),
                     state=self._to_optional_string(meta.get("state")),
@@ -461,11 +767,11 @@ class EngineeringTableParser:
                     line_reference=list(ctx.get("line_reference", [])),
                     confidence=max(0.35, min(0.99, float(entity.get("node_confidence") or 0.6))),
                     num_connections=int(drv.get("num_connections", 0)),
-                    num_upstream=int(drv.get("num_upstream", 0)),
-                    num_downstream=int(drv.get("num_downstream", 0)),
+                    num_upstream=len(updown.get(tag, {}).get("upstream", [])),
+                    num_downstream=len(updown.get(tag, {}).get("downstream", [])),
                     control_chain=loops.get(tag, drv.get("control_chain", [])),
                     flow_chain=drv.get("flow_chain", [tag]),
-                    is_orphan=bool(drv.get("is_orphan", False)),
+                    is_orphan=False,
                     is_controlled=bool(drv.get("is_controlled", False)),
                     is_actuated=bool(drv.get("is_actuated", False)),
                     warnings=[],
@@ -523,8 +829,8 @@ class EngineeringTableParser:
             warnings.append(
                 EngineeringTableWarning(
                     code="missing_relationships",
-                    severity="warning",
-                    message="Some entities have no relationships and may need reconciliation.",
+                    severity="info",
+                    message="Some entities required deterministic upstream/downstream completion beyond explicit relationships.",
                     affected_tags=missing_rel[:20],
                 )
             )

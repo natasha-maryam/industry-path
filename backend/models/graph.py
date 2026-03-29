@@ -24,6 +24,7 @@ class GraphNode(BaseModel):
     explanation: str | None = None
     source_references: list[str] = Field(default_factory=list)
     equipment_type: str | None = None
+    normalized_type: str | None = None
     signal_type: str | None = None
     instrument_role: str | None = None
     control_role: str | None = None

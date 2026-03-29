@@ -106,6 +106,7 @@ import {
   type DirectPLCProtocol,
   type DirectPLCTargetRuntime,
   type FaultAnalysisResult,
+  type FinalLoopOutput,
   type STWorkspaceVerificationResponse,
   type PipelineStageStatusMap,
   type PIDReconcileSummary,
@@ -291,6 +292,38 @@ const resolveTraceTag = (candidate: string, trace: SimulationTracePoint[]): stri
   return match?.tag || "";
 };
 
+const toWorkspaceLoopRecord = (projectId: string, loop: FinalLoopOutput): ControlLoopRecord => {
+  const sensorTag = loop.sensor || loop.sensor_tag || "";
+  const actuatorTag = loop.actuator || loop.actuator_tag || "";
+  const processTag = loop.process || loop.process_node || "";
+  const controllerTag = loop.controller ?? loop.controller_tag ?? null;
+  const chain = loop.chain?.filter((item) => Boolean(item && item.trim().length > 0)) ?? [sensorTag, controllerTag || "", actuatorTag, processTag].filter(Boolean);
+  return {
+    id: loop.loop_id,
+    project_id: projectId,
+    loop_tag: loop.loop_id,
+    sensor_tag: sensorTag,
+    actuator_tag: actuatorTag,
+    process_unit: processTag || null,
+    controller_tag: controllerTag,
+    loop_type: "feedback",
+    control_strategy: "PID",
+    setpoint_tag: null,
+    output_tag: null,
+    status: loop.confidence >= 0.84 ? "validated" : "candidate",
+    confidence: loop.confidence,
+    created_at: "",
+    loop_id: loop.loop_id,
+    sensor: sensorTag,
+    actuator: actuatorTag,
+    process: processTag,
+    controller: controllerTag,
+    chain,
+    tuning_confidence: loop.tuning_confidence,
+    tuning: loop.tuning,
+  };
+};
+
 const identityKeyForEngineeringRow = (row: EngineeringTableResponseRow): string => {
   return row.id?.trim() || row.tag.trim();
 };
@@ -358,6 +391,33 @@ const traceabilityEquals = (
   return true;
 };
 
+const linkReferenceEquals = (
+  left: EngineeringTableResponseRow["upstream_links"],
+  right: EngineeringTableResponseRow["upstream_links"]
+): boolean => {
+  if (left === right) {
+    return true;
+  }
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    const leftItem = left[index];
+    const rightItem = right[index];
+    if (!rightItem) {
+      return false;
+    }
+    if (
+      leftItem.tag !== rightItem.tag ||
+      leftItem.provenance !== rightItem.provenance ||
+      leftItem.inferred !== rightItem.inferred
+    ) {
+      return false;
+    }
+  }
+  return true;
+};
+
 const engineeringRowEquals = (left: EngineeringTableResponseRow, right: EngineeringTableResponseRow): boolean => {
   return (
     left.id === right.id &&
@@ -391,6 +451,10 @@ const engineeringRowEquals = (left: EngineeringTableResponseRow, right: Engineer
     arrayEquals(left.signal_outputs, right.signal_outputs) &&
     arrayEquals(left.upstream, right.upstream) &&
     arrayEquals(left.downstream, right.downstream) &&
+    linkReferenceEquals(left.upstream_links, right.upstream_links) &&
+    linkReferenceEquals(left.downstream_links, right.downstream_links) &&
+    left.has_inferred_upstream === right.has_inferred_upstream &&
+    left.has_inferred_downstream === right.has_inferred_downstream &&
     arrayEquals(left.flow_path, right.flow_path) &&
     arrayEquals(left.document_source, right.document_source) &&
     arrayEquals(left.line_reference, right.line_reference) &&
@@ -1973,7 +2037,19 @@ export default function Dashboard() {
         setIsParsing(true);
         setModuleState("plant_model", { state: "running", message: "Parsing plant model", updatedAt: new Date().toISOString() });
         setStatusText("Parsing plant model...");
-        await parseProject(selectedProjectId);
+        const parseResult = await parseProject(selectedProjectId);
+
+        const validatedRows = parseResult.unified_model.tag_rows ?? parseResult.unified_model.tags ?? [];
+        setUnsTableRowsOverride(validatedRows.length > 0 ? (validatedRows as EngineeringTableResponseRow[]) : null);
+
+        const validatedLoops = (parseResult.unified_model.control_loops ?? []).map((loop) => toWorkspaceLoopRecord(selectedProjectId, loop));
+        setControlLoops(validatedLoops);
+        setSelectedControlLoopTag((current) => {
+          if (current && validatedLoops.some((loop) => loop.loop_tag === current)) {
+            return current;
+          }
+          return validatedLoops[0]?.loop_tag ?? null;
+        });
 
         try {
           const graph = await getGraph(selectedProjectId);
@@ -1987,7 +2063,11 @@ export default function Dashboard() {
         }
 
         setModuleState("plant_model", { state: "success", message: "Plant model parsed", updatedAt: new Date().toISOString() });
-        setStatusText("Plant model parse complete.");
+        setStatusText(
+          validatedLoops.length > 0
+            ? `Plant model parse complete. ${validatedLoops.length} validated loop(s) available.`
+            : "Plant model parse complete. No validated control loops found yet."
+        );
         await refreshVersionHistory(selectedProjectId);
         toast.success("Parse batch completed", {
           className: "industrial-toast",
@@ -3564,17 +3644,6 @@ export default function Dashboard() {
     }
   };
 
-  const handleControlLoopEditStrategy = (loop: ControlLoopRecord): void => {
-    const nextStrategy = window.prompt("Update control strategy", loop.control_strategy || "PID");
-    if (!nextStrategy) {
-      return;
-    }
-    setControlLoops((previous) =>
-      previous.map((item) => (item.id === loop.id ? { ...item, control_strategy: nextStrategy.trim() || item.control_strategy } : item))
-    );
-    setStatusText(`Strategy updated locally for ${loop.loop_tag}.`);
-  };
-
   const handleControlLoopGenerateLogic = async (_loop: ControlLoopRecord): Promise<void> => {
     await handleToolbarAction("generate_logic");
   };
@@ -3609,22 +3678,6 @@ export default function Dashboard() {
     handleControlLoopSelect(loop);
     setActiveTab("Trace");
     setIsRightPanelExpanded(true);
-  };
-
-  const handleControlLoopSimulate = async (_loop: ControlLoopRecord): Promise<void> => {
-    if (!selectedProjectId) {
-      return;
-    }
-    try {
-      await runSimulation(selectedProjectId);
-      await refreshSimulationTraceData(selectedProjectId);
-      await refreshVersionHistory(selectedProjectId);
-      setActiveTab("Replay");
-      setActiveBottomView("simulation");
-      setStatusText("Simulation completed for selected loop context.");
-    } catch {
-      setStatusText("Simulation failed for selected loop context.");
-    }
   };
 
   const getProgressLinesForModules = (...moduleIds: WorkspaceModuleId[]): string[] => {
@@ -3698,6 +3751,7 @@ export default function Dashboard() {
         <EngineeringDeterministicTable
           projectId={selectedProjectId}
           reloadKey={behaviorRefreshKey}
+          seedRows={resolvedEngineeringRowsForWorkspace}
           loading={engineeringTableLoading}
           error={engineeringTableError}
           onRowSelect={handleEngineeringRowSelect}
@@ -3754,14 +3808,10 @@ export default function Dashboard() {
           onViewLoop={(loop) => {
             void handleControlLoopView(loop);
           }}
-          onEditStrategy={handleControlLoopEditStrategy}
           onGenerateLogic={(loop) => {
             void handleControlLoopGenerateLogic(loop);
           }}
           onTraceLoop={handleControlLoopTrace}
-          onSimulate={(loop) => {
-            void handleControlLoopSimulate(loop);
-          }}
           onNavigateToST={handleControlLoopNavigateToST}
           onNavigateToIO={handleControlLoopNavigateToIO}
         />
@@ -4808,14 +4858,10 @@ export default function Dashboard() {
                     onViewControlLoop={(loop) => {
                       void handleControlLoopView(loop);
                     }}
-                    onEditControlLoopStrategy={handleControlLoopEditStrategy}
                     onGenerateControlLoopLogic={(loop) => {
                       void handleControlLoopGenerateLogic(loop);
                     }}
                     onTraceControlLoop={handleControlLoopTrace}
-                    onSimulateControlLoop={(loop) => {
-                      void handleControlLoopSimulate(loop);
-                    }}
                     onNavigateControlLoopToST={handleControlLoopNavigateToST}
                     onNavigateControlLoopToIO={handleControlLoopNavigateToIO}
                     pidChanges={pidChanges}

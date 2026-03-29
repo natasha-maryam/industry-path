@@ -1,3 +1,4 @@
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   createColumnHelper,
@@ -9,7 +10,6 @@ import {
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChipList } from "./Chip";
-import { TypeBadge } from "./Badge";
 import {
   createBehaviorSocket,
   exportTagIntelligenceCsv,
@@ -23,6 +23,7 @@ import {
 type EngineeringDeterministicTableProps = {
   projectId?: string;
   reloadKey?: number;
+  seedRows?: EngineeringTableResponseRow[];
   loading: boolean;
   error: string | null;
   onRowSelect?: (row: EngineeringTableResponseRow) => void;
@@ -46,6 +47,22 @@ type RowsState = {
 
 const columnHelper = createColumnHelper<DeterministicBehaviorRow>();
 const SEARCH_DEBOUNCE_MS = 180;
+const TABLE_ROW_HEIGHT = 48;
+
+const tableColumnWidthClass = (columnId: string): string => {
+  switch (columnId) {
+    case "tag":
+      return "w-[30%]";
+    case "process_role":
+      return "w-[15%]";
+    case "flow_preview":
+      return "w-[40%]";
+    case "why":
+      return "w-[15%]";
+    default:
+      return "";
+  }
+};
 
 function useDebouncedValue<T>(value: T, delayMs: number): T {
   const [debouncedValue, setDebouncedValue] = useState<T>(value);
@@ -89,6 +106,10 @@ const normalizeBehaviorRow = (row: Partial<DeterministicBehaviorRow> & { tag: st
     signal_outputs: row.signal_outputs ?? [],
     upstream: row.upstream ?? [],
     downstream: row.downstream ?? [],
+    upstream_links: row.upstream_links ?? [],
+    downstream_links: row.downstream_links ?? [],
+    has_inferred_upstream: row.has_inferred_upstream ?? false,
+    has_inferred_downstream: row.has_inferred_downstream ?? false,
     flow_path: row.flow_path ?? [],
     current_value: row.current_value ?? null,
     state: row.state ?? null,
@@ -237,6 +258,7 @@ const downloadBlob = (blob: Blob, filename: string): void => {
 export default function EngineeringDeterministicTable({
   projectId,
   reloadKey = 0,
+  seedRows = [],
   loading,
   error,
   onRowSelect,
@@ -248,8 +270,11 @@ export default function EngineeringDeterministicTable({
 }: EngineeringDeterministicTableProps) {
   const [searchInput, setSearchInput] = useState<string>("");
   const [sorting, setSorting] = useState<SortingState>([{ id: "tag", desc: false }]);
-  const [rowsState, setRowsState] = useState<RowsState>(() => setRowsFromList([]));
+  const [rowsState, setRowsState] = useState<RowsState>(() => setRowsFromList(seedRows.map((row) => normalizeBehaviorRow(row))));
   const [selectedTag, setSelectedTag] = useState<string>("");
+  const [viewMode, setViewMode] = useState<"system" | "table">("system");
+  const [expandedEquipmentGroups, setExpandedEquipmentGroups] = useState<Record<string, boolean>>({});
+  const [hoveredTag, setHoveredTag] = useState<string | null>(null);
   const [isBehaviorLoading, setIsBehaviorLoading] = useState<boolean>(false);
   const [behaviorError, setBehaviorError] = useState<string | null>(null);
   const [wsStatus, setWsStatus] = useState<"connecting" | "connected" | "reconnecting" | "disconnected">("connecting");
@@ -271,6 +296,10 @@ export default function EngineeringDeterministicTable({
     setSearchInput(value);
   }, []);
 
+  const toggleEquipmentGroup = useCallback((equipment: string): void => {
+    setExpandedEquipmentGroups((current) => ({ ...current, [equipment]: !current[equipment] }));
+  }, []);
+
   const loadBehaviorRows = useCallback(async (): Promise<void> => {
     setIsBehaviorLoading(true);
     setBehaviorError(null);
@@ -288,6 +317,13 @@ export default function EngineeringDeterministicTable({
   useEffect(() => {
     void loadBehaviorRows();
   }, [loadBehaviorRows, projectId, reloadKey]);
+
+  useEffect(() => {
+    if (seedRows.length === 0) {
+      return;
+    }
+    setRowsState((previous) => mergePartialRows(previous, seedRows.map((row) => normalizeBehaviorRow(row))));
+  }, [seedRows]);
 
   useEffect(() => {
     let disposed = false;
@@ -470,6 +506,70 @@ export default function EngineeringDeterministicTable({
   const deferredFilteredRows = useDeferredValue(filteredRows);
 
   const selectedRow = useMemo(() => (selectedTag ? rowsState.byTag[selectedTag] ?? null : null), [rowsState.byTag, selectedTag]);
+  const previewRow = useMemo(() => {
+    if (hoveredTag) {
+      return rowsState.byTag[hoveredTag] ?? selectedRow;
+    }
+    return selectedRow;
+  }, [hoveredTag, rowsState.byTag, selectedRow]);
+
+  const equipmentGroups = useMemo(() => {
+    const groups = new Map<string, DeterministicBehaviorRow[]>();
+    for (const row of deferredFilteredRows) {
+      const equipmentKey = row.equipment?.trim() || "unassigned_equipment";
+      const existing = groups.get(equipmentKey) ?? [];
+      existing.push(row);
+      groups.set(equipmentKey, existing);
+    }
+    return Array.from(groups.entries()).sort((left, right) => left[0].localeCompare(right[0]));
+  }, [deferredFilteredRows]);
+
+  useEffect(() => {
+    setExpandedEquipmentGroups((current) => {
+      const next = { ...current };
+      let changed = false;
+      for (const [equipment] of equipmentGroups) {
+        if (!(equipment in next)) {
+          next[equipment] = equipmentGroups.length <= 3;
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [equipmentGroups]);
+
+  const primaryFlowPath = useMemo(() => {
+    const candidate = deferredFilteredRows
+      .map((row) => row.flow_chain.filter((item) => Boolean(item)))
+      .sort((left, right) => right.length - left.length)[0] ?? [];
+    const deduped: string[] = [];
+    for (const item of candidate) {
+      if (item && deduped[deduped.length - 1] !== item) {
+        deduped.push(item);
+      }
+    }
+    return deduped;
+  }, [deferredFilteredRows]);
+
+  const roleToneClass = useCallback((role: string | null | undefined): string => {
+    switch ((role || "").toLowerCase()) {
+      case "sensor":
+        return "border-sky-200 bg-sky-50 text-sky-900";
+      case "controller":
+        return "border-amber-200 bg-amber-50 text-amber-900";
+      case "actuator":
+        return "border-emerald-200 bg-emerald-50 text-emerald-900";
+      case "process":
+        return "border-violet-200 bg-violet-50 text-violet-900";
+      default:
+        return "border-slate-200 bg-slate-50 text-slate-800";
+    }
+  }, []);
+
+  const buildFlowPreview = useCallback((row: DeterministicBehaviorRow): string => {
+    const preview = [...row.upstream.slice(0, 1), row.tag, ...row.downstream.slice(0, 1)].filter(Boolean);
+    return preview.length > 0 ? preview.join(" -> ") : row.flow_chain.join(" -> ");
+  }, []);
 
   useEffect(() => {
     if (selectedRow) {
@@ -520,72 +620,52 @@ export default function EngineeringDeterministicTable({
   const columns = useMemo(
     () => [
       columnHelper.accessor("tag", {
-        header: "Tag",
+        header: "Component",
         cell: (info) => {
           const row = info.row.original;
           return (
-            <button
-              type="button"
-              className="max-w-[140px] truncate text-left font-semibold text-slate-800 hover:text-red-600"
-              title={row.tag}
-              onClick={(event) => {
-                event.stopPropagation();
-                console.log("COPILOT_ROW_CLICKED", row.tag);
-                setSelectedTag(row.tag);
-                onRowSelect?.(row);
-              }}
-            >
-              {row.tag}
-            </button>
+            <div className="flex items-center gap-2 min-w-0 whitespace-nowrap overflow-hidden text-ellipsis">
+              <button
+                type="button"
+                className="block max-w-full whitespace-nowrap overflow-hidden text-ellipsis text-left font-semibold text-slate-800 hover:text-red-600"
+                title={row.tag}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setSelectedTag(row.tag);
+                  onRowSelect?.(row);
+                }}
+              >
+                {row.tag}
+              </button>
+              <span className="block max-w-full whitespace-nowrap overflow-hidden text-ellipsis text-[9px] text-slate-500">{toText(row.equipment)}</span>
+            </div>
           );
         },
       }),
-      columnHelper.accessor("type", {
-        header: "Type",
-        cell: (info) => <TypeBadge type={toText(info.getValue())} compact />,
+      columnHelper.accessor("process_role", {
+        header: "Role",
+        cell: (info) => (
+          <div className="flex items-center gap-2 overflow-hidden whitespace-nowrap">
+            <span className={`inline-flex max-w-full overflow-hidden text-ellipsis whitespace-nowrap rounded-full border px-2 py-0.5 text-[8px] font-semibold uppercase ${roleToneClass(info.getValue())}`}>
+              {toText(info.getValue())}
+            </span>
+          </div>
+        ),
       }),
-      columnHelper.accessor("subtype", {
-        header: "Subtype",
-        cell: (info) => <span className="block max-w-[130px] truncate">{toText(info.getValue())}</span>,
-      }),
-      columnHelper.accessor("equipment", {
-        header: "Equipment",
-        cell: (info) => <span className="block max-w-[140px] truncate">{toText(info.getValue())}</span>,
-      }),
-      columnHelper.accessor("behavior_card", {
-        header: "Behavior",
-        cell: (info) => <span className="block max-w-[340px] truncate text-slate-700">{toText(info.getValue())}</span>,
-      }),
-      columnHelper.accessor("current_value", {
-        header: "Current",
-        cell: (info) => <span className="text-slate-800">{toText(info.getValue())}</span>,
-      }),
-      columnHelper.accessor("state", {
-        header: "State",
-        cell: (info) => <span className="text-slate-700">{toText(info.getValue())}</span>,
-      }),
-      columnHelper.accessor("setpoint", {
-        header: "Setpoint",
-        cell: (info) => <span className="text-slate-700">{toText(info.getValue())}</span>,
-      }),
-      columnHelper.accessor("mode", {
-        header: "Mode",
-        cell: (info) => <span className="text-slate-700">{toText(info.getValue())}</span>,
-      }),
-      columnHelper.accessor("controls", {
-        header: "Controls",
-        cell: (info) => <ChipList values={info.getValue()} tone="relation" limit={3} onChipClick={applyChipSearch} compact />,
-        sortingFn: (left, right) => left.original.controls.length - right.original.controls.length,
-      }),
-      columnHelper.accessor("upstream", {
-        header: "Upstream",
-        cell: (info) => <ChipList values={info.getValue()} tone="relation" limit={3} onChipClick={applyChipSearch} compact />,
-        sortingFn: (left, right) => left.original.upstream.length - right.original.upstream.length,
-      }),
-      columnHelper.accessor("downstream", {
-        header: "Downstream",
-        cell: (info) => <ChipList values={info.getValue()} tone="relation" limit={3} onChipClick={applyChipSearch} compact />,
-        sortingFn: (left, right) => left.original.downstream.length - right.original.downstream.length,
+      columnHelper.display({
+        id: "flow_preview",
+        header: "Flow Preview",
+        cell: (info) => {
+          const row = info.row.original;
+          return (
+            <div className="flex items-center gap-2 max-w-[300px] overflow-hidden whitespace-nowrap text-ellipsis">
+              <div className="max-w-[300px] truncate whitespace-nowrap text-[10px] text-slate-700" title={buildFlowPreview(row)}>
+                {buildFlowPreview(row)}
+              </div>
+            </div>
+          );
+        },
+        sortingFn: (left, right) => buildFlowPreview(left.original).localeCompare(buildFlowPreview(right.original)),
       }),
       columnHelper.display({
         id: "why",
@@ -594,16 +674,18 @@ export default function EngineeringDeterministicTable({
         cell: (info) => {
           const row = info.row.original;
           return (
-            <button
-              type="button"
-              className="rounded border border-red-300 bg-red-50 px-1.5 py-0.5 text-[8px] font-medium text-red-700 hover:bg-red-100"
-              onClick={(event) => {
-                event.stopPropagation();
-                onOpenWhyTrace?.(row);
-              }}
-            >
-              Why
-            </button>
+            <div className="flex items-center gap-2 overflow-hidden whitespace-nowrap">
+              <button
+                type="button"
+                className="rounded border border-red-300 bg-red-50 px-1.5 py-0.5 text-[8px] font-medium text-red-700 hover:bg-red-100"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onOpenWhyTrace?.(row);
+                }}
+              >
+                Why
+              </button>
+            </div>
           );
         },
       }),
@@ -626,7 +708,7 @@ export default function EngineeringDeterministicTable({
     count: tableRows.length,
     getScrollElement: () => scrollRef.current,
     getItemKey: (index) => tableRows[index]?.id ?? index,
-    estimateSize: () => 34,
+    estimateSize: () => TABLE_ROW_HEIGHT,
     overscan: 12,
   });
 
@@ -724,20 +806,96 @@ export default function EngineeringDeterministicTable({
           {exportError ? <div className="text-[10px] text-red-700">{exportError}</div> : null}
         </div>
 
+        <div className="grid gap-2 border-b border-slate-200 bg-slate-50 p-2 lg:grid-cols-[minmax(0,1.4fr)_minmax(260px,0.8fr)]">
+          <section className="rounded border border-slate-200 bg-white p-2">
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <div>
+                <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500">Flow View</p>
+                <p className="text-[10px] text-slate-600">Primary system flow inferred from the validated rows.</p>
+              </div>
+              <div className="inline-flex rounded border border-slate-200 bg-slate-100 p-0.5">
+                <button
+                  type="button"
+                  className={`rounded px-2 py-1 text-[10px] font-medium ${viewMode === "system" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"}`}
+                  onClick={() => setViewMode("system")}
+                >
+                  System View
+                </button>
+                <button
+                  type="button"
+                  className={`rounded px-2 py-1 text-[10px] font-medium ${viewMode === "table" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"}`}
+                  onClick={() => setViewMode("table")}
+                >
+                  Table View
+                </button>
+              </div>
+            </div>
+            {primaryFlowPath.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {primaryFlowPath.map((item, index) => (
+                  <div key={`${item}-${index}`} className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-medium text-slate-700 hover:border-red-200 hover:text-red-700"
+                      onMouseEnter={() => setHoveredTag(tagByComparableToken.get(toComparableToken(item)) ?? null)}
+                      onMouseLeave={() => setHoveredTag(null)}
+                      onClick={() => {
+                        const resolved = tagByComparableToken.get(toComparableToken(item));
+                        if (resolved) {
+                          setSelectedTag(resolved);
+                        }
+                      }}
+                    >
+                      {item}
+                    </button>
+                    {index < primaryFlowPath.length - 1 ? <span className="text-slate-400">→</span> : null}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[10px] text-slate-500">No validated flow path is available yet.</p>
+            )}
+          </section>
+
+          <section className="rounded border border-slate-200 bg-white p-2">
+            <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500">Signal Hover Preview</p>
+            {previewRow ? (
+              <div className="mt-1 space-y-2">
+                <div>
+                  <p className="text-[11px] font-semibold text-slate-800">{previewRow.tag}</p>
+                  <p className="text-[10px] text-slate-500">{toText(previewRow.equipment)} · {toText(previewRow.process_role)}</p>
+                </div>
+                <div>
+                  <p className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-slate-500">Upstream</p>
+                  <ChipList values={previewRow.upstream} tone="relation" limit={6} onChipClick={applyChipSearch} emptyLabel="No upstream context" compact />
+                </div>
+                <div>
+                  <p className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-slate-500">Downstream</p>
+                  <ChipList values={previewRow.downstream} tone="relation" limit={6} onChipClick={applyChipSearch} emptyLabel="No downstream context" compact />
+                </div>
+              </div>
+            ) : (
+              <p className="mt-1 text-[10px] text-slate-500">Hover a row or flow token to preview upstream and downstream context.</p>
+            )}
+          </section>
+        </div>
+
+        {viewMode === "table" ? (
         <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto">
-          <table className="min-w-[1850px] w-full table-fixed border-collapse text-left text-[8px] text-slate-700">
+          <table className="w-full table-fixed border-collapse text-left text-[8px] text-slate-700">
             <thead className="sticky top-0 z-10 bg-slate-100 text-[8px] uppercase tracking-wide text-slate-600">
               {table.getHeaderGroups().map((headerGroup) => (
                 <tr key={headerGroup.id}>
                   {headerGroup.headers.map((header) => {
                     const sortable = header.column.getCanSort();
                     const sorted = header.column.getIsSorted();
+                    const widthClass = tableColumnWidthClass(header.column.id);
                     return (
-                      <th key={header.id} className="border-b border-slate-300 px-2 py-2">
+                      <th key={header.id} className={`p-2 ${widthClass} border-b border-slate-300 align-middle whitespace-nowrap overflow-hidden text-ellipsis`}>
                         {header.isPlaceholder ? null : (
                           <button
                             type="button"
-                            className={`flex items-center gap-1 ${sortable ? "cursor-pointer" : "cursor-default"}`}
+                            className={`flex max-w-full items-center gap-1 overflow-hidden whitespace-nowrap text-ellipsis ${sortable ? "cursor-pointer" : "cursor-default"}`}
                             onClick={sortable ? header.column.getToggleSortingHandler() : undefined}
                           >
                             {flexRender(header.column.columnDef.header, header.getContext())}
@@ -761,25 +919,99 @@ export default function EngineeringDeterministicTable({
                 return (
                   <tr
                     key={row.original.tag}
-                    className={`absolute left-0 top-0 cursor-pointer border-b border-slate-200 hover:bg-slate-50 ${selected ? "bg-red-50" : loopHighlighted ? "bg-amber-50" : ""}`}
-                    style={{ transform: `translateY(${virtualRow.start}px)`, width: "100%", display: "table", tableLayout: "fixed" }}
+                    className={`absolute left-0 top-0 h-12 cursor-pointer align-middle border-b border-slate-200 hover:bg-slate-50 ${selected ? "bg-red-50" : loopHighlighted ? "bg-amber-50" : ""}`}
+                    style={{ transform: `translateY(${virtualRow.start}px)`, width: "100%", display: "table", tableLayout: "fixed", height: `${TABLE_ROW_HEIGHT}px` }}
+                    onMouseEnter={() => setHoveredTag(row.original.tag)}
+                    onMouseLeave={() => setHoveredTag(null)}
                     onClick={() => {
-                      console.log("COPILOT_ROW_CLICKED", row.original.tag);
                       setSelectedTag(row.original.tag);
                       onRowSelect?.(row.original);
                     }}
                   >
-                    {row.getVisibleCells().map((cell) => (
-                      <td key={cell.id} className="truncate px-2 py-1.5 align-top text-[8px]">
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </td>
-                    ))}
+                    {row.getVisibleCells().map((cell) => {
+                      const widthClass = tableColumnWidthClass(cell.column.id);
+                      return (
+                        <td key={cell.id} className={`p-2 ${widthClass} h-12 align-middle whitespace-nowrap overflow-hidden text-ellipsis text-[8px]`}>
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </td>
+                      );
+                    })}
                   </tr>
                 );
               })}
             </tbody>
           </table>
         </div>
+        ) : (
+          <div className="min-h-0 flex-1 overflow-auto p-2">
+            {equipmentGroups.length > 0 ? (
+              <div className="space-y-2">
+                {equipmentGroups.map(([equipment, rows]) => {
+                  const expanded = expandedEquipmentGroups[equipment] ?? false;
+                  return (
+                    <section key={equipment} className="overflow-hidden rounded border border-slate-200 bg-white">
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-between gap-3 border-b border-slate-100 px-3 py-2 text-left hover:bg-slate-50"
+                        onClick={() => toggleEquipmentGroup(equipment)}
+                      >
+                        <div>
+                          <p className="text-[11px] font-semibold text-slate-800">{equipment.replace(/_/g, " ")}</p>
+                          <p className="text-[10px] text-slate-500">{rows.length} validated component{rows.length === 1 ? "" : "s"}</p>
+                        </div>
+                        <span className="text-slate-500">{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
+                      </button>
+                      {expanded ? (
+                        <div className="divide-y divide-slate-100">
+                          {rows.map((row) => {
+                            const selected = selectedTag === row.tag;
+                            const highlighted = highlightedTagSet.has(toComparableToken(row.tag));
+                            return (
+                              <button
+                                key={row.tag}
+                                type="button"
+                                className={`grid w-full gap-2 px-3 py-2 text-left hover:bg-slate-50 md:grid-cols-[minmax(0,180px)_110px_minmax(0,1fr)_minmax(220px,0.9fr)] ${selected ? "bg-red-50" : highlighted ? "bg-amber-50" : ""}`}
+                                onMouseEnter={() => setHoveredTag(row.tag)}
+                                onMouseLeave={() => setHoveredTag(null)}
+                                onClick={() => {
+                                  setSelectedTag(row.tag);
+                                  onRowSelect?.(row);
+                                }}
+                              >
+                                <div className="min-w-0">
+                                  <p className="truncate text-[11px] font-semibold text-slate-800">{row.tag}</p>
+                                  <p className="truncate text-[10px] text-slate-500">{toText(row.description)}</p>
+                                </div>
+                                <div>
+                                  <span className={`inline-flex rounded-full border px-2 py-0.5 text-[8px] font-semibold uppercase ${roleToneClass(row.process_role)}`}>{toText(row.process_role)}</span>
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="truncate text-[10px] text-slate-700">{buildFlowPreview(row)}</p>
+                                  <div className="mt-1 flex flex-wrap gap-1">
+                                    <ChipList values={row.upstream.slice(0, 2)} tone="relation" limit={2} onChipClick={applyChipSearch} compact />
+                                    <ChipList values={row.downstream.slice(0, 2)} tone="relation" limit={2} onChipClick={applyChipSearch} compact />
+                                  </div>
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="truncate text-[10px] text-slate-600">Behavior: {toText(row.behavior_summary || row.behavior_card)}</p>
+                                  <p className="mt-1 text-[9px] text-slate-500">Confidence {row.behavior_confidence.toFixed(2)}</p>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </section>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="flex h-full items-center justify-center rounded border border-dashed border-slate-300 bg-white text-[10px] text-slate-500">
+                No validated plant model rows match the current filter.
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="border-t border-slate-200 bg-white p-2">
           {selectedRow ? (

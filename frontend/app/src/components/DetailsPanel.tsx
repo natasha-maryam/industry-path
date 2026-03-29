@@ -64,10 +64,8 @@ type DetailsPanelProps = {
   onSelectControlLoop?: (loop: ControlLoopRecord) => void;
   onDetectControlLoops?: () => void;
   onViewControlLoop?: (loop: ControlLoopRecord) => void;
-  onEditControlLoopStrategy?: (loop: ControlLoopRecord) => void;
   onGenerateControlLoopLogic?: (loop: ControlLoopRecord) => void;
   onTraceControlLoop?: (loop: ControlLoopRecord) => void;
-  onSimulateControlLoop?: (loop: ControlLoopRecord) => void;
   onNavigateControlLoopToST?: (loop: ControlLoopRecord) => void;
   onNavigateControlLoopToIO?: (loop: ControlLoopRecord) => void;
   onReplayPointChange?: (point: number) => void;
@@ -136,10 +134,8 @@ export default function DetailsPanel({
   onSelectControlLoop,
   onDetectControlLoops,
   onViewControlLoop,
-  onEditControlLoopStrategy,
   onGenerateControlLoopLogic,
   onTraceControlLoop,
-  onSimulateControlLoop,
   onNavigateControlLoopToST,
   onNavigateControlLoopToIO,
   onReplayPointChange,
@@ -228,10 +224,8 @@ export default function DetailsPanel({
           onSelectLoop={(loop) => onSelectControlLoop?.(loop)}
           onDetectLoops={onDetectControlLoops}
           onViewLoop={(loop) => onViewControlLoop?.(loop)}
-          onEditStrategy={(loop) => onEditControlLoopStrategy?.(loop)}
           onGenerateLogic={(loop) => onGenerateControlLoopLogic?.(loop)}
           onTraceLoop={(loop) => onTraceControlLoop?.(loop)}
-          onSimulate={(loop) => onSimulateControlLoop?.(loop)}
           onNavigateToST={(loop) => onNavigateControlLoopToST?.(loop)}
           onNavigateToIO={(loop) => onNavigateControlLoopToIO?.(loop)}
         />

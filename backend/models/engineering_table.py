@@ -1,4 +1,9 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+
+LinkProvenance = Literal["explicit", "inferred_from_topology", "inferred_from_behavioral_chain", "inferred_from_context", "sentinel_fallback"]
 
 
 class EngineeringTableRequest(BaseModel):
@@ -13,6 +18,12 @@ class EngineeringTraceabilityItem(BaseModel):
     source_id: str
     excerpt: str | None = None
     confidence: float | None = None
+
+
+class EngineeringLinkReference(BaseModel):
+    tag: str
+    provenance: LinkProvenance
+    inferred: bool = False
 
 
 class EngineeringTableWarning(BaseModel):
@@ -50,6 +61,10 @@ class EngineeringTableRow(BaseModel):
     signal_outputs: list[str] = Field(default_factory=list)
     upstream: list[str] = Field(default_factory=list)
     downstream: list[str] = Field(default_factory=list)
+    upstream_links: list[EngineeringLinkReference] = Field(default_factory=list)
+    downstream_links: list[EngineeringLinkReference] = Field(default_factory=list)
+    has_inferred_upstream: bool = False
+    has_inferred_downstream: bool = False
     flow_path: list[str] = Field(default_factory=list)
     current_value: str | None = None
     state: str | None = None

@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from models.graph import PlantGraph
 from models.logic import LogicGenerateRequest, LogicGenerationResult
+from models.parse import ParseBatchResponse
 from services.deploy_service import deploy_service
 from services.graph_service import graph_service
 from services.logic_service import logic_service
@@ -40,9 +41,9 @@ async def upload_alias(
     return await upload_service.save_files(project_id, files, document_types)
 
 
-@router.post("/parse")
-def parse_alias(payload: ParseScopedRequest):
-    return parse_service.parse_project(payload.project_id, file_ids=payload.file_ids)
+@router.post("/parse", response_model=ParseBatchResponse)
+def parse_alias(payload: ParseScopedRequest) -> ParseBatchResponse:
+    return ParseBatchResponse(**parse_service.parse_project(payload.project_id, file_ids=payload.file_ids))
 
 
 @router.post("/generate-logic", response_model=LogicGenerationResult)

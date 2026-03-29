@@ -18,6 +18,7 @@ class GraphValidationService:
             "flow_transmitter": {"pipe", "valve", "pump"},
             "level_transmitter": {"tank", "wet_well"},
             "analyzer": {"control_valve", "basin"},
+            "temperature_transmitter": {"tank", "basin", "control_valve"},
             "control_valve": {"pipe", "basin"},
         }
 
@@ -27,6 +28,7 @@ class GraphValidationService:
             "level_transmitter",
             "pressure_transmitter",
             "differential_pressure_transmitter",
+            "temperature_transmitter",
             "level_switch",
         }
 

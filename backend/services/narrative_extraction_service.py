@@ -79,7 +79,7 @@ class NarrativeExtractionService:
                 RawDocumentChunk(
                     file_id=file["id"],
                     file_name=file["original_name"],
-                    document_type="control_narrative",
+                    document_type=file.get("document_type", "control_narrative"),
                     page_number=page_number,
                     text=line,
                     section=current_section,
