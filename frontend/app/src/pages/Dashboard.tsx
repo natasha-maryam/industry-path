@@ -11,7 +11,6 @@ import {
   Upload,
 } from "lucide-react";
 import { Toaster, toast } from "react-hot-toast";
-import { Separator } from "react-resizable-panels";
 import ActivityBar from "../components/ActivityBar";
 import BottomPanel from "../components/BottomPanel";
 import CodeExplorerPanel, { type GeneratedLogicFile, type STDiagnosticMarker, type STJumpLocation } from "../components/CodeExplorerPanel";
@@ -571,7 +570,7 @@ export default function Dashboard() {
   const { activeProjectId: selectedProjectId, setActiveProjectId: setSelectedProjectId, plantGraph, setPlantGraph } = useWorkspaceContext();
   const graphNodes = plantGraph.nodes;
 
-  const [activeAction, setActiveAction] = useState<ToolbarAction>("upload_documents");
+  const [, setActiveAction] = useState<ToolbarAction>("upload_documents");
   const [selectedNode, setSelectedNode] = useState<string>("");
   const [selectedSystemContextPayload, setSelectedSystemContextPayload] = useState<Record<string, unknown> | null>(null);
   const [systemContextLoading, setSystemContextLoading] = useState<boolean>(false);
@@ -598,8 +597,6 @@ export default function Dashboard() {
   const activeMainView = uiShell.activeMainView;
   const activeModule = panelState.activeModule;
   const activeTab = panelState.activeRightTab;
-  const activeBottomView = panelState.activeBottomView;
-  const codePanelMode = panelState.codePanelMode;
   const monitoringPanelMode = panelState.monitoringPanelMode;
   const uiState = useMemo<ThinUIState>(
     () => ({
@@ -709,22 +706,22 @@ export default function Dashboard() {
 
   const [tracePath, setTracePath] = useState<string[]>([]);
   const [replayPoint, setReplayPoint] = useState<number>(64);
-  const [showLogic, setShowLogic] = useState<boolean>(false);
+  const [, setShowLogic] = useState<boolean>(false);
   const [controlLogicCode, setControlLogicCode] = useState<string>("");
   const [generatedLogic, setGeneratedLogic] = useState<string>("");
   const [generatedSTFiles, setGeneratedSTFiles] = useState<GeneratedLogicFile[]>([]);
   const [selectedSTFilePath, setSelectedSTFilePath] = useState<string | null>(null);
   const [stDiagnosticsByFile, setSTDiagnosticsByFile] = useState<Record<string, STDiagnosticMarker[]>>({});
   const [stJumpLocation, setSTJumpLocation] = useState<STJumpLocation | null>(null);
-  const [logicWarnings, setLogicWarnings] = useState<string[]>([]);
-  const [logicValidationIssues, setLogicValidationIssues] = useState<string[]>([]);
-  const [stVerificationData, setSTVerificationData] = useState<STWorkspaceVerificationResponse | null>(null);
-  const [isVerifyingST, setIsVerifyingST] = useState<boolean>(false);
-  const [stVerificationFailedMessage, setSTVerificationFailedMessage] = useState<string | null>(null);
+  const [, setLogicWarnings] = useState<string[]>([]);
+  const [, setLogicValidationIssues] = useState<string[]>([]);
+  const [, setSTVerificationData] = useState<STWorkspaceVerificationResponse | null>(null);
+  const [, setIsVerifyingST] = useState<boolean>(false);
+  const [, setSTVerificationFailedMessage] = useState<string | null>(null);
   const [ioMappingRows, setIOMappingRows] = useState<IOMappingTableRow[]>([]);
   const [ioMappingIssues, setIOMappingIssues] = useState<IOMappingIssue[]>([]);
   const [selectedIOMappingTag, setSelectedIOMappingTag] = useState<string | null>(null);
-  const [ioMappingSummary, setIOMappingSummary] = useState<IOMappingSummaryByType | null>(null);
+  const [, setIOMappingSummary] = useState<IOMappingSummaryByType | null>(null);
   const [isGeneratingIOMapping, setIsGeneratingIOMapping] = useState<boolean>(false);
   const [isExportingLogic, setIsExportingLogic] = useState<boolean>(false);
   const [pidChanges, setPIDChanges] = useState<PIDReconcileSummary | null>(null);

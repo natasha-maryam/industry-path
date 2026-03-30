@@ -1,8 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
-import {
-  type EngineeringTableResponseRow,
-} from "../services/api";
+import { type EngineeringTableResponseRow } from "../services/api";
 
 type CopilotPanelProductionProps = {
   projectId?: string;
@@ -16,96 +14,8 @@ type CopilotPanelProductionProps = {
   initialCommand?: string;
 };
 
-const toPreviewRow = (row: EngineeringTableResponseRow | null): Record<string, unknown> | null => {
-  if (!row) {
-    return null;
-  }
-
-  return {
-    tag: row.tag,
-    type: row.type,
-    system: row.system,
-    equipment: row.equipment,
-    state: row.state,
-    mode: row.mode,
-    confidence: row.confidence,
-    warnings: row.warnings,
-    upstream: row.upstream.slice(0, 6),
-    downstream: row.downstream.slice(0, 6),
-  };
-};
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> => {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-};
-
-function StructuredValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
-  if (value === null || value === undefined) {
-    return <span className="text-[11px] text-slate-400">null</span>;
-  }
-
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return <span className="break-words text-[11px] text-slate-700">{String(value)}</span>;
-  }
-
-  if (Array.isArray(value)) {
-    if (value.length === 0) {
-      return <span className="text-slate-400">[]</span>;
-    }
-
-    const primitiveValues = value.every(
-      (item) => item === null || item === undefined || typeof item === "string" || typeof item === "number" || typeof item === "boolean"
-    );
-
-    if (primitiveValues) {
-      return (
-        <div className="flex flex-wrap gap-1">
-          {value.map((item, index) => (
-            <span key={`${depth}-${index}`} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-700">
-              {String(item)}
-            </span>
-          ))}
-        </div>
-      );
-    }
-
-    return (
-      <div className="space-y-1.5">
-        {value.map((item, index) => (
-          <div key={`${depth}-${index}`} className="rounded-md bg-slate-50 p-1.5">
-            <StructuredValue value={item} depth={depth + 1} />
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  if (isPlainObject(value)) {
-    const entries = Object.entries(value);
-    if (entries.length === 0) {
-      return <span className="text-slate-400">{{}}</span>;
-    }
-
-    return (
-      <div className={`space-y-1 ${depth === 0 ? "rounded-md bg-white" : ""}`}>
-        {entries.map(([key, nestedValue]) => (
-          <div key={`${depth}-${key}`} className={`min-w-0 px-1.5 py-1 ${depth === 0 ? "border-b border-slate-100 last:border-b-0" : ""}`}>
-            <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">{key}</div>
-            <StructuredValue value={nestedValue} depth={depth + 1} />
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  return <pre className="whitespace-pre-wrap break-words text-[11px] text-slate-700">{JSON.stringify(value, null, 2)}</pre>;
-}
-
 export default function CopilotPanelProduction({
-  projectId,
   selectedTag,
-  selectedRow = null,
-  engineeringRows,
   graphSummary,
   initialCommand = "",
 }: CopilotPanelProductionProps) {
@@ -115,20 +25,6 @@ export default function CopilotPanelProduction({
   useEffect(() => {
     setCommand(initialCommand);
   }, [initialCommand]);
-
-  const context = useMemo<Record<string, unknown>>(
-    () => ({
-      project_id: projectId,
-      selected_tag: selectedTag,
-      graph_summary: graphSummary ?? null,
-      engineering_table: {
-        total_rows: engineeringRows.length,
-        sample_tags: engineeringRows.slice(0, 12).map((row) => row.tag),
-        selected_row: toPreviewRow(selectedRow),
-      },
-    }),
-    [engineeringRows, graphSummary, projectId, selectedRow, selectedTag]
-  );
 
   const handleRun = async (): Promise<void> => {
     const trimmedCommand = command.trim();

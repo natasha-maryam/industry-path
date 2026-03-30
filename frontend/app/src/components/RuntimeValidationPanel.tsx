@@ -144,7 +144,6 @@ export default function RuntimeValidationPanel({
   loading = false,
   actionLoading = false,
   failedMessage = null,
-  onDeploy,
   onStart,
   onStop,
   requiredPreviousStep = "IO Mapping",
