@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from fastapi import APIRouter, Response, status
+from typing import Optional
 
 from models.project import ActiveProjectUpdate, Project, ProjectCreate, ProjectUpdate
 from services.project_service import project_service
@@ -16,8 +19,8 @@ def create_project(payload: ProjectCreate) -> Project:
     return project_service.create_project(payload)
 
 
-@router.get("/active/current", response_model=Project | None)
-def get_active_project() -> Project | None:
+@router.get("/active/current", response_model=Optional[Project])
+def get_active_project() -> Optional[Project]:
     return project_service.get_active_project()
 
 

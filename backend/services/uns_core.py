@@ -12,7 +12,7 @@ from typing import Any, Callable, Mapping
 UNSListener = Callable[[str, dict[str, Any]], None]
 
 
-@dataclass(slots=True)
+@dataclass
 class UNSRow:
     tag: str
     type: str = "unknown"

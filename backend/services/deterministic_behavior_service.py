@@ -19,7 +19,7 @@ BehaviorListener = Callable[[str, dict[str, Any]], None]
 logger = logging.getLogger(__name__)
 
 
-@dataclass(slots=True)
+@dataclass
 class RuntimeState:
     tag: str
     current_value: str | None = None
@@ -69,7 +69,7 @@ class RuntimeState:
         }
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(frozen=True)
 class RelationshipEdge:
     id: str
     source: str
@@ -81,7 +81,7 @@ class RelationshipEdge:
     inferred: bool = False
 
 
-@dataclass(slots=True)
+@dataclass
 class RowModel:
     id: str
     tag: str

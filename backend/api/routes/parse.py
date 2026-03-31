@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from fastapi import APIRouter
 
 from models.parse import ParseBatchRequest, ParseBatchResponse, ParseJobStatusResponse, ParseSuggestionsResponse

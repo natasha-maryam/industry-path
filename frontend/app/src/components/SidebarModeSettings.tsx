@@ -1,17 +1,11 @@
-import SettingsSidebar from "./SettingsSidebar";
-
-type SettingsNavItemId =
-  | "general"
-  | "project_settings"
-  | "ai_connectors"
-  | "runtime_connections"
-  | "export_integrations";
+import SettingsSidebar, { type SettingsNavItemId } from "./SettingsSidebar";
 
 type SidebarModeSettingsProps = {
   activeItem: SettingsNavItemId;
   onSelectItem: (item: SettingsNavItemId) => void;
+  showBilling?: boolean;
 };
 
-export default function SidebarModeSettings({ activeItem, onSelectItem }: SidebarModeSettingsProps) {
-  return <SettingsSidebar activeItem={activeItem} onSelectItem={onSelectItem} />;
+export default function SidebarModeSettings({ activeItem, onSelectItem, showBilling = true }: SidebarModeSettingsProps) {
+  return <SettingsSidebar activeItem={activeItem} onSelectItem={onSelectItem} showBilling={showBilling} />;
 }

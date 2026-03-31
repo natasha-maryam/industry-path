@@ -24,7 +24,7 @@ class ProviderNotConfiguredError(ValueError):
     pass
 
 
-@dataclass(slots=True)
+@dataclass
 class AIProvider:
     name: str
     handler: ProviderHandler
@@ -32,7 +32,7 @@ class AIProvider:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(slots=True)
+@dataclass
 class CacheEntry:
     payload: dict[str, Any]
     expires_at: float
@@ -181,7 +181,7 @@ def enforce_prompt(task: str, rows: list[Mapping[str, Any]]) -> str:
     )
 
 
-@dataclass(slots=True)
+@dataclass
 class JobRecord:
     job_id: str
     status: str

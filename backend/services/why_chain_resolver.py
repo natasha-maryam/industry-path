@@ -39,7 +39,7 @@ ROLE_BONUS_WEIGHTS: dict[str, float] = {
 }
 
 
-@dataclass(slots=True)
+@dataclass
 class ChainEdge:
     source: str
     target: str
@@ -48,7 +48,7 @@ class ChainEdge:
     source_type: str
 
 
-@dataclass(slots=True)
+@dataclass
 class RawPath:
     nodes: list[str]
     edges: list[ChainEdge]

@@ -13,7 +13,7 @@ from services.graph_service import graph_service
 from services.uns_core import uns_core
 
 
-@dataclass(slots=True)
+@dataclass
 class TagIntelligenceRow:
     tag: str
     tag_type: str | None

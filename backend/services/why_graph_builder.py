@@ -17,7 +17,7 @@ INFERRED_CONFIDENCE_BY_REL_TYPE: dict[str, float] = {
 }
 
 
-@dataclass(slots=True)
+@dataclass
 class WhyNode:
     tag: str
     node_id: str
@@ -31,7 +31,7 @@ class WhyNode:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(frozen=True)
 class WhyEdge:
     source: str
     target: str
@@ -41,7 +41,7 @@ class WhyEdge:
     inferred: bool
 
 
-@dataclass(slots=True)
+@dataclass
 class WhyGraph:
     nodes: dict[str, WhyNode]
     edges: list[WhyEdge]

@@ -11,7 +11,7 @@ from models.copilot import CopilotRunResponse
 ProviderHandler = Callable[[str, Mapping[str, Any]], dict[str, Any]]
 
 
-@dataclass(slots=True)
+@dataclass
 class AIProvider:
     name: str
     handler: ProviderHandler

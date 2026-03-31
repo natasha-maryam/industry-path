@@ -18,7 +18,7 @@ except Exception:  # pragma: no cover - optional dependency
     mqtt = None
 
 
-@dataclass(slots=True)
+@dataclass
 class ConnectorValidationResult:
     ok: bool
     message: str

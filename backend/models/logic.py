@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -152,15 +154,15 @@ class LogicGenerationResult(LogicArtifact):
     rejected_candidates: list[RejectedRuleCandidate] = Field(default_factory=list)
     rejected_rules: list[RejectedRuleCandidate] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
-    engineering_validation: "EngineeringValidationReport | None" = None
+    engineering_validation: Optional[EngineeringValidationReport] = None
     control_loops: list["DiscoveredControlLoop"] = Field(default_factory=list)
-    completed_logic_model: "CompletedLogicModel | None" = None
-    st_validation: "STValidationResult | None" = None
-    io_mapping: "IOMappingResult | None" = None
-    runtime_validation: "RuntimeValidationResult | None" = None
-    simulation_validation: "SimulationValidationResult | None" = None
-    version_snapshot: "VersionSnapshotResult | None" = None
-    document_confirmation: "DocumentConfirmationResult | None" = None
+    completed_logic_model: Optional[CompletedLogicModel] = None
+    st_validation: Optional[STValidationResult] = None
+    io_mapping: Optional[IOMappingResult] = None
+    runtime_validation: Optional[RuntimeValidationResult] = None
+    simulation_validation: Optional[SimulationValidationResult] = None
+    version_snapshot: Optional[VersionSnapshotResult] = None
+    document_confirmation: Optional[DocumentConfirmationResult] = None
     confirmation_status: Literal["confirmed", "inferred", "conflict"] | None = None
     generation_report: dict | None = None
 

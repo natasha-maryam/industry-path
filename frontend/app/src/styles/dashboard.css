@@ -1354,6 +1354,68 @@
   font-weight: 600;
 }
 
+.billing-settings-view {
+  align-self: stretch;
+  justify-self: stretch;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 0.65rem 0.85rem;
+  min-height: 200px;
+}
+
+.billing-settings-card {
+  max-width: 32rem;
+  width: 100%;
+  border: 1px solid var(--stroke);
+  border-radius: 5px;
+  background: #f8fafc;
+  padding: 0.75rem 0.95rem 0.95rem;
+}
+
+.billing-settings-lead {
+  margin: 0 0 0.75rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.billing-settings-kv dd {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  align-items: flex-start;
+}
+
+.billing-settings-sub {
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.billing-status {
+  display: inline-block;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.12rem 0.38rem;
+  border-radius: 3px;
+}
+
+.billing-status-active {
+  background: #e6f4ea;
+  color: #1b5e20;
+  border: 1px solid #a5d6a7;
+}
+
+.billing-status-inactive {
+  background: #fce8e6;
+  color: #b71c1c;
+  border: 1px solid #ef9a9a;
+}
+
 .panel-subtitle {
   margin: 0 0 0.32rem;
   font-size: 0.7rem;

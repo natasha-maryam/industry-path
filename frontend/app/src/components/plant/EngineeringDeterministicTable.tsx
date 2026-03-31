@@ -26,6 +26,7 @@ type EngineeringDeterministicTableProps = {
   seedRows?: EngineeringTableResponseRow[];
   loading: boolean;
   error: string | null;
+  sandboxMode?: boolean;
   onRowSelect?: (row: EngineeringTableResponseRow) => void;
   onOpenWhyTrace?: (row: EngineeringTableResponseRow) => void;
   onRowsResolved?: (payload: {
@@ -261,6 +262,7 @@ export default function EngineeringDeterministicTable({
   seedRows = [],
   loading,
   error,
+  sandboxMode = false,
   onRowSelect,
   onOpenWhyTrace,
   onRowsResolved,
@@ -315,6 +317,9 @@ export default function EngineeringDeterministicTable({
   }, []);
 
   useEffect(() => {
+    if (sandboxMode) {
+      return;
+    }
     void loadBehaviorRows();
   }, [loadBehaviorRows, projectId, reloadKey]);
 
@@ -326,6 +331,9 @@ export default function EngineeringDeterministicTable({
   }, [seedRows]);
 
   useEffect(() => {
+    if (sandboxMode) {
+      return;
+    }
     let disposed = false;
     const candidateUrls = getBehaviorSocketCandidateUrls();
 
@@ -578,6 +586,11 @@ export default function EngineeringDeterministicTable({
   }, [selectedRow, onRowSelect]);
 
   const handleExportCsv = useCallback(async () => {
+    if (sandboxMode) {
+      setExportError("Export is disabled in sandbox mode.");
+      setExporting(null);
+      return;
+    }
     setExporting("csv");
     setExportError(null);
     try {
@@ -598,6 +611,11 @@ export default function EngineeringDeterministicTable({
   }, [projectId, searchInput]);
 
   const handleExportJson = useCallback(async () => {
+    if (sandboxMode) {
+      setExportError("Export is disabled in sandbox mode.");
+      setExporting(null);
+      return;
+    }
     setExporting("json");
     setExportError(null);
     try {
@@ -793,10 +811,20 @@ export default function EngineeringDeterministicTable({
             >
               Copilot
             </button>
-            <button type="button" className="command-btn deterministic-toolbar-btn" onClick={() => void handleExportCsv()} disabled={exporting !== null}>
+            <button
+              type="button"
+              className="command-btn deterministic-toolbar-btn"
+              onClick={() => void handleExportCsv()}
+              disabled={sandboxMode || exporting !== null}
+            >
               {exporting === "csv" ? "Exporting CSV..." : "Export CSV"}
             </button>
-            <button type="button" className="command-btn deterministic-toolbar-btn" onClick={() => void handleExportJson()} disabled={exporting !== null}>
+            <button
+              type="button"
+              className="command-btn deterministic-toolbar-btn"
+              onClick={() => void handleExportJson()}
+              disabled={sandboxMode || exporting !== null}
+            >
               {exporting === "json" ? "Exporting JSON..." : "Export JSON"}
             </button>
           </div>

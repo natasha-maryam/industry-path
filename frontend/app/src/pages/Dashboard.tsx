@@ -18,6 +18,7 @@ import CommandBar, { type ToolbarAction } from "../components/CommandBar";
 import DetailsPanel, { type RightTab } from "../components/DetailsPanel";
 import GraphWorkspace from "../components/GraphWorkspace";
 import IOMappingTablePanel from "../components/IOMappingTablePanel";
+import BillingSettingsPanel from "../components/BillingSettingsPanel";
 import MainWorkspaceRouter from "../components/MainWorkspaceRouter";
 import EngineeringDeterministicTable from "../components/plant/EngineeringDeterministicTable";
 import RightControlLoopsTab from "../components/rightTabs/RightControlLoopsTab";
@@ -25,10 +26,26 @@ import RightDiagnosticsTab from "../components/rightTabs/RightDiagnosticsTab";
 import RuntimeValidationPanel from "../components/RuntimeValidationPanel";
 import SidebarModeProjects from "../components/SidebarModeProjects";
 import SidebarModeSettings from "../components/SidebarModeSettings";
+import type { SettingsNavItemId } from "../components/SettingsSidebar";
 import SimulationValidationPanel from "../components/SimulationValidationPanel";
 import VersionsWorkspace, { type VersionsWorkspaceSection } from "../components/versioning/VersionsWorkspace";
 import WorkspaceActionPanel from "../components/WorkspaceActionPanel";
 import type { RuntimeValidationPanelData } from "../components/RuntimeValidationPanel";
+import {
+  SANDBOX_DEMO_PROJECT,
+  SANDBOX_DEMO_GRAPH,
+  SANDBOX_DEMO_ENGINEERING,
+  SANDBOX_DEMO_CONTROL_LOOPS,
+  SANDBOX_DEMO_IO_MAPPING_ISSUES,
+  SANDBOX_DEMO_IO_MAPPING_ROWS,
+  SANDBOX_DEMO_LOGIC_BUNDLED_CODE,
+  SANDBOX_DEMO_ST_FILES,
+  SANDBOX_DEMO_SIMULATION_TRACE,
+  SANDBOX_DEMO_SIMULATION_ISSUES,
+  SANDBOX_DEMO_SIMULATION_VALIDATION,
+  buildSandboxExportPaywallReadiness,
+} from "../sandbox/demoState";
+import { getSandboxEmailFromLocation, isSandboxAppUrl } from "../sandbox/isSandboxAppUrl";
 import { useWorkspaceContext } from "../context/WorkspaceContext";
 import { mapSystemContextToPanelView } from "../intelligence/mapSystemContextToPanelView";
 import { buildBehavior, buildImpact, buildSystemContext, type SystemContext, type SystemImpact } from "../intelligence/systemContext";
@@ -128,12 +145,6 @@ type BottomView = "simulation" | "monitoring" | "logic";
 type CodePanelMode = "control_logic" | "generated_st" | "verification" | "version_diff";
 type MonitoringPanelMode = "io_mapping" | "runtime" | "versions";
 type ActivityMode = "projects" | "settings";
-type SettingsNavItemId =
-  | "general"
-  | "project_settings"
-  | "ai_connectors"
-  | "runtime_connections"
-  | "export_integrations";
 type ProjectFeatureId = "versions" | "pid";
 
 type UIShellState = {
@@ -566,9 +577,40 @@ type PipelineToastCopy = {
   warning?: string;
 };
 
-export default function Dashboard() {
+type DashboardProps = {
+  mode?: "app" | "sandbox";
+  sandboxEmail?: string;
+};
+
+export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: DashboardProps) {
   const { activeProjectId: selectedProjectId, setActiveProjectId: setSelectedProjectId, plantGraph, setPlantGraph } = useWorkspaceContext();
   const graphNodes = plantGraph.nodes;
+  // URL-based sandbox (e.g. ?plan=sandbox from landing) even if App once rendered the wrong branch.
+  const isSandboxMode = mode === "sandbox" || isSandboxAppUrl();
+  const normalizedSandboxEmail = useMemo(() => {
+    const fromProp = (sandboxEmail || "free-user").trim().toLowerCase();
+    if (!isSandboxMode) {
+      return fromProp;
+    }
+    return getSandboxEmailFromLocation(fromProp);
+  }, [isSandboxMode, sandboxEmail]);
+  const sandboxExportCountKey = `industrypath:sandbox:export_count:${normalizedSandboxEmail}`;
+  const sandboxUpgradeUrl = `https://app.industrypath.tech/?modal=pricing-access&from=sandbox&email=${encodeURIComponent(normalizedSandboxEmail)}`;
+
+  const [exportCount, setExportCount] = useState<number>(() => {
+    if (!isSandboxMode) {
+      return 0;
+    }
+    try {
+      const key = `industrypath:sandbox:export_count:${getSandboxEmailFromLocation((sandboxEmail || "free-user").trim().toLowerCase())}`;
+      const raw = window.sessionStorage.getItem(key);
+      const parsed = raw ? Number.parseInt(raw, 10) : 0;
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    } catch {
+      return 0;
+    }
+  });
+  const exportLimitReached = isSandboxMode && exportCount >= 3;
 
   const [, setActiveAction] = useState<ToolbarAction>("upload_documents");
   const [selectedNode, setSelectedNode] = useState<string>("");
@@ -583,6 +625,11 @@ export default function Dashboard() {
     activeRightTab: "Details",
   });
   const [activeSettingsItem, setActiveSettingsItem] = useState<SettingsNavItemId>("general");
+  useEffect(() => {
+    if (isSandboxMode && activeSettingsItem === "billing") {
+      setActiveSettingsItem("general");
+    }
+  }, [isSandboxMode, activeSettingsItem]);
   const [activeProjectFeature, setActiveProjectFeature] = useState<ProjectFeatureId | null>(null);
   const [navigatorSelection, setNavigatorSelection] = useState<NavigatorSelection | null>({ type: "module", id: "plant_model" });
   const [panelState, setPanelState] = useState<WorkspacePanelState>({
@@ -661,6 +708,10 @@ export default function Dashboard() {
 
   const handleSettingsNavSelect = (item: SettingsNavItemId): void => {
     setActiveSettingsItem(item);
+    if (item === "billing") {
+      setActiveProjectFeature(null);
+      return;
+    }
     if (item === "project_settings") {
       setActiveProjectFeature("versions");
       setMonitoringPanelMode("versions");
@@ -807,6 +858,9 @@ export default function Dashboard() {
   const [isRightPanelExpanded, setIsRightPanelExpanded] = useState<boolean>(false);
   const [rightPanelWidth, setRightPanelWidth] = useState<number>(() => {
     if (typeof window === "undefined") {
+      return 300;
+    }
+    if (isSandboxMode) {
       return 300;
     }
     const parsed = Number.parseInt(window.localStorage.getItem("crosslayerx-right-panel-width") || "", 10);
@@ -1076,21 +1130,40 @@ export default function Dashboard() {
   }, [pipelineStatuses]);
 
   const disabledActions = useMemo<Partial<Record<ToolbarAction, boolean>>>(
-    () => ({
-      upload_documents: false,
-      parse_plant_model: !selectedProjectId,
-      detect_control_loops: !selectedProjectId,
-      generate_logic: !selectedProjectId,
-      generate_io_mapping: !selectedProjectId,
-      run_simulation: !selectedProjectId,
-      export_logic: !selectedProjectId,
-      deploy_runtime: !selectedProjectId,
-      start_monitoring: !selectedProjectId,
-      analyze_fault: !selectedProjectId,
-      replay_event: !selectedProjectId,
-      versions: !selectedProjectId,
-    }),
-    [selectedProjectId]
+    () => {
+      if (isSandboxMode) {
+        return {
+          upload_documents: true,
+          parse_plant_model: true,
+          detect_control_loops: true,
+          generate_logic: true,
+          generate_io_mapping: true,
+          run_simulation: true,
+          export_logic: exportLimitReached,
+          deploy_runtime: true,
+          start_monitoring: true,
+          analyze_fault: true,
+          replay_event: true,
+          versions: true,
+        };
+      }
+
+      return {
+        upload_documents: false,
+        parse_plant_model: !selectedProjectId,
+        detect_control_loops: !selectedProjectId,
+        generate_logic: !selectedProjectId,
+        generate_io_mapping: !selectedProjectId,
+        run_simulation: !selectedProjectId,
+        export_logic: !selectedProjectId,
+        deploy_runtime: !selectedProjectId,
+        start_monitoring: !selectedProjectId,
+        analyze_fault: !selectedProjectId,
+        replay_event: !selectedProjectId,
+        versions: !selectedProjectId,
+      };
+    },
+    [exportLimitReached, isSandboxMode, selectedProjectId]
   );
 
   const loadingAction = useMemo<ToolbarAction | null>(() => {
@@ -1673,6 +1746,96 @@ export default function Dashboard() {
   useEffect(() => {
     const initProjects = async (): Promise<void> => {
       try {
+        if (isSandboxMode) {
+          // Sandbox: preload a demo project and avoid all backend calls.
+          setProjects([SANDBOX_DEMO_PROJECT]);
+          setSelectedProjectId(SANDBOX_DEMO_PROJECT.id);
+          setStatusText(`Sandbox demo loaded: ${SANDBOX_DEMO_PROJECT.name}`);
+
+          setPlantGraph({ nodes: SANDBOX_DEMO_GRAPH.nodes, edges: SANDBOX_DEMO_GRAPH.edges });
+          setSelectedNode(SANDBOX_DEMO_GRAPH.nodes[0]?.id ?? "");
+
+          setEngineeringTableData(SANDBOX_DEMO_ENGINEERING);
+          setEngineeringTableError(null);
+          setSelectedWhyTraceTag(null);
+          setUnsTableRowsOverride(null);
+
+          setControlLoops(SANDBOX_DEMO_CONTROL_LOOPS);
+          setSelectedControlLoopTag(SANDBOX_DEMO_CONTROL_LOOPS[0]?.loop_tag ?? null);
+
+          setIOMappingRows(SANDBOX_DEMO_IO_MAPPING_ROWS);
+          setIOMappingIssues(SANDBOX_DEMO_IO_MAPPING_ISSUES);
+          setSelectedIOMappingTag(null);
+          setIOMappingSummary({
+            AI: SANDBOX_DEMO_IO_MAPPING_ROWS.filter((r) => r.io_type === "AI").length,
+            AO: SANDBOX_DEMO_IO_MAPPING_ROWS.filter((r) => r.io_type === "AO").length,
+            DI: 0,
+            DO: SANDBOX_DEMO_IO_MAPPING_ROWS.filter((r) => r.io_type === "DO").length,
+          });
+          setIOMappingFailedMessage(null);
+
+          setGeneratedSTFiles(SANDBOX_DEMO_ST_FILES);
+          setControlLogicCode(SANDBOX_DEMO_LOGIC_BUNDLED_CODE);
+          setGeneratedLogic(SANDBOX_DEMO_LOGIC_BUNDLED_CODE);
+          setSelectedSTFilePath((current) => current || SANDBOX_DEMO_ST_FILES[0]?.path || null);
+          setSTDiagnosticsByFile({});
+          setSTJumpLocation(null);
+          setShowLogic(true);
+          setLogicWarnings([]);
+          setLogicValidationIssues([]);
+          setSTVerificationData(null);
+          setSTVerificationFailedMessage(null);
+
+          setRuntimeValidationData(null);
+          setRuntimeFailedMessage(null);
+          setRuntimeTelemetryTags({});
+          setRuntimeForceableInputs([]);
+          setForcedTagNames([]);
+          setRuntimeDiagnostics(null);
+
+          setSimulationValidationData(SANDBOX_DEMO_SIMULATION_VALIDATION);
+          setSimulationFailedMessage(null);
+          setSimulationTrace(SANDBOX_DEMO_SIMULATION_TRACE);
+          setSimulationIssues(SANDBOX_DEMO_SIMULATION_ISSUES);
+          setSelectedReplayTag(SANDBOX_DEMO_SIMULATION_TRACE[0]?.tag ?? "");
+
+          setProjectDocumentsById({
+            [SANDBOX_DEMO_PROJECT.id]: [
+              {
+                id: "doc-demo-1",
+                project_id: SANDBOX_DEMO_PROJECT.id,
+                original_name: "pid_demo.pdf",
+                stored_name: "pid_demo.pdf",
+                file_type: "application/pdf",
+                document_type: "pid_pdf",
+                file_path: "/sandbox/pid_demo.pdf",
+                file_size: null,
+                upload_status: "uploaded",
+                uploaded_at: new Date().toISOString(),
+              },
+            ],
+          });
+
+          setVersions([]);
+          setSelectedVersion(null);
+          setSelectedVersionTags([]);
+
+          setPipelineStatuses(
+            withDerivedPipelineStatuses({
+              ...createInitialPipelineStatuses(),
+              plant_graph: "success",
+              st_generation: "success",
+              st_verification: "success",
+              logic_completion: "success",
+              io_mapping: "success",
+              runtime_validation: "success",
+              simulation_validation: "success",
+            })
+          );
+
+          return;
+        }
+
         const [projectList, activeProject] = await Promise.all([listProjects(), getActiveProject().catch(() => null)]);
 
         setProjects(projectList);
@@ -1694,6 +1857,9 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
+    if (isSandboxMode) {
+      return;
+    }
     if (!selectedProjectId) {
       setPlantGraph({ nodes: [], edges: [] });
       setEngineeringTableData(null);
@@ -1872,6 +2038,9 @@ export default function Dashboard() {
   }, [refreshControlLoops, refreshPIDChanges, refreshProjectDocuments, refreshSimulationTraceData, refreshVersionHistory, selectedProjectId]);
 
   useEffect(() => {
+    if (isSandboxMode) {
+      return;
+    }
     if (!selectedProjectId || (activeTab !== "Replay" && activeTab !== "Diagnostics")) {
       return;
     }
@@ -1879,6 +2048,9 @@ export default function Dashboard() {
   }, [activeTab, refreshSimulationTraceData, selectedProjectId]);
 
   useEffect(() => {
+    if (isSandboxMode) {
+      return;
+    }
     if (!selectedProjectId) {
       behaviorHydrationSignatureRef.current = "";
       return;
@@ -1938,6 +2110,9 @@ export default function Dashboard() {
   }, [selectedNode, selectedEquipment.signals, simulationTrace, selectedReplayTag]);
 
   useEffect(() => {
+    if (isSandboxMode) {
+      return;
+    }
     if (!selectedProjectId) {
       return;
     }
@@ -2198,7 +2373,7 @@ export default function Dashboard() {
       if (action === "export_logic") {
         setShowExportDialog(true);
         setExportResult(null);
-        setExportReadiness(null);
+        setExportReadiness(isSandboxMode ? buildSandboxExportPaywallReadiness(!exportLimitReached) : null);
         setExportReadinessLoading(false);
         setExportReadinessError(null);
         setExportDeploymentLogs([]);
@@ -2482,6 +2657,9 @@ export default function Dashboard() {
     if (isExportingLogic) {
       return "Export generation in progress.";
     }
+    if (isSandboxMode && exportLimitReached) {
+      return "Export limit reached. Upgrade to continue exporting and have full system access.";
+    }
     if (exportSourceSelectionBlocked) {
       return "Select a saved version before exporting.";
     }
@@ -2587,6 +2765,9 @@ export default function Dashboard() {
     if (!showExportDialog) {
       return;
     }
+    if (isSandboxMode) {
+      return;
+    }
     void refreshExportReadiness();
   }, [refreshExportReadiness, showExportDialog]);
 
@@ -2596,6 +2777,61 @@ export default function Dashboard() {
     }
     if (!selectedProjectId) {
       toast.error("Select a project before generating export.", { className: "industrial-toast industrial-toast-error" });
+      return;
+    }
+
+    if (isSandboxMode) {
+      setIsExportingLogic(true);
+      if (exportLimitReached) {
+        const message = "Export limit reached. Upgrade to continue exporting and have full system access.";
+        setStatusText(message);
+        setExportDeploymentState("not_ready");
+        setExportDeploymentMessage(message);
+        setExportDeploymentLogs([]);
+        setExportDeploymentErrors([]);
+        toast.error(message, { className: "industrial-toast industrial-toast-error" });
+        setIsExportingLogic(false);
+        return;
+      }
+
+      const nextCount = exportCount + 1;
+      setExportCount(nextCount);
+      try {
+        window.sessionStorage.setItem(sandboxExportCountKey, String(nextCount));
+      } catch {
+        // ignore
+      }
+
+      const exportId = `sandbox-export-${nextCount}`;
+      const downloadUrl = URL.createObjectURL(
+        new Blob([`Sandbox export package (demo). Export #${nextCount}\nProject: ${selectedProjectId}\n`], { type: "text/plain" })
+      );
+      const result: PLCExportResponse = {
+        export_id: exportId,
+        project_id: selectedProjectId,
+        project_name: SANDBOX_DEMO_PROJECT.name,
+        vendor: exportVendor,
+        source_mode: exportSourceMode,
+        source_version_id: exportSourceMode === "version" ? exportSourceVersionTag : null,
+        generated_at: new Date().toISOString(),
+        files: ["main.st"],
+        download_url: downloadUrl,
+        artifact_name: "Sandbox demo export",
+        logic_block_count: 0,
+        tag_count: 0,
+        readiness: buildSandboxExportPaywallReadiness(nextCount < 3),
+        package_preview: ["main.st"],
+      };
+
+      setExportResult(result);
+      setExportReadiness(result.readiness ?? buildSandboxExportPaywallReadiness(nextCount < 3));
+      setIsExportingLogic(false);
+      setStatusText(`Sandbox export created (${result.vendor}).`);
+      setExportDeploymentState("not_ready");
+      setExportDeploymentMessage("Sandbox export ready for download.");
+      setExportDeploymentLogs([]);
+      setExportDeploymentErrors([]);
+      toast.success(`Sandbox export ready: ${result.vendor}`, { className: "industrial-toast" });
       return;
     }
 
@@ -3047,7 +3283,9 @@ export default function Dashboard() {
       rightResizeStartRef.current = null;
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
-      window.localStorage.setItem("crosslayerx-right-panel-width", String(latestWidth));
+      if (!isSandboxMode) {
+        window.localStorage.setItem("crosslayerx-right-panel-width", String(latestWidth));
+      }
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
     };
@@ -3751,6 +3989,7 @@ export default function Dashboard() {
           seedRows={resolvedEngineeringRowsForWorkspace}
           loading={engineeringTableLoading}
           error={engineeringTableError}
+          sandboxMode={isSandboxMode}
           onRowSelect={handleEngineeringRowSelect}
           onOpenWhyTrace={handleEngineeringOpenWhyTrace}
           externalSelectedTag={selectedEngineeringTag ?? selectedControlLoop?.sensor_tag ?? selectedNode}
@@ -3886,16 +4125,30 @@ export default function Dashboard() {
       />
 
       {generatedSTFiles.length > 0 || generatedLogic.trim().length > 0 ? (
-        <CodeExplorerPanel
-          files={generatedSTFiles}
-          bundledCode={generatedLogic}
-          selectedFilePath={selectedSTFilePath}
-          onSelectFile={setSelectedSTFilePath}
-          diagnosticsByFile={stDiagnosticsByFile}
-          jumpToLocation={stJumpLocation}
-          loading={pipelineStatuses.st_generation === "running"}
-          requiredPreviousStep="Generate ST"
-        />
+        <>
+          <CodeExplorerPanel
+            files={generatedSTFiles}
+            bundledCode={generatedLogic}
+            selectedFilePath={selectedSTFilePath}
+            onSelectFile={setSelectedSTFilePath}
+            diagnosticsByFile={stDiagnosticsByFile}
+            jumpToLocation={stJumpLocation}
+            loading={pipelineStatuses.st_generation === "running"}
+            requiredPreviousStep="Generate ST"
+          />
+          <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: "0.6rem" }}>
+            <button
+              className="command-btn primary"
+              type="button"
+              disabled={isSandboxMode ? exportLimitReached : !selectedProjectId}
+              onClick={() => {
+                void handleToolbarAction("export_logic");
+              }}
+            >
+              {isSandboxMode ? "Export Logic (Sandbox)" : "Export Logic"}
+            </button>
+          </div>
+        </>
       ) : (
         <div className="workspace-placeholder-panel">
           <h3>No logic artifact available yet</h3>
@@ -4088,7 +4341,36 @@ export default function Dashboard() {
         }}
       />
 
-      <CommandBar />
+      <CommandBar
+        rightActions={
+          isSandboxMode ? (
+            <a href={sandboxUpgradeUrl} className="command-btn primary" style={{ textDecoration: "none" }}>
+              Upgrade Now
+            </a>
+          ) : null
+        }
+      />
+
+      {isSandboxMode && exportLimitReached ? (
+        <div
+          style={{
+            margin: "0.6rem 1rem 0",
+            padding: "0.75rem 0.9rem",
+            borderRadius: 12,
+            background: "rgba(185, 28, 28, 0.10)",
+            border: "1px solid rgba(185, 28, 28, 0.35)",
+            color: "#7a2a2a",
+          }}
+        >
+          <strong>Export limit reached.</strong> Upgrade to continue exporting and have full system access.{" "}
+          <a
+            href={sandboxUpgradeUrl}
+            style={{ color: "#7a2a2a", textDecoration: "underline", fontWeight: 600 }}
+          >
+            Upgrade
+          </a>
+        </div>
+      ) : null}
 
       {showCreateProjectModal ? (
         <div className="modal-backdrop" onClick={() => setShowCreateProjectModal(false)}>
@@ -4273,8 +4555,13 @@ export default function Dashboard() {
               <button
                 className={`command-btn ${exportReadinessLoading ? "is-loading" : ""}`}
                 type="button"
-                onClick={() => void refreshExportReadiness()}
-                disabled={exportReadinessLoading}
+                onClick={() => {
+                  if (isSandboxMode) {
+                    return;
+                  }
+                  void refreshExportReadiness();
+                }}
+                disabled={exportReadinessLoading || isSandboxMode}
               >
                 {exportReadinessLoading ? (
                   <>
@@ -4356,7 +4643,8 @@ export default function Dashboard() {
                   className="command-btn primary"
                   type="button"
                   onClick={() => {
-                    window.open(buildExportDownloadUrl(exportResult.export_id), "_blank", "noopener,noreferrer");
+                    const url = exportResult.download_url || buildExportDownloadUrl(exportResult.export_id);
+                    window.open(url, "_blank", "noopener,noreferrer");
                   }}
                 >
                   Download Export Package
@@ -4749,42 +5037,50 @@ export default function Dashboard() {
                             onSelectFeature={handleProjectFeatureSelect}
                           />
                         ) : (
-                          <SidebarModeSettings activeItem={activeSettingsItem} onSelectItem={handleSettingsNavSelect} />
+                          <SidebarModeSettings
+                            activeItem={activeSettingsItem}
+                            onSelectItem={handleSettingsNavSelect}
+                            showBilling={!isSandboxMode}
+                          />
                         )
                       ) : null}
                     </div>
                   </div>
                 </aside>
 
-                <MainWorkspaceRouter
-                  activeView={uiState.activeView}
-                  hasProject={Boolean(selectedProjectId)}
-                  graphView={(
-                    <GraphWorkspace
-                      graphNodes={graphNodes.map((node) => ({
-                        ...node,
-                        label: node.id,
-                      }))}
-                      graphEdges={plantGraph.edges}
-                      replayMode={activeTab === "Replay"}
-                      replayPoint={replayPoint}
-                      selectedNode={selectedNode}
-                      tracePath={tracePath}
-                      onNodeSelect={(nodeId) => {
-                        setSelectedNode(nodeId);
-                        setSelectedRowId(nodeId);
-                      }}
-                      onReplayPointChange={setReplayPoint}
-                      onTraceNode={(nodeId) => {
-                        void handleTrace(nodeId);
-                      }}
-                    />
-                  )}
-                  tableView={activeModule === "documents" ? documentsWorkspaceView : activeModule === "control_loops" ? controlLoopsWorkspaceView : activeModule === "io_mapping" ? ioMappingWorkspaceView : plantModelWorkspaceView}
-                  logicView={logicWorkspaceView}
-                  simulationView={simulationWorkspaceView}
-                  monitoringView={monitoringWorkspaceView}
-                />
+                {activeActivity === "settings" && activeSettingsItem === "billing" && !isSandboxMode ? (
+                  <BillingSettingsPanel />
+                ) : (
+                  <MainWorkspaceRouter
+                    activeView={uiState.activeView}
+                    hasProject={Boolean(selectedProjectId)}
+                    graphView={(
+                      <GraphWorkspace
+                        graphNodes={graphNodes.map((node) => ({
+                          ...node,
+                          label: node.id,
+                        }))}
+                        graphEdges={plantGraph.edges}
+                        replayMode={activeTab === "Replay"}
+                        replayPoint={replayPoint}
+                        selectedNode={selectedNode}
+                        tracePath={tracePath}
+                        onNodeSelect={(nodeId) => {
+                          setSelectedNode(nodeId);
+                          setSelectedRowId(nodeId);
+                        }}
+                        onReplayPointChange={setReplayPoint}
+                        onTraceNode={(nodeId) => {
+                          void handleTrace(nodeId);
+                        }}
+                      />
+                    )}
+                    tableView={activeModule === "documents" ? documentsWorkspaceView : activeModule === "control_loops" ? controlLoopsWorkspaceView : activeModule === "io_mapping" ? ioMappingWorkspaceView : plantModelWorkspaceView}
+                    logicView={logicWorkspaceView}
+                    simulationView={simulationWorkspaceView}
+                    monitoringView={monitoringWorkspaceView}
+                  />
+                )}
               </div>
 
               <div

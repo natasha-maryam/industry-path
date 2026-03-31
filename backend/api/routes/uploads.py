@@ -1,4 +1,5 @@
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from typing import Optional
 
 from models.file import ProjectFile, UploadResult
 from services.upload_service import upload_service
@@ -15,7 +16,7 @@ def list_project_documents(project_id: str) -> list[ProjectFile]:
 async def upload_documents(
     project_id: str,
     files: list[UploadFile] = File(...),
-    document_types: list[str] | None = Form(default=None),
+    document_types: Optional[list[str]] = Form(default=None),
 ) -> UploadResult:
     try:
         return await upload_service.save_files(project_id, files, document_types)

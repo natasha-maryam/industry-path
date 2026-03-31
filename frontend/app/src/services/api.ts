@@ -2233,30 +2233,9 @@ export async function getSystemContextForTag(tag: string, maxDepth = 4): Promise
     return null;
   }
 
-  const encodedTag = encodeURIComponent(normalizedTag);
-  const candidateEndpoints = [
-    `/behavior/system-context/${encodedTag}`,
-    `/behavior/context/${encodedTag}`,
-    `/system-context/${encodedTag}`,
-  ];
-
-  for (const endpoint of candidateEndpoints) {
-    try {
-      const response = await api.get<Record<string, unknown>>(endpoint, {
-        params: { max_depth: maxDepth },
-      });
-      return unwrapData(response.data, response.data);
-    } catch (error) {
-      if (!axios.isAxiosError(error)) {
-        continue;
-      }
-      const status = error.response?.status;
-      if (status && status !== 404 && status !== 405) {
-        throw error;
-      }
-    }
-  }
-
+  // Backend exposes deterministic why-trace at GET /api/behavior/why/{tag} only.
+  // Avoid probing legacy /behavior/system-context, /behavior/context, /system-context
+  // (they are not registered here and caused noisy 404s in the network tab).
   try {
     const whyTrace = await getDeterministicWhyTrace(normalizedTag, maxDepth);
     return {
