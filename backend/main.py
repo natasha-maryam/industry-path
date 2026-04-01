@@ -1,15 +1,17 @@
 import logging
+import os
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app_integration_behavior_patch import register_behavior_routes
 from api.copilot_api import router as copilot_api_router
-from api.plant_genie_api import router as plant_genie_api_router
 from api.production_api import router as production_api_router
 from api.routes.deploy import router as deploy_router
 from api.engineering_table import router as engineering_table_router
 from api.routes.control_loops import router as control_loops_router
+from api.routes.access_control import router as access_control_router
 from api.routes.direct_plc_deploy import router as direct_plc_deploy_router
 from api.routes.fault_analysis import router as fault_analysis_router
 from api.routes.export import router as export_router
@@ -29,6 +31,7 @@ from api.routes.replay import router as replay_router
 from api.routes.runtime import router as runtime_router
 from api.routes.runtime_deploy import router as runtime_deploy_router
 from api.routes.simulation import router as simulation_router
+from api.routes.simulation_live import router as simulation_live_router
 from api.routes.st_verify import router as st_verify_router
 from api.system_layer import router as system_layer_router
 from api.system_layer_upgrade import router as system_layer_upgrade_router
@@ -36,15 +39,40 @@ from api.tag_intelligence_api import router as tag_intelligence_router
 from api.views_api import router as views_api_router
 from api.routes.uploads import router as uploads_router
 from api.routes.versions import router as versions_router
-from core.env_config import ensure_backend_env_loaded
 from core.metrics import RequestMetricsMiddleware
 from db.postgres import postgres_client
 from services.deterministic_behavior_service import deterministic_behavior_service
-from services.plant_genie_config import log_plant_genie_secret_storage_validation, validate_plant_genie_secret_storage
-from services.plant_genie_plant_data_runtime import plant_genie_plant_data_runtime
 
 
 logger = logging.getLogger(__name__)
+
+
+def _load_local_env_files() -> None:
+    base_dir = Path(__file__).resolve().parent
+    candidates = [
+        base_dir / ".env",
+        base_dir.parent / "frontend" / "app" / ".env",
+    ]
+    for env_path in candidates:
+        if not env_path.exists():
+            continue
+        try:
+            for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                normalized_key = key.strip()
+                if not normalized_key:
+                    continue
+                normalized_value = value.strip().strip("'").strip('"')
+                if normalized_key not in os.environ:
+                    os.environ[normalized_key] = normalized_value
+        except Exception:
+            logger.exception("failed to read env file: %s", env_path)
+
+
+_load_local_env_files()
 
 app = FastAPI(title="CrossLayerX API", version="0.1.0")
 
@@ -70,34 +98,15 @@ def root() -> dict[str, str]:
 
 @app.on_event("startup")
 def startup() -> None:
-    ensure_backend_env_loaded()
-    secret_storage_validation = validate_plant_genie_secret_storage()
-    log_plant_genie_secret_storage_validation(secret_storage_validation, logger=logger, context="startup")
-    if not secret_storage_validation.encryption_ready:
-        logger.error(
-            "Plant Genie connector creation will remain disabled until backend secret storage configuration is fixed."
-        )
     try:
         postgres_client.init_schema()
     except Exception as exc:
         # Allow the API server to start even when Postgres isn't available yet.
         # Most endpoints will still fail, but the FE can load and `/api/health` will report DB status.
         logger.exception("postgres init_schema failed: %s", exc)
-    try:
-        plant_genie_plant_data_runtime.start_enabled_connectors()
-    except Exception as exc:
-        logger.exception("plant genie plant data startup failed: %s", exc)
     logger.info("backend startup complete")
     logger.info("system router registered prefix=/api")
     logger.info("behavior rows currently loaded count=%s", deterministic_behavior_service.get_rows_loaded_count())
-
-
-@app.on_event("shutdown")
-def shutdown() -> None:
-    try:
-        plant_genie_plant_data_runtime.stop_all()
-    except Exception as exc:
-        logger.exception("plant genie plant data shutdown failed: %s", exc)
 
 
 app.include_router(health_router, prefix="/api")
@@ -107,6 +116,7 @@ app.include_router(parse_router, prefix="/api")
 app.include_router(pid_reconcile_router, prefix="/api")
 app.include_router(graph_router, prefix="/api")
 app.include_router(simulation_router, prefix="/api")
+app.include_router(simulation_live_router, prefix="/api")
 app.include_router(replay_router, prefix="/api")
 app.include_router(runtime_deploy_router, prefix="/api")
 app.include_router(runtime_router, prefix="/api")
@@ -119,6 +129,7 @@ app.include_router(export_router, prefix="/api")
 app.include_router(pipeline_router, prefix="/api")
 app.include_router(st_verify_router, prefix="/api")
 app.include_router(control_loops_router, prefix="/api")
+app.include_router(access_control_router, prefix="/api")
 app.include_router(fault_analysis_router, prefix="/api")
 app.include_router(versions_router, prefix="/api")
 app.include_router(plc_export_router, prefix="/api")
@@ -126,7 +137,6 @@ app.include_router(plc_reverse_engineering_router, prefix="/api")
 app.include_router(direct_plc_deploy_router, prefix="/api")
 app.include_router(engineering_table_router, prefix="/api")
 app.include_router(copilot_api_router, prefix="/api")
-app.include_router(plant_genie_api_router, prefix="/api")
 register_behavior_routes(app)
 app.include_router(system_layer_router, prefix="/api")
 app.include_router(system_layer_upgrade_router, prefix="/api")
