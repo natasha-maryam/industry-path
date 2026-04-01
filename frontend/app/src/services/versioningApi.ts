@@ -7,9 +7,10 @@ import type {
   VersionRollbackPayload,
   VersionSnapshotPayload,
 } from "../types/versioning";
+import { API_BASE } from "../config/api";
 
 const versioningApi = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api",
+  baseURL: API_BASE,
 });
 
 type VersionHistoryResponse = {

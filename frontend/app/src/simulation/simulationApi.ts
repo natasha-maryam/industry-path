@@ -1,15 +1,4 @@
-const resolveApiBase = (): string => {
-  const configured = (import.meta.env.VITE_API_BASE as string | undefined)?.trim();
-  if (configured) {
-    return configured.replace(/\/$/, "");
-  }
-  if (typeof window !== "undefined") {
-    return "/api";
-  }
-  return "http://127.0.0.1:8000/api";
-};
-
-const API_BASE = resolveApiBase();
+import { API_BASE } from "../config/api";
 
 const jsonHeaders = { "Content-Type": "application/json" };
 

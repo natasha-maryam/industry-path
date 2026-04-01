@@ -1,6 +1,7 @@
 import axios from "axios";
 export * from "./pipelineStatus";
 export * from "./panelContracts";
+import { API_BASE, WS_BASE_URL } from "../config/api";
 import type {
   PlantGenieAsyncRunResponse,
   PlantGenieConnectorResponse,
@@ -1406,49 +1407,8 @@ export type LogicArtifact = {
   st_validation?: STValidationReport | null;
 };
 
-const resolveApiBaseUrl = (): string => {
-  const explicitBase = (import.meta.env.VITE_API_BASE as string | undefined)?.trim();
-  if (explicitBase) {
-    return explicitBase.replace(/\/$/, "");
-  }
-
-  const legacyBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
-  if (legacyBase) {
-    return legacyBase.replace(/\/$/, "");
-  }
-
-  if (typeof window !== "undefined") {
-    return "/api";
-  }
-
-  return "http://127.0.0.1:8000/api";
-};
-
-const resolveWsBaseUrl = (): string => {
-  const explicitWsBase = (import.meta.env.VITE_WS_BASE as string | undefined)?.trim();
-  if (explicitWsBase) {
-    return explicitWsBase.replace(/\/$/, "");
-  }
-
-  const apiBase = resolveApiBaseUrl();
-  if (/^https?:\/\//i.test(apiBase)) {
-    return apiBase.replace(/^http:\/\//i, "ws://").replace(/^https:\/\//i, "wss://").replace(/\/$/, "");
-  }
-
-  if (typeof window !== "undefined") {
-    if (window.location.port === "5173") {
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      return `${protocol}//${window.location.hostname}:8000`;
-    }
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return `${protocol}//${window.location.host}`;
-  }
-
-  return "ws://127.0.0.1:8000";
-};
-
 const api = axios.create({
-  baseURL: resolveApiBaseUrl(),
+  baseURL: API_BASE,
 });
 
 const getErrorMessage = (error: unknown, fallback: string): string => {
@@ -1896,8 +1856,7 @@ export async function applyPIDUpdate(payload: {
 }
 
 export function buildExportDownloadUrl(exportId: string): string {
-  const base = (import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api").replace(/\/$/, "");
-  return `${base}/exports/${encodeURIComponent(exportId)}/download`;
+  return `${API_BASE}/exports/${encodeURIComponent(exportId)}/download`;
 }
 
 export async function parseProject(projectId: string, fileIds: string[] = []): Promise<ParseBatchResponse> {
@@ -2351,8 +2310,7 @@ export async function analyzeFault(alarmTag: string, projectId?: string, selecte
 }
 
 export function createRuntimeTelemetrySocket(): WebSocket {
-  const wsBase = resolveWsBaseUrl();
-  return new WebSocket(`${wsBase}/runtime/stream`);
+  return new WebSocket(`${WS_BASE_URL}/api/runtime/stream`);
 }
 
 export async function getDeterministicBehaviorRows(tags?: string[]): Promise<DeterministicBehaviorRowsResponse> {
@@ -2423,37 +2381,18 @@ export async function getSystemContextForTag(tag: string, maxDepth = 4): Promise
 }
 
 const toBehaviorSocketUrl = (wsBase: string): string => {
-  const socketPath = wsBase.endsWith("/api") ? "/ws/behavior" : "/api/ws/behavior";
-  return `${wsBase}${socketPath}`;
+  return `${wsBase}/api/ws/behavior`;
 };
 
 export function getBehaviorSocketCandidateUrls(): string[] {
-  const urls: string[] = [];
-
-  const primaryWsBase = resolveWsBaseUrl();
-  urls.push(toBehaviorSocketUrl(primaryWsBase));
-
-  const apiBase = resolveApiBaseUrl();
-  if (/^https?:\/\//i.test(apiBase)) {
-    const directWsBase = apiBase.replace(/^http:\/\//i, "ws://").replace(/^https:\/\//i, "wss://").replace(/\/$/, "");
-    urls.push(toBehaviorSocketUrl(directWsBase));
-  }
-
-  if (typeof window !== "undefined" && window.location.port === "5173") {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const hostFallback = `${protocol}//${window.location.hostname}:8000`;
-    urls.push(`${hostFallback}/api/ws/behavior`);
-  }
-
-  return Array.from(new Set(urls));
+  return [toBehaviorSocketUrl(WS_BASE_URL)];
 }
 
 export function createBehaviorSocket(url?: string): WebSocket {
   if (url) {
     return new WebSocket(url);
   }
-  const wsBase = resolveWsBaseUrl();
-  return new WebSocket(toBehaviorSocketUrl(wsBase));
+  return new WebSocket(toBehaviorSocketUrl(WS_BASE_URL));
 }
 
 export async function loadUNSModel(rows: UNSRow[], edges: Array<Record<string, unknown>>): Promise<Record<string, unknown>> {
@@ -2504,8 +2443,7 @@ export async function getUNSRows(): Promise<UNSRow[]> {
 }
 
 export function createUNSSocket(): WebSocket {
-  const wsBase = resolveWsBaseUrl();
-  return new WebSocket(`${wsBase}/ws/uns`);
+  return new WebSocket(`${WS_BASE_URL}/api/ws/uns`);
 }
 
 export async function connectAdvancedOPCUA(payload: {
