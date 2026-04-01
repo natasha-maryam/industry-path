@@ -1,44 +1,21 @@
 from __future__ import annotations
 
-import os
 from contextlib import contextmanager
-from dataclasses import dataclass
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-from core.env_config import ensure_backend_env_loaded
 
-
-@dataclass(frozen=True)
-class PostgresConfig:
-    host: str
-    port: int
-    database: str
-    user: str
-    password: str
+DATABASE_URL = "postgresql://postgres:ddhnjtOCggcfYDEgKLcIefxEVxEapXCA@postgres.railway.internal:5432/railway"
 
 
 class PostgresClient:
     def __init__(self) -> None:
-      ensure_backend_env_loaded()
-      self.config = PostgresConfig(
-        host=os.getenv("POSTGRES_HOST", "localhost"),
-        port=int(os.getenv("POSTGRES_PORT", "5432")),
-        database=os.getenv("POSTGRES_DB", "crosslayerx"),
-        user=os.getenv("POSTGRES_USER", "crosslayer"),
-        password=os.getenv("POSTGRES_PASSWORD", "crosslayer"),
-      )
+      pass
 
     @contextmanager
     def connection(self):
-        conn = psycopg2.connect(
-            host=self.config.host,
-            port=self.config.port,
-            dbname=self.config.database,
-            user=self.config.user,
-            password=self.config.password,
-        )
+        conn = psycopg2.connect(DATABASE_URL)
         try:
             yield conn
             conn.commit()
