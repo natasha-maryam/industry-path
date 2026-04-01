@@ -123,59 +123,59 @@ export type VersionHistoryPanelResponse = {
   snapshots: VersionSnapshot[];
 };
 
-export type CopilotRunMode = "ai_fallback";
+export type PlantGenieRunMode = "connector_gateway";
 
-export type CopilotRunResponse = {
+export type PlantGenieRunResponse = {
   success: boolean;
   command: string;
-  provider: string;
-  mode: CopilotRunMode;
-  prompt: string | null;
+  connector: string;
+  mode: PlantGenieRunMode;
+  request: string | null;
   warnings: string[];
   result: Record<string, unknown>;
   timestamp: string;
 };
 
-export type CopilotProviderResponse = {
-  provider: string;
+export type PlantGenieConnectorResponse = {
+  connector: string;
   registered: boolean;
   metadata: Record<string, unknown>;
   timestamp: string;
 };
 
-export type CopilotProductionResultType = "ai";
+export type PlantGenieResultType = "connector";
 
-export type CopilotAsyncJobStatus = "queued" | "running" | "completed" | "failed";
+export type PlantGenieAsyncJobStatus = "queued" | "running" | "completed" | "failed";
 
-export type CopilotProductionResult = {
-  type: CopilotProductionResultType;
+export type PlantGenieProductionResult = {
+  type: PlantGenieResultType;
   summary: string;
   warnings: string[];
-  prompt: string | null;
+  request: string | null;
   cached: boolean;
-  provider: string;
+  connector: string;
   data: Record<string, unknown>;
 };
 
-export type CopilotAsyncRunResponse = {
+export type PlantGenieAsyncRunResponse = {
   success: boolean;
   job_id: string;
-  status: CopilotAsyncJobStatus;
+  status: PlantGenieAsyncJobStatus;
   command: string;
-  provider: string;
+  connector: string;
   submitted_at: string;
 };
 
-export type CopilotJobStatusResponse = {
+export type PlantGenieJobStatusResponse = {
   success: boolean;
   job_id: string;
-  status: CopilotAsyncJobStatus;
+  status: PlantGenieAsyncJobStatus;
   command: string | null;
-  provider: string | null;
+  connector: string | null;
   submitted_at: string | null;
   started_at: string | null;
   completed_at: string | null;
   error: string | null;
   error_code: string | null;
-  result: CopilotProductionResult | null;
+  result: PlantGenieProductionResult | null;
 };

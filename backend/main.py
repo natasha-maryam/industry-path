@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app_integration_behavior_patch import register_behavior_routes
 from api.copilot_api import router as copilot_api_router
+from api.plant_genie_api import router as plant_genie_api_router
 from api.production_api import router as production_api_router
 from api.routes.deploy import router as deploy_router
 from api.engineering_table import router as engineering_table_router
@@ -35,9 +36,12 @@ from api.tag_intelligence_api import router as tag_intelligence_router
 from api.views_api import router as views_api_router
 from api.routes.uploads import router as uploads_router
 from api.routes.versions import router as versions_router
+from core.env_config import ensure_backend_env_loaded
 from core.metrics import RequestMetricsMiddleware
 from db.postgres import postgres_client
 from services.deterministic_behavior_service import deterministic_behavior_service
+from services.plant_genie_config import log_plant_genie_secret_storage_validation, validate_plant_genie_secret_storage
+from services.plant_genie_plant_data_runtime import plant_genie_plant_data_runtime
 
 
 logger = logging.getLogger(__name__)
@@ -66,15 +70,34 @@ def root() -> dict[str, str]:
 
 @app.on_event("startup")
 def startup() -> None:
+    ensure_backend_env_loaded()
+    secret_storage_validation = validate_plant_genie_secret_storage()
+    log_plant_genie_secret_storage_validation(secret_storage_validation, logger=logger, context="startup")
+    if not secret_storage_validation.encryption_ready:
+        logger.error(
+            "Plant Genie connector creation will remain disabled until backend secret storage configuration is fixed."
+        )
     try:
         postgres_client.init_schema()
     except Exception as exc:
         # Allow the API server to start even when Postgres isn't available yet.
         # Most endpoints will still fail, but the FE can load and `/api/health` will report DB status.
         logger.exception("postgres init_schema failed: %s", exc)
+    try:
+        plant_genie_plant_data_runtime.start_enabled_connectors()
+    except Exception as exc:
+        logger.exception("plant genie plant data startup failed: %s", exc)
     logger.info("backend startup complete")
     logger.info("system router registered prefix=/api")
     logger.info("behavior rows currently loaded count=%s", deterministic_behavior_service.get_rows_loaded_count())
+
+
+@app.on_event("shutdown")
+def shutdown() -> None:
+    try:
+        plant_genie_plant_data_runtime.stop_all()
+    except Exception as exc:
+        logger.exception("plant genie plant data shutdown failed: %s", exc)
 
 
 app.include_router(health_router, prefix="/api")
@@ -103,6 +126,7 @@ app.include_router(plc_reverse_engineering_router, prefix="/api")
 app.include_router(direct_plc_deploy_router, prefix="/api")
 app.include_router(engineering_table_router, prefix="/api")
 app.include_router(copilot_api_router, prefix="/api")
+app.include_router(plant_genie_api_router, prefix="/api")
 register_behavior_routes(app)
 app.include_router(system_layer_router, prefix="/api")
 app.include_router(system_layer_upgrade_router, prefix="/api")

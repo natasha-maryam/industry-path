@@ -1,6 +1,6 @@
-import { ChevronRight, FolderKanban, Settings } from "lucide-react";
+import { ChevronRight, FolderKanban, Sparkles, Settings } from "lucide-react";
 
-type ActivityMode = "projects" | "settings";
+type ActivityMode = "projects" | "plant_genie" | "settings";
 
 type ActivityBarProps = {
   activeActivity: ActivityMode;
@@ -9,9 +9,16 @@ type ActivityBarProps = {
   onOpenSidebar?: () => void;
 };
 
-const ACTIVITY_ITEMS: Array<{ id: ActivityMode; label: string; Icon: typeof FolderKanban }> = [
+const ACTIVITY_ITEMS: Array<{
+  id: ActivityMode;
+  label: string;
+  Icon: typeof FolderKanban;
+  badge?: string;
+  accent?: boolean;
+}> = [
   { id: "projects", label: "Projects", Icon: FolderKanban },
   { id: "settings", label: "Settings", Icon: Settings },
+  { id: "plant_genie", label: "Plant Genie", Icon: Sparkles, badge: "NEW", accent: true },
 ];
 
 export default function ActivityBar({
@@ -23,17 +30,20 @@ export default function ActivityBar({
   return (
     <div className="activity-bar" role="navigation" aria-label="Activity">
       <div className="activity-bar-actions">
-        {ACTIVITY_ITEMS.map(({ id, label, Icon }) => (
+        {ACTIVITY_ITEMS.map(({ id, label, Icon, badge, accent }) => (
           <button
             key={id}
-            className={`activity-bar-item ${activeActivity === id ? "active" : ""}`}
+            className={`activity-bar-item ${accent ? "plant-genie" : ""} ${activeActivity === id ? "active" : ""}`}
             type="button"
             onClick={() => onSelectActivity(id)}
             title={label}
             aria-label={label}
           >
             <Icon size={14} />
-            <span>{label}</span>
+            <span className="activity-bar-item-label">
+              <span>{label}</span>
+              {badge ? <span className="activity-bar-item-badge">{badge}</span> : null}
+            </span>
           </button>
         ))}
       </div>

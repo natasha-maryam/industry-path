@@ -2,10 +2,10 @@ import axios from "axios";
 export * from "./pipelineStatus";
 export * from "./panelContracts";
 import type {
-  CopilotAsyncRunResponse,
-  CopilotJobStatusResponse,
-  CopilotProviderResponse,
-  CopilotRunResponse,
+  PlantGenieAsyncRunResponse,
+  PlantGenieConnectorResponse,
+  PlantGenieJobStatusResponse,
+  PlantGenieRunResponse,
   RuntimeValidationPanelResponse,
 } from "./panelContracts";
 
@@ -33,6 +33,107 @@ export type ProjectDocument = {
   file_size: number | null;
   upload_status: string;
   uploaded_at: string;
+};
+
+export type PlantGenieAIConnectorHealthStatus = "unknown" | "healthy" | "unhealthy";
+
+export type PlantGenieAIProvider =
+  | "openai"
+  | "anthropic"
+  | "azure_openai"
+  | "openrouter";
+
+export type PlantGenieStoredAIProvider = PlantGenieAIProvider | "custom_openai_compatible";
+
+export type PlantGenieAIConnector = {
+  id: string;
+  name: string;
+  provider: PlantGenieStoredAIProvider;
+  model: string | null;
+  provider_label: string | null;
+  notes: string | null;
+  has_api_key: boolean;
+  is_active: boolean;
+  health_status: PlantGenieAIConnectorHealthStatus;
+  health_message: string | null;
+  last_tested_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PlantGenieAIConnectorListResponse = {
+  connectors: PlantGenieAIConnector[];
+};
+
+export type PlantGenieAIConnectorDeleteResponse = {
+  success: boolean;
+  message: string;
+};
+
+export type PlantGenieAIConnectorTestResponse = {
+  success: boolean;
+  message: string;
+  connector: PlantGenieAIConnector;
+};
+
+export type PlantGeniePlantDataConnectorType = "opcua" | "mqtt" | "sql";
+
+export type PlantGeniePlantDataConnectorRuntimeState = {
+  enabled: boolean;
+  running: boolean;
+  healthy: boolean;
+  last_update: string | null;
+  last_error: string | null;
+};
+
+export type PlantGeniePlantDataConnectorHealth = {
+  id: string;
+  healthy: boolean;
+  lastUpdate: string | null;
+};
+
+export type PlantGeniePlantDataConnector = {
+  id: string;
+  name: string;
+  connector_type: PlantGeniePlantDataConnectorType;
+  poll_interval_ms: number;
+  config: Record<string, unknown>;
+  has_secrets: boolean;
+  runtime: PlantGeniePlantDataConnectorRuntimeState;
+  health: PlantGeniePlantDataConnectorHealth;
+  last_tested_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PlantGeniePlantDataConnectorListResponse = {
+  connectors: PlantGeniePlantDataConnector[];
+};
+
+export type PlantGeniePlantDataConnectorDeleteResponse = {
+  success: boolean;
+  message: string;
+};
+
+export type PlantGeniePlantDataConnectorTestResponse = {
+  success: boolean;
+  message: string;
+  connector: PlantGeniePlantDataConnector;
+};
+
+export type PlantGenieQueryContext = {
+  hasProject: boolean;
+  projectName?: string | null;
+  selectedTag?: string | null;
+};
+
+export type PlantGenieQueryResponse = {
+  success: boolean;
+  answer: string;
+  connector_id: string;
+  connector_name: string;
+  provider_label: string | null;
+  timestamp: string;
 };
 
 export type PLCExportVendor = "siemens" | "rockwell" | "codesys" | "beckhoff" | "openplc" | "generic_st";
@@ -1309,6 +1410,25 @@ const getErrorMessage = (error: unknown, fallback: string): string => {
     const detail = error.response?.data?.detail;
     if (typeof detail === "string" && detail.trim()) {
       return detail;
+    }
+    if (Array.isArray(detail) && detail.length > 0) {
+      const messages = detail
+        .map((item) => {
+          if (!item || typeof item !== "object") {
+            return null;
+          }
+          const record = item as { loc?: unknown[]; msg?: unknown };
+          const path = Array.isArray(record.loc) ? record.loc.filter((part) => typeof part === "string" || typeof part === "number").join(".") : "";
+          const message = typeof record.msg === "string" ? record.msg.trim() : "";
+          if (!message) {
+            return null;
+          }
+          return path ? `${path}: ${message}` : message;
+        })
+        .filter((item): item is string => Boolean(item));
+      if (messages.length > 0) {
+        return messages.join(" ");
+      }
     }
     if (error.message) {
       return error.message;
@@ -2645,17 +2765,206 @@ export async function exportEngineeringBundle(projectId: string): Promise<Blob> 
   return response.data;
 }
 
-export async function runCopilotCommand(payload: {
+export async function getPlantGenieAIConnectors(): Promise<PlantGenieAIConnector[]> {
+  try {
+    const response = await api.get<PlantGenieAIConnectorListResponse>("/plant-genie/connectors/ai");
+    return response.data.connectors ?? [];
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie connectors request failed."));
+  }
+}
+
+export async function createPlantGenieAIConnector(payload: {
+  name: string;
+  apiKey: string;
+  model?: string;
+  providerLabel?: string;
+  notes?: string;
+}): Promise<PlantGenieAIConnector> {
+  try {
+    const response = await api.post<PlantGenieAIConnector>("/plant-genie/connectors/ai", {
+      name: payload.name,
+      api_key: payload.apiKey,
+      model: payload.model?.trim() || null,
+      provider_label: payload.providerLabel?.trim() || null,
+      notes: payload.notes?.trim() || null,
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie connector creation failed."));
+  }
+}
+
+export async function updatePlantGenieAIConnector(
+  connectorId: string,
+  payload: {
+    name: string;
+    apiKey?: string;
+    model?: string;
+    providerLabel?: string;
+    notes?: string;
+  }
+): Promise<PlantGenieAIConnector> {
+  try {
+    const response = await api.put<PlantGenieAIConnector>(`/plant-genie/connectors/ai/${connectorId}`, {
+      name: payload.name,
+      api_key: payload.apiKey?.trim() || null,
+      model: payload.model?.trim() || null,
+      provider_label: payload.providerLabel?.trim() || null,
+      notes: payload.notes?.trim() || null,
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie connector update failed."));
+  }
+}
+
+export async function deletePlantGenieAIConnector(connectorId: string): Promise<PlantGenieAIConnectorDeleteResponse> {
+  try {
+    const response = await api.delete<PlantGenieAIConnectorDeleteResponse>(`/plant-genie/connectors/ai/${connectorId}`);
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie connector deletion failed."));
+  }
+}
+
+export async function testPlantGenieAIConnector(connectorId: string): Promise<PlantGenieAIConnectorTestResponse> {
+  try {
+    const response = await api.post<PlantGenieAIConnectorTestResponse>(`/plant-genie/connectors/ai/${connectorId}/test`);
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie connector test failed."));
+  }
+}
+
+export async function activatePlantGenieAIConnector(connectorId: string): Promise<PlantGenieAIConnector> {
+  try {
+    const response = await api.post<PlantGenieAIConnector>(`/plant-genie/connectors/ai/${connectorId}/activate`);
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie connector activation failed."));
+  }
+}
+
+export async function getPlantGeniePlantDataConnectors(): Promise<PlantGeniePlantDataConnector[]> {
+  try {
+    const response = await api.get<PlantGeniePlantDataConnectorListResponse>("/plant-genie/connectors/plant-data");
+    return response.data.connectors ?? [];
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie plant data connectors request failed."));
+  }
+}
+
+export async function createPlantGeniePlantDataConnector(payload: {
+  name: string;
+  connector_type: PlantGeniePlantDataConnectorType;
+  poll_interval_ms?: number;
+  config: Record<string, unknown>;
+  secrets?: Record<string, unknown>;
+}): Promise<PlantGeniePlantDataConnector> {
+  try {
+    const response = await api.post<PlantGeniePlantDataConnector>("/plant-genie/connectors/plant-data", payload);
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie plant data connector creation failed."));
+  }
+}
+
+export async function updatePlantGeniePlantDataConnector(
+  connectorId: string,
+  payload: {
+    name: string;
+    connector_type: PlantGeniePlantDataConnectorType;
+    poll_interval_ms?: number;
+    config: Record<string, unknown>;
+    secrets?: Record<string, unknown>;
+  }
+): Promise<PlantGeniePlantDataConnector> {
+  try {
+    const response = await api.put<PlantGeniePlantDataConnector>(`/plant-genie/connectors/plant-data/${connectorId}`, payload);
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie plant data connector update failed."));
+  }
+}
+
+export async function deletePlantGeniePlantDataConnector(connectorId: string): Promise<PlantGeniePlantDataConnectorDeleteResponse> {
+  try {
+    const response = await api.delete<PlantGeniePlantDataConnectorDeleteResponse>(`/plant-genie/connectors/plant-data/${connectorId}`);
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie plant data connector deletion failed."));
+  }
+}
+
+export async function testPlantGeniePlantDataConnector(connectorId: string): Promise<PlantGeniePlantDataConnectorTestResponse> {
+  try {
+    const response = await api.post<PlantGeniePlantDataConnectorTestResponse>(`/plant-genie/connectors/plant-data/${connectorId}/test`);
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie plant data connector test failed."));
+  }
+}
+
+export async function activatePlantGeniePlantDataConnector(connectorId: string): Promise<PlantGeniePlantDataConnector> {
+  try {
+    const response = await api.post<PlantGeniePlantDataConnector>(`/plant-genie/connectors/plant-data/${connectorId}/activate`);
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie plant data connector activation failed."));
+  }
+}
+
+export async function deactivatePlantGeniePlantDataConnector(connectorId: string): Promise<PlantGeniePlantDataConnector> {
+  try {
+    const response = await api.post<PlantGeniePlantDataConnector>(`/plant-genie/connectors/plant-data/${connectorId}/deactivate`);
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie plant data connector deactivation failed."));
+  }
+}
+
+export async function queryPlantGenie(payload: {
+  prompt: string;
+  context: PlantGenieQueryContext;
+}): Promise<PlantGenieQueryResponse> {
+  try {
+    const response = await api.post<PlantGenieQueryResponse>("/plant-genie/query", {
+      prompt: payload.prompt,
+      context: {
+        has_project: payload.context.hasProject,
+        project_name: payload.context.projectName ?? null,
+        selected_tag: payload.context.selectedTag ?? null,
+      },
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie request failed."));
+  }
+}
+
+const resolvePlantGenieConnector = (payload: { connector?: string; provider?: string }): string => {
+  const connector = String(payload.connector ?? payload.provider ?? "").trim();
+  if (!connector) {
+    throw new Error("Plant Genie connector is required.");
+  }
+  return connector;
+};
+
+export async function runPlantGenieCommand(payload: {
   command: string;
+  connector?: string;
   provider?: string;
   context?: Record<string, unknown>;
-}): Promise<CopilotRunResponse> {
+}): Promise<PlantGenieRunResponse> {
+  const connector = resolvePlantGenieConnector(payload);
+
   try {
     const response = await api.post<string>(
       "/copilot/run",
       {
         command: payload.command,
-        provider: payload.provider ?? "openai",
+        connector,
         context: payload.context ?? {},
       },
       {
@@ -2666,15 +2975,15 @@ export async function runCopilotCommand(payload: {
     const raw = response.data;
     if (typeof raw === "string") {
       try {
-        return JSON.parse(raw) as CopilotRunResponse;
+        return JSON.parse(raw) as PlantGenieRunResponse;
       } catch {
         return {
           success: false,
           command: payload.command,
-          provider: payload.provider ?? "openai",
-          mode: "ai_fallback",
-          prompt: null,
-          warnings: ["Backend returned invalid JSON. Raw response captured."],
+          connector,
+          mode: "connector_gateway",
+          request: null,
+          warnings: ["Plant Genie returned invalid JSON. Raw response captured."],
           result: {
             raw_response: raw,
           },
@@ -2684,65 +2993,66 @@ export async function runCopilotCommand(payload: {
     }
 
     if (raw && typeof raw === "object") {
-      return raw as unknown as CopilotRunResponse;
+      return raw as unknown as PlantGenieRunResponse;
     }
 
     return {
       success: false,
       command: payload.command,
-      provider: payload.provider ?? "openai",
-      mode: "ai_fallback",
-      prompt: null,
-      warnings: ["Copilot response was empty."],
+      connector,
+      mode: "connector_gateway",
+      request: null,
+      warnings: ["Plant Genie response was empty."],
       result: {},
       timestamp: new Date().toISOString(),
     };
   } catch (error) {
-    throw new Error(getErrorMessage(error, "Copilot request failed."));
+    throw new Error(getErrorMessage(error, "Plant Genie request failed."));
   }
 }
 
-export async function runCopilotCommandAsync(payload: {
+export async function runPlantGenieCommandAsync(payload: {
   command: string;
+  connector?: string;
   provider?: string;
   context?: Record<string, unknown>;
-}): Promise<CopilotAsyncRunResponse> {
+}): Promise<PlantGenieAsyncRunResponse> {
+  const connector = resolvePlantGenieConnector(payload);
+
   try {
-    const response = await api.post<CopilotAsyncRunResponse>("/copilot/run_async", {
+    const response = await api.post<PlantGenieAsyncRunResponse>("/copilot/run_async", {
       command: payload.command,
-      provider: payload.provider ?? "openai",
+      connector,
       context: payload.context ?? {},
     });
     return response.data;
   } catch (error) {
-    throw new Error(getErrorMessage(error, "Copilot async request failed."));
+    throw new Error(getErrorMessage(error, "Plant Genie async request failed."));
   }
 }
 
-export async function getCopilotJobStatus(jobId: string): Promise<CopilotJobStatusResponse> {
+export async function getPlantGenieJobStatus(jobId: string): Promise<PlantGenieJobStatusResponse> {
   try {
-    const response = await api.get<CopilotJobStatusResponse>(`/copilot/status/${jobId}`);
+    const response = await api.get<PlantGenieJobStatusResponse>(`/copilot/status/${jobId}`);
     return response.data;
   } catch (error) {
-    throw new Error(getErrorMessage(error, "Copilot job status request failed."));
+    throw new Error(getErrorMessage(error, "Plant Genie job status request failed."));
   }
 }
 
-export async function registerCopilotProvider(payload: {
+export async function registerPlantGenieConnector(payload: {
   name: string;
-  systemPrompt?: string;
   mockResponse?: string;
   metadata?: Record<string, unknown>;
-}): Promise<CopilotProviderResponse> {
+}): Promise<PlantGenieConnectorResponse> {
   try {
-    const response = await api.post<CopilotProviderResponse>("/copilot/provider", {
+    const response = await api.post<PlantGenieConnectorResponse>("/copilot/provider", {
       name: payload.name,
-      system_prompt: payload.systemPrompt,
       mock_response: payload.mockResponse,
       metadata: payload.metadata ?? {},
     });
     return response.data;
   } catch (error) {
-    throw new Error(getErrorMessage(error, "Copilot provider registration failed."));
+    throw new Error(getErrorMessage(error, "Plant Genie connector registration failed."));
   }
 }

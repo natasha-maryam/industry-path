@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
+import os
 from threading import Lock
 from time import monotonic
 from typing import Any, Callable, Mapping
@@ -14,10 +15,10 @@ from uuid import uuid4
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from models.copilot import CopilotProductionResult
-from services.deterministic_behavior_service import deterministic_behavior_service
 
 
 ProviderHandler = Callable[[str, Mapping[str, Any]], Mapping[str, Any]]
+_ALLOWED_CONTEXT_KEYS = frozenset({"request_id", "session_id", "source"})
 
 
 class ProviderNotConfiguredError(ValueError):
@@ -28,7 +29,6 @@ class ProviderNotConfiguredError(ValueError):
 class AIProvider:
     name: str
     handler: ProviderHandler
-    system_prompt: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -90,7 +90,6 @@ class AIProviderManager:
         self,
         name: str,
         handler: ProviderHandler | None = None,
-        system_prompt: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         provider_name = str(name or "").strip().lower()
@@ -100,36 +99,33 @@ class AIProviderManager:
         self._providers[provider_name] = AIProvider(
             name=provider_name,
             handler=handler or self._unconfigured_handler,
-            system_prompt=system_prompt,
             metadata=dict(metadata or {}),
         )
         self._cache.clear()
         return {
-            "provider": provider_name,
+            "connector": provider_name,
             "registered": True,
             "metadata": dict(metadata or {}),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
     def execute(self, provider: str, prompt: str, context: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
-        provider_name = str(provider or "openai").strip().lower() or "openai"
+        provider_name = _normalize_connector_name(provider)
         selected = self._providers.get(provider_name)
         if selected is None:
-            raise ProviderNotConfiguredError(f"Provider '{provider_name}' is not configured.")
+            raise ProviderNotConfiguredError(f"Plant Genie connector '{provider_name}' is not configured.")
 
         cache_key = self._build_cache_key(provider_name, prompt, context)
         cached_payload = self._cache.get(cache_key)
         if cached_payload is not None:
-            cached_payload.setdefault("provider", provider_name)
+            cached_payload.setdefault("connector", provider_name)
             cached_payload.setdefault("metadata", selected.metadata)
-            cached_payload.setdefault("system_prompt", selected.system_prompt)
             return cached_payload, True
 
         payload = _execute_provider_handler(selected.handler, prompt, dict(context))
         output = dict(payload)
-        output.setdefault("provider", provider_name)
+        output.setdefault("connector", provider_name)
         output.setdefault("metadata", selected.metadata)
-        output.setdefault("system_prompt", selected.system_prompt)
         self._cache.set(cache_key, output)
         return output, False
 
@@ -142,7 +138,8 @@ class AIProviderManager:
     def _unconfigured_handler(prompt: str, context: Mapping[str, Any]) -> Mapping[str, Any]:
         _ = prompt
         _ = context
-        raise ProviderNotConfiguredError("Connect AI to use Automation Copilot.")
+        # TODO: bridge registered Plant Genie connectors to user-managed AI runtimes.
+        raise ProviderNotConfiguredError("Plant Genie connector is registered but no execution adapter is available.")
 
 
 @retry(
@@ -155,30 +152,43 @@ def _execute_provider_handler(handler: ProviderHandler, prompt: str, context: Ma
     return handler(prompt, context)
 
 
-def enforce_prompt(task: str, rows: list[Mapping[str, Any]]) -> str:
-    normalized_task = str(task or "").strip()
-    row_preview = [
-        {
-            "tag": row.get("tag"),
-            "type": row.get("type"),
-            "system": row.get("system"),
-            "equipment": row.get("equipment"),
-            "state": row.get("state"),
-            "mode": row.get("mode"),
-            "warnings": row.get("warnings", []),
-            "upstream": row.get("upstream", [])[:4],
-            "downstream": row.get("downstream", [])[:4],
+def _normalize_connector_name(connector: str) -> str:
+    normalized = str(connector or "").strip().lower()
+    if not normalized:
+        raise ValueError("connector is required")
+    return normalized
+
+
+def _dev_mock_enabled() -> bool:
+    return os.getenv("PLANT_GENIE_ENABLE_DEV_MOCK", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _build_mock_handler(mock_response: str) -> ProviderHandler:
+    response_text = str(mock_response or "").strip() or "DEV MOCK: Plant Genie connector responded without live execution."
+
+    def handler(command: str, context: Mapping[str, Any]) -> Mapping[str, Any]:
+        _ = command
+        _ = context
+        return {
+            "message": response_text,
+            "mock": True,
         }
-        for row in rows[:8]
-    ]
-    context_blob = json.dumps(row_preview, indent=2, sort_keys=True, default=str)
-    return (
-        "You are the production automation copilot. "
-        "Stay grounded in deterministic plant context, avoid fabricating topology, and prefer concise operational guidance.\n\n"
-        f"Task: {normalized_task}\n\n"
-        "Relevant engineering rows:\n"
-        f"{context_blob}"
-    )
+
+    return handler
+
+
+def sanitize_connector_context(context: Mapping[str, Any] | None) -> tuple[dict[str, Any], list[str]]:
+    runtime_context = dict(context or {})
+    allowed: dict[str, Any] = {}
+    dropped: list[str] = []
+    for key, value in runtime_context.items():
+        if key in _ALLOWED_CONTEXT_KEYS:
+            allowed[key] = value
+            continue
+        dropped.append(str(key))
+
+    # TODO: allow connector-specific grounding only after access-control policy is defined.
+    return allowed, dropped
 
 
 @dataclass
@@ -219,14 +229,14 @@ def run_job(fn: Callable[..., dict[str, Any]], *args: Any) -> dict[str, Any]:
     job_id = f"copilot-job-{uuid4()}"
     submitted_at = datetime.now(timezone.utc).isoformat()
     command = str(args[0]) if len(args) > 0 and isinstance(args[0], str) else None
-    provider = str(args[1]) if len(args) > 1 and isinstance(args[1], str) else None
+    connector = str(args[1]) if len(args) > 1 and isinstance(args[1], str) else None
     with _job_lock:
         _jobs[job_id] = JobRecord(
             job_id=job_id,
             status="queued",
             submitted_at=submitted_at,
             command=command,
-            provider=provider,
+            provider=connector,
         )
 
     def runner() -> None:
@@ -263,7 +273,7 @@ def get_job(job_id: str) -> dict[str, Any]:
 
 def _classify_error(exc: Exception) -> str:
     if isinstance(exc, ProviderNotConfiguredError):
-        return "provider_not_configured"
+        return "connector_not_configured"
     if isinstance(exc, ValueError):
         return "invalid_request"
     return "processing_failed"
@@ -276,98 +286,65 @@ class CopilotProduction:
     def register_provider(
         self,
         name: str,
-        system_prompt: str | None = None,
         mock_response: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        _ = mock_response
         payload = dict(metadata or {})
-        return self.providers.register_provider(name, system_prompt=system_prompt, metadata=payload)
+        handler = None
+        if mock_response is not None:
+            if not _dev_mock_enabled():
+                raise ValueError("Mock connectors are disabled. Set PLANT_GENIE_ENABLE_DEV_MOCK=true to enable them.")
+            handler = _build_mock_handler(mock_response)
+            payload["mock"] = True
+
+        return self.providers.register_provider(name, handler=handler, metadata=payload)
 
     def run(
         self,
         command: str,
-        provider: str = "openai",
+        connector: str,
         context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         normalized_command = str(command or "").strip()
         if not normalized_command:
             raise ValueError("command is required")
 
-        runtime_context = dict(context or {})
-        prompt_rows = self._prompt_rows(runtime_context)
-        prompt = enforce_prompt(normalized_command, prompt_rows)
-        provider_output, cached = self.providers.execute(provider, prompt, runtime_context)
-        summary = str(provider_output.get("message") or "AI response generated.")
+        connector_name = _normalize_connector_name(connector)
+        runtime_context, dropped = sanitize_connector_context(context)
+        provider_output, cached = self.providers.execute(connector_name, normalized_command, runtime_context)
+        warnings: list[str] = []
+        if dropped:
+            warnings.append(
+                "Plant Genie ignored local workspace context. Connector grounding remains disabled until an explicit policy is implemented."
+            )
+        summary = str(provider_output.get("message") or "Connector response received.")
         return self._wrap_result(
-            result_type="ai",
-            provider=provider,
+            result_type="connector",
+            connector=connector_name,
             summary=summary,
             data=dict(provider_output),
-            prompt=prompt,
+            warnings=warnings,
+            request=normalized_command,
             cached=cached,
         )
-
-    def _prompt_rows(self, context: Mapping[str, Any]) -> list[dict[str, Any]]:
-        selected_row = context.get("engineering_table", {}).get("selected_row") if isinstance(context.get("engineering_table"), Mapping) else None
-        rows: list[dict[str, Any]] = []
-        if isinstance(selected_row, Mapping):
-            rows.append(dict(selected_row))
-
-        selected_tag = self._context_selected_tag(context)
-        resolved_tag = deterministic_behavior_service.resolve_row_tag(selected_tag) if selected_tag else None
-        if resolved_tag:
-            row = deterministic_behavior_service.get_row(resolved_tag)
-            if row is not None:
-                rows.append(row.as_dict())
-
-        sample_tags = []
-        engineering_table = context.get("engineering_table")
-        if isinstance(engineering_table, Mapping):
-            raw_sample_tags = engineering_table.get("sample_tags")
-            if isinstance(raw_sample_tags, list):
-                sample_tags = [str(item) for item in raw_sample_tags[:6] if item]
-
-        for raw_tag in sample_tags:
-            resolved_sample = deterministic_behavior_service.resolve_row_tag(raw_tag) or raw_tag
-            row = deterministic_behavior_service.get_row(resolved_sample)
-            if row is not None:
-                rows.append(row.as_dict())
-
-        unique_rows: list[dict[str, Any]] = []
-        seen_tags: set[str] = set()
-        for row in rows:
-            tag = str(row.get("tag") or "").strip()
-            if not tag or tag in seen_tags:
-                continue
-            seen_tags.add(tag)
-            unique_rows.append(row)
-        return unique_rows
-
-    @staticmethod
-    def _context_selected_tag(context: Mapping[str, Any]) -> str | None:
-        value = context.get("selected_tag")
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-        return None
 
     @staticmethod
     def _wrap_result(
         result_type: str,
-        provider: str,
+        connector: str,
         summary: str,
         data: Mapping[str, Any],
         warnings: list[str] | None = None,
-        prompt: str | None = None,
+        request: str | None = None,
         cached: bool = False,
     ) -> dict[str, Any]:
         payload = CopilotProductionResult(
             type=result_type,
             summary=summary,
             warnings=list(warnings or []),
-            prompt=prompt,
+            request=request,
             cached=cached,
-            provider=provider,
+            connector=connector,
             data=dict(data),
         )
         return payload.model_dump()

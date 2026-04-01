@@ -424,6 +424,10 @@
   --left-panel-width: 36px;
 }
 
+.main-shell.plant-genie-only {
+  --left-panel-width: 58px;
+}
+
 .main-shell.right-expanded {
   --right-resize-handle-width: 5px;
 }
@@ -460,7 +464,11 @@
   height: 100%;
   min-height: 0;
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr);
+  grid-template-columns: 58px minmax(0, 1fr);
+}
+
+.left-shell.activity-only {
+  grid-template-columns: 58px;
 }
 
 .activity-bar {
@@ -494,16 +502,70 @@
   gap: 0.18rem;
   justify-items: center;
   cursor: pointer;
+  transition: color 140ms ease, background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.activity-bar-item:hover {
+  background: rgba(255, 255, 255, 0.5);
+  color: #394958;
 }
 
 .activity-bar-open {
   margin-top: 0.9rem;
 }
 
+.activity-bar-item-label {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.16rem;
+}
+
+.activity-bar-item-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0.75rem;
+  padding: 0 0.24rem;
+  border-radius: 999px;
+  border: 1px solid rgba(171, 49, 49, 0.18);
+  background: rgba(200, 59, 59, 0.1);
+  color: var(--primary-strong);
+  font-size: 0.38rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+}
+
+.activity-bar-item.plant-genie:hover,
+.activity-bar-item.plant-genie.active {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--primary);
+}
+
+.activity-bar-item.plant-genie:hover {
+  border-color: rgba(200, 59, 59, 0.18);
+  background: rgba(200, 59, 59, 0.08);
+  color: var(--primary);
+}
+
+.activity-bar-item.plant-genie:hover .activity-bar-item-badge,
+.activity-bar-item.plant-genie.active .activity-bar-item-badge {
+  border-color: rgba(171, 49, 49, 0.24);
+  background: rgba(200, 59, 59, 0.14);
+}
+
 .activity-bar-item.active {
   border-color: transparent;
   background: transparent;
   color: var(--primary);
+  font-weight: 700;
+}
+
+.activity-bar-item.plant-genie.active {
   font-weight: 700;
 }
 
@@ -1317,6 +1379,46 @@
   padding: 0.18rem 0.32rem;
 }
 
+.plant-genie-quick-access {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22rem;
+  border-color: rgba(200, 59, 59, 0.22);
+  background: rgba(200, 59, 59, 0.08);
+  color: var(--primary-strong);
+}
+
+.plant-genie-quick-access:hover {
+  border-color: rgba(171, 49, 49, 0.32);
+  background: rgba(200, 59, 59, 0.12);
+  color: var(--primary);
+}
+
+.plant-genie-inline-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.2rem;
+  border-radius: 999px;
+  border: 1px solid rgba(171, 49, 49, 0.16);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--primary-strong);
+  font-size: 0.38rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+}
+
+@media (max-width: 640px) {
+  .left-shell {
+    grid-template-columns: 54px minmax(0, 1fr);
+  }
+
+  .activity-bar {
+    padding-inline: 0.2rem;
+  }
+}
+
 .settings-sidebar-nav {
   display: grid;
   gap: 0.16rem;
@@ -1378,6 +1480,323 @@
   font-size: 0.72rem;
   color: var(--muted);
   line-height: 1.45;
+}
+
+.plant-genie-connectors-view {
+  align-items: stretch;
+}
+
+.plant-genie-connectors-layout {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(360px, 1fr);
+  gap: 0.75rem;
+}
+
+.plant-genie-connectors-card {
+  border: 1px solid var(--stroke);
+  border-radius: 5px;
+  background: #f8fafc;
+  padding: 0.75rem 0.95rem 0.95rem;
+  display: grid;
+  align-content: start;
+  gap: 0.7rem;
+  min-height: 0;
+}
+
+.plant-genie-settings-kicker {
+  margin-bottom: 0.18rem;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #5a7085;
+}
+
+.plant-genie-connectors-header,
+.plant-genie-form-header,
+.plant-genie-form-actions,
+.plant-genie-connector-actions,
+.plant-genie-connector-title-row,
+.plant-genie-connector-status-row,
+.plant-genie-connectors-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.plant-genie-connectors-header,
+.plant-genie-form-header {
+  align-items: flex-start;
+}
+
+.plant-genie-form-header h3 {
+  margin: 0;
+  font-size: 0.84rem;
+}
+
+.plant-genie-form-header p {
+  margin: 0.18rem 0 0;
+  font-size: 0.69rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.plant-genie-summary-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid #cdd7e1;
+  background: #ffffff;
+  border-radius: 999px;
+  padding: 0.22rem 0.45rem;
+  font-size: 0.64rem;
+  color: #33485c;
+}
+
+.plant-genie-summary-chip.is-active {
+  border-color: #c9d9f2;
+  background: #edf4fb;
+  color: #1d5a90;
+}
+
+.plant-genie-connector-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.plant-genie-connector-item {
+  border: 1px solid #d0d9e2;
+  border-radius: 5px;
+  background: #ffffff;
+  padding: 0.55rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.plant-genie-connector-item.selected {
+  border-color: #9eb7cf;
+  background: #f3f8fc;
+}
+
+.plant-genie-connector-main {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  display: grid;
+  gap: 0.24rem;
+  cursor: pointer;
+}
+
+.plant-genie-connector-title-row strong {
+  font-size: 0.76rem;
+  color: #213243;
+}
+
+.plant-genie-connector-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.24rem;
+}
+
+.plant-genie-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 0.08rem 0.38rem;
+  font-size: 0.56rem;
+  font-weight: 700;
+  border: 1px solid #c3ced8;
+  background: #eef3f7;
+  color: #435667;
+}
+
+.plant-genie-badge.active {
+  border-color: #8fb99d;
+  background: #e7f4eb;
+  color: #245338;
+}
+
+.plant-genie-badge.inactive {
+  border-color: #d4dbe3;
+  background: #f4f6f8;
+  color: #5e6d7b;
+}
+
+.plant-genie-badge.healthy {
+  border-color: #9dd5aa;
+  background: #ecf9ef;
+  color: #1d6a33;
+}
+
+.plant-genie-badge.unhealthy {
+  border-color: #e8b1b1;
+  background: #fff1f1;
+  color: #b23a3a;
+}
+
+.plant-genie-badge.unknown {
+  border-color: #d1d7de;
+  background: #f3f5f7;
+  color: #5a6977;
+}
+
+.plant-genie-connector-meta,
+.plant-genie-connector-status-row,
+.plant-genie-connector-message,
+.plant-genie-connectors-empty,
+.plant-genie-form-help {
+  font-size: 0.68rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.plant-genie-connector-url {
+  font-size: 0.66rem;
+  color: #31485d;
+  word-break: break-all;
+}
+
+.plant-genie-connector-status-row {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.plant-genie-connector-message {
+  margin: 0;
+}
+
+.plant-genie-connector-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.plant-genie-connector-actions .command-btn,
+.plant-genie-connectors-header .command-btn,
+.plant-genie-form-header .command-btn,
+.plant-genie-form-actions .command-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.24rem;
+}
+
+.plant-genie-connector-actions .command-btn.danger {
+  color: #fff;
+}
+
+.plant-genie-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.plant-genie-connector-modal {
+  width: min(760px, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+}
+
+.plant-genie-modal-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.plant-genie-modal-list {
+  margin-top: 0.2rem;
+}
+
+.plant-genie-subsection-header {
+  padding-top: 0.15rem;
+  border-top: 1px solid #dce4eb;
+}
+
+.plant-genie-confirmation-modal {
+  width: min(420px, calc(100vw - 2rem));
+}
+
+.plant-genie-confirmation-copy {
+  margin: 0;
+  color: #314456;
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.plant-genie-modal-actions {
+  margin-top: 0;
+}
+
+.plant-genie-field {
+  display: grid;
+  gap: 0.22rem;
+  font-size: 0.7rem;
+  color: #314456;
+}
+
+.plant-genie-field-full {
+  grid-column: 1 / -1;
+}
+
+.plant-genie-field input,
+.plant-genie-field textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #c7d2dd;
+  border-radius: 4px;
+  padding: 0.4rem 0.48rem;
+  font-size: 0.68rem;
+  color: #223547;
+  background: #ffffff;
+}
+
+.plant-genie-field textarea {
+  resize: vertical;
+  min-height: 5.5rem;
+}
+
+.plant-genie-field-error {
+  color: #9a3434;
+  font-size: 0.64rem;
+  line-height: 1.35;
+}
+
+.plant-genie-form-help,
+.plant-genie-inline-alert {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.plant-genie-inline-alert {
+  border: 1px solid #efc6c6;
+  background: #fff3f3;
+  color: #9a3434;
+  border-radius: 5px;
+  padding: 0.42rem 0.5rem;
+  font-size: 0.68rem;
+}
+
+@media (max-width: 1080px) {
+  .plant-genie-connectors-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .plant-genie-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .plant-genie-connectors-header,
+  .plant-genie-form-header,
+  .plant-genie-form-actions {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 
 .billing-settings-kv dd {

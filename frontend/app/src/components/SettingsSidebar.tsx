@@ -1,10 +1,8 @@
-import { Bot, Cog, CreditCard, FolderCog, PlugZap, Router } from "lucide-react";
+import { Bot, Cog, CreditCard, PlugZap } from "lucide-react";
 
 export type SettingsNavItemId =
   | "general"
-  | "project_settings"
   | "ai_connectors"
-  | "runtime_connections"
   | "export_integrations"
   | "billing";
 
@@ -17,9 +15,7 @@ type SettingsSidebarProps = {
 
 const SETTINGS_ITEMS_BASE: Array<{ id: SettingsNavItemId; label: string; Icon: typeof Cog }> = [
   { id: "general", label: "General", Icon: Cog },
-  { id: "project_settings", label: "Project Settings", Icon: FolderCog },
   { id: "ai_connectors", label: "AI Connectors", Icon: Bot },
-  { id: "runtime_connections", label: "Runtime / Connection Settings", Icon: Router },
   { id: "export_integrations", label: "Export / Integration Settings", Icon: PlugZap },
   { id: "billing", label: "Billing", Icon: CreditCard },
 ];

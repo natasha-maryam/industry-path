@@ -15,10 +15,17 @@ from services.copilot_scenario_engine import copilot_engine
 router = APIRouter(prefix="/copilot", tags=["copilot"])
 
 
+def _resolve_connector(payload: CopilotRunRequest) -> str:
+    connector = str(payload.connector or payload.provider or "").strip()
+    if not connector:
+        raise ValueError("connector is required")
+    return connector
+
+
 @router.post("/run", response_model=CopilotRunResponse)
 def run_copilot(payload: CopilotRunRequest) -> CopilotRunResponse:
     try:
-        return copilot_engine.run(payload.command, provider=payload.provider, context=payload.context)
+        return copilot_engine.run(payload.command, connector=_resolve_connector(payload), context=payload.context)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -26,7 +33,7 @@ def run_copilot(payload: CopilotRunRequest) -> CopilotRunResponse:
 @router.post("/run_async", response_model=CopilotAsyncRunResponse)
 def run_copilot_async(payload: CopilotRunRequest) -> CopilotAsyncRunResponse:
     try:
-        job = run_job(copilot_production.run, payload.command, payload.provider, payload.context)
+        job = run_job(copilot_production.run, payload.command, _resolve_connector(payload), payload.context)
         return CopilotAsyncRunResponse(**job)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -46,13 +53,11 @@ def register_provider(payload: CopilotProviderRequest) -> CopilotProviderRespons
     try:
         result = copilot_engine.register_provider(
             payload.name,
-            system_prompt=payload.system_prompt,
             mock_response=payload.mock_response,
             metadata=payload.metadata,
         )
         copilot_production.register_provider(
             payload.name,
-            system_prompt=payload.system_prompt,
             mock_response=payload.mock_response,
             metadata=payload.metadata,
         )

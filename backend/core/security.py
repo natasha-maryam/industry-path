@@ -7,6 +7,8 @@ from typing import Any
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from core.env_config import ensure_backend_env_loaded
+
 try:
     import jwt  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
@@ -19,14 +21,17 @@ auth_scheme = HTTPBearer(auto_error=False)
 class AuthSettings:
     @staticmethod
     def auth_required() -> bool:
+        ensure_backend_env_loaded()
         return os.getenv("PRODUCTION_AUTH_REQUIRED", "false").strip().lower() in {"1", "true", "yes", "on"}
 
     @staticmethod
     def jwt_secret() -> str:
+        ensure_backend_env_loaded()
         return os.getenv("JWT_SECRET", "").strip()
 
     @staticmethod
     def jwt_algorithm() -> str:
+        ensure_backend_env_loaded()
         return os.getenv("JWT_ALGORITHM", "HS256").strip() or "HS256"
 
 

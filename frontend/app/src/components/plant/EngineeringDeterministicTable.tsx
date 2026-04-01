@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, Sparkles } from "lucide-react";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   createColumnHelper,
@@ -36,6 +36,7 @@ type EngineeringDeterministicTableProps = {
     rows: EngineeringTableResponseRow[];
   }) => void;
   onLoadingStateChange?: (loading: boolean) => void;
+  onOpenPlantGenie?: (seedTag?: string | null) => void;
   externalSelectedTag?: string | null;
   highlightedTags?: string[];
 };
@@ -267,6 +268,7 @@ export default function EngineeringDeterministicTable({
   onOpenWhyTrace,
   onRowsResolved,
   onLoadingStateChange,
+  onOpenPlantGenie,
   externalSelectedTag = null,
   highlightedTags = [],
 }: EngineeringDeterministicTableProps) {
@@ -292,7 +294,7 @@ export default function EngineeringDeterministicTable({
   const lastFullSnapshotRef = useRef<string>("");
   const search = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS);
   const deferredSearch = useDeferredValue(search);
-  const copilotSeedTag = selectedTag || externalSelectedTag || "";
+  const plantGenieSeedTag = selectedTag || externalSelectedTag || "";
 
   const applyChipSearch = useCallback((value: string): void => {
     setSearchInput(value);
@@ -800,16 +802,12 @@ export default function EngineeringDeterministicTable({
             </span>
             <button
               type="button"
-              className="command-btn deterministic-toolbar-btn"
-              onClick={() => {
-                window.dispatchEvent(
-                  new CustomEvent("openCopilotPanel", {
-                    detail: copilotSeedTag ? { tag: copilotSeedTag } : {},
-                  })
-                );
-              }}
+              className="command-btn deterministic-toolbar-btn plant-genie-quick-access"
+              onClick={() => onOpenPlantGenie?.(plantGenieSeedTag || null)}
             >
-              Copilot
+              <Sparkles size={10} />
+              <span>Plant Genie</span>
+              <span className="plant-genie-inline-badge">NEW</span>
             </button>
             <button
               type="button"

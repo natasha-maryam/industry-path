@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import { Toaster, toast } from "react-hot-toast";
 import ActivityBar from "../components/ActivityBar";
-import BottomPanel from "../components/BottomPanel";
 import CodeExplorerPanel, { type GeneratedLogicFile, type STDiagnosticMarker, type STJumpLocation } from "../components/CodeExplorerPanel";
 import CommandBar, { type ToolbarAction } from "../components/CommandBar";
 import DetailsPanel, { type RightTab } from "../components/DetailsPanel";
@@ -20,6 +19,9 @@ import GraphWorkspace from "../components/GraphWorkspace";
 import IOMappingTablePanel from "../components/IOMappingTablePanel";
 import BillingSettingsPanel from "../components/BillingSettingsPanel";
 import MainWorkspaceRouter from "../components/MainWorkspaceRouter";
+import PlantGenieConnectorSettings from "../components/PlantGenieConnectorSettings";
+import PlantGenieWorkspace from "../components/PlantGenieWorkspace";
+import SettingsGeneralPanel from "../components/SettingsGeneralPanel";
 import EngineeringDeterministicTable from "../components/plant/EngineeringDeterministicTable";
 import RightControlLoopsTab from "../components/rightTabs/RightControlLoopsTab";
 import RightDiagnosticsTab from "../components/rightTabs/RightDiagnosticsTab";
@@ -144,7 +146,7 @@ type EquipmentType = "Tank" | "Pump" | "Sensor" | "Valve";
 type BottomView = "simulation" | "monitoring" | "logic";
 type CodePanelMode = "control_logic" | "generated_st" | "verification" | "version_diff";
 type MonitoringPanelMode = "io_mapping" | "runtime" | "versions";
-type ActivityMode = "projects" | "settings";
+type ActivityMode = "projects" | "plant_genie" | "settings";
 type ProjectFeatureId = "versions" | "pid";
 
 type UIShellState = {
@@ -625,6 +627,7 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
     activeRightTab: "Details",
   });
   const [activeSettingsItem, setActiveSettingsItem] = useState<SettingsNavItemId>("general");
+  const [plantGenieSeedTag, setPlantGenieSeedTag] = useState<string | null>(null);
   useEffect(() => {
     if (isSandboxMode && activeSettingsItem === "billing") {
       setActiveSettingsItem("general");
@@ -640,6 +643,7 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
     monitoringPanelMode: "io_mapping",
   });
   const activeActivity = uiShell.activeSidebarMode;
+  const isPlantGenieActivity = activeActivity === "plant_genie";
   const selectedRow = uiShell.selectedRowId;
   const activeMainView = uiShell.activeMainView;
   const activeModule = panelState.activeModule;
@@ -689,6 +693,13 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
     setUIShell((previous) => ({ ...previous, activeMainView: view }));
   };
 
+  const openPlantGenie = (seedTag?: string | null): void => {
+    setActiveProjectFeature(null);
+    setActiveSidebarMode("plant_genie");
+    setPlantGenieSeedTag(typeof seedTag === "string" && seedTag.trim().length > 0 ? seedTag : null);
+    setIsLeftPanelCollapsed(false);
+  };
+
   const setSelectedRowId = (rowId: string): void => {
     setUIShell((previous) => ({ ...previous, selectedRowId: rowId }));
   };
@@ -712,21 +723,8 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
       setActiveProjectFeature(null);
       return;
     }
-    if (item === "project_settings") {
-      setActiveProjectFeature("versions");
-      setMonitoringPanelMode("versions");
-      setActiveBottomView("monitoring");
-      setActiveModule("monitoring");
-      setActiveMainView("monitoring");
-      return;
-    }
-    if (item === "runtime_connections") {
+    if (item === "ai_connectors") {
       setActiveProjectFeature(null);
-      setMonitoringPanelMode("runtime");
-      setActiveBottomView("monitoring");
-      setActiveTab("Diagnostics");
-      setActiveModule("runtime");
-      setActiveMainView("monitoring");
       return;
     }
     if (item === "export_integrations") {
@@ -826,7 +824,6 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
   const [liveEngineeringRowsLoading, setLiveEngineeringRowsLoading] = useState<boolean>(false);
   const [behaviorRefreshKey, setBehaviorRefreshKey] = useState<number>(0);
   const [selectedEngineeringTag, setSelectedEngineeringTag] = useState<string | null>(null);
-  const [selectedEngineeringRow, setSelectedEngineeringRow] = useState<EngineeringTableResponseRow | null>(null);
   const [selectedWhyTraceTag, setSelectedWhyTraceTag] = useState<string | null>(null);
   const [whyFocusToken, setWhyFocusToken] = useState<number>(0);
   const [unsTableRowsOverride, setUnsTableRowsOverride] = useState<EngineeringTableResponseRow[] | null>(null);
@@ -1915,6 +1912,7 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
       setSelectedSystemContextPayload(null);
       setSystemContextLoading(false);
       setSystemContextError(null);
+      setPlantGenieSeedTag(null);
       setPipelineStatuses(createInitialPipelineStatuses());
       setShowLogic(false);
       setUIShell((previous) => ({
@@ -3124,7 +3122,6 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
       setSelectedNode(row.tag);
       setSelectedRowId(row.id?.trim() || row.tag);
       setSelectedEngineeringTag(row.tag);
-      setSelectedEngineeringRow(row);
       if (activeTab === "Trace") {
         void handleTrace(row.tag);
       }
@@ -3181,6 +3178,11 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
 
   const currentProject = projects.find((project) => project.id === selectedProjectId);
   const selectedControlLoop = selectedControlLoopTag ? controlLoops.find((item) => item.loop_tag === selectedControlLoopTag) ?? null : null;
+  const plantGenieActiveTag =
+    (typeof plantGenieSeedTag === "string" && plantGenieSeedTag.trim().length > 0 ? plantGenieSeedTag : null) ??
+    selectedEngineeringTag ??
+    selectedControlLoopTag ??
+    (selectedNode || null);
   const resolvedEngineeringRowsForWorkspace =
     liveEngineeringRows.length > 0 ? liveEngineeringRows : unsTableRowsOverride ?? engineeringTableData?.rows ?? [];
   const resolvedEngineeringRowsSource = liveEngineeringRows.length > 0 ? "deterministic_behavior" : unsTableRowsOverride ? "uns_override" : "engineering_table_response";
@@ -3194,28 +3196,14 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
   const hasSimulationResults = simulationTrace.length > 0 || Boolean(simulationValidationData);
 
   useEffect(() => {
-    if (!selectedEngineeringTag) {
-      setSelectedEngineeringRow(null);
-      return;
-    }
-
-    const nextSelectedRow = resolvedEngineeringRowsForWorkspace.find((row) => row.tag === selectedEngineeringTag) ?? null;
-    if (!nextSelectedRow) {
+    if (selectedEngineeringTag && !resolvedEngineeringRowsForWorkspace.some((row) => row.tag === selectedEngineeringTag)) {
       setSelectedEngineeringTag(null);
-      setSelectedEngineeringRow(null);
-      return;
     }
-
-    setSelectedEngineeringRow(nextSelectedRow);
   }, [resolvedEngineeringRowsForWorkspace, selectedEngineeringTag]);
 
   useEffect(() => {
-    console.log("COPILOT_SELECTED_TAG_STATE", selectedEngineeringTag);
-  }, [selectedEngineeringTag]);
-
-  useEffect(() => {
     setSelectedEngineeringTag(null);
-    setSelectedEngineeringRow(null);
+    setPlantGenieSeedTag(null);
   }, [selectedProjectId]);
 
   useEffect(() => {
@@ -3999,6 +3987,7 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
             setLiveEngineeringRowsFilteredCount(payload.filteredRows);
           }}
           onLoadingStateChange={setLiveEngineeringRowsLoading}
+          onOpenPlantGenie={openPlantGenie}
         />
       ) : (
         <div className="workspace-placeholder-panel">
@@ -4968,31 +4957,31 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
 
       <div className="workspace-shell">
         <div
-          className={`main-shell ${isLeftPanelCollapsed ? "left-collapsed" : ""} ${isRightPanelExpanded ? "right-expanded" : ""}`}
+          className={`main-shell ${isLeftPanelCollapsed ? "left-collapsed" : ""} ${isPlantGenieActivity ? "plant-genie-only" : ""} ${isRightPanelExpanded ? "right-expanded" : ""}`}
           style={{
             ["--right-panel-width" as string]: `${isRightPanelExpanded ? rightPanelWidth : 38}px`,
           }}
         >
               <div className="main-shell-content">
-                <aside className={`left-panel ${isLeftPanelCollapsed ? "collapsed" : ""}`}>
-                  <div className="left-shell">
+                <aside className={`left-panel ${isLeftPanelCollapsed || isPlantGenieActivity ? "collapsed" : ""}`}>
+                  <div className={`left-shell ${isPlantGenieActivity ? "activity-only" : ""}`}>
                     <ActivityBar
                       activeActivity={uiState.activeSidebarMode}
-                      isSidebarCollapsed={isLeftPanelCollapsed}
+                      isSidebarCollapsed={isLeftPanelCollapsed && !isPlantGenieActivity}
                       onSelectActivity={(activity) => {
                         setActiveSidebarMode(activity);
                         if (activity === "settings") {
                           setActiveSettingsItem("general");
                         }
-                        if (isLeftPanelCollapsed) {
+                        if (isLeftPanelCollapsed && activity !== "plant_genie") {
                           setIsLeftPanelCollapsed(false);
                         }
                       }}
                       onOpenSidebar={() => setIsLeftPanelCollapsed(false)}
                     />
 
-                    <div className={`primary-sidebar ${isLeftPanelCollapsed ? "collapsed" : ""}`}>
-                      {!isLeftPanelCollapsed ? (
+                    <div className={`primary-sidebar ${isLeftPanelCollapsed || isPlantGenieActivity ? "collapsed" : ""}`}>
+                      {!isLeftPanelCollapsed && !isPlantGenieActivity ? (
                         <button
                           className="side-panel-toggle left"
                           type="button"
@@ -5003,7 +4992,7 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
                         </button>
                       ) : null}
 
-                      {!isLeftPanelCollapsed ? (
+                      {!isLeftPanelCollapsed && !isPlantGenieActivity ? (
                         activeActivity === "projects" ? (
                           <SidebarModeProjects
                             projects={projects}
@@ -5048,7 +5037,17 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
                   </div>
                 </aside>
 
-                {activeActivity === "settings" && activeSettingsItem === "billing" && !isSandboxMode ? (
+                {activeActivity === "plant_genie" ? (
+                  <PlantGenieWorkspace
+                    hasProject={Boolean(selectedProjectId)}
+                    projectName={currentProject?.name ?? null}
+                    selectedTag={plantGenieActiveTag}
+                  />
+                ) : activeActivity === "settings" && activeSettingsItem === "general" ? (
+                  <SettingsGeneralPanel />
+                ) : activeActivity === "settings" && activeSettingsItem === "ai_connectors" ? (
+                  <PlantGenieConnectorSettings />
+                ) : activeActivity === "settings" && activeSettingsItem === "billing" && !isSandboxMode ? (
                   <BillingSettingsPanel />
                 ) : (
                   <MainWorkspaceRouter
@@ -5213,17 +5212,6 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
         <span>Row: {uiState.selectedRow || "none"}</span>
         <span>Connection: {isRuntimeStateLoading ? "syncing" : "ready"}</span>
       </div>
-
-      <BottomPanel
-        projectId={selectedProjectId}
-        selectedTag={selectedEngineeringTag}
-        selectedRow={selectedEngineeringRow}
-        engineeringRows={resolvedEngineeringRowsForWorkspace}
-        graphSummary={activeMainView === "graph" && graphNodes.length > 0 ? {
-          nodeCount: graphNodes.length,
-          edgeCount: plantGraph.edges.length,
-        } : null}
-      />
     </div>
   );
 }

@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+from core.env_config import ensure_backend_env_loaded
+
 
 @dataclass(frozen=True)
 class PostgresConfig:
@@ -19,13 +21,14 @@ class PostgresConfig:
 
 class PostgresClient:
     def __init__(self) -> None:
-        self.config = PostgresConfig(
-            host=os.getenv("POSTGRES_HOST", "localhost"),
-            port=int(os.getenv("POSTGRES_PORT", "5432")),
-            database=os.getenv("POSTGRES_DB", "crosslayerx"),
-            user=os.getenv("POSTGRES_USER", "crosslayer"),
-            password=os.getenv("POSTGRES_PASSWORD", "crosslayer"),
-        )
+      ensure_backend_env_loaded()
+      self.config = PostgresConfig(
+        host=os.getenv("POSTGRES_HOST", "localhost"),
+        port=int(os.getenv("POSTGRES_PORT", "5432")),
+        database=os.getenv("POSTGRES_DB", "crosslayerx"),
+        user=os.getenv("POSTGRES_USER", "crosslayer"),
+        password=os.getenv("POSTGRES_PASSWORD", "crosslayer"),
+      )
 
     @contextmanager
     def connection(self):
@@ -565,6 +568,66 @@ class PostgresClient:
           ON version_records(project_id, created_at DESC);
         """
 
+        create_plant_genie_ai_connectors_sql = """
+        CREATE TABLE IF NOT EXISTS plant_genie_ai_connectors (
+          id UUID PRIMARY KEY,
+          user_id VARCHAR NOT NULL,
+          name VARCHAR NOT NULL,
+          provider VARCHAR NOT NULL,
+          api_key_encrypted TEXT NOT NULL,
+          model VARCHAR NULL,
+          provider_label VARCHAR NULL,
+          notes TEXT NULL,
+          is_active BOOLEAN DEFAULT FALSE,
+          health_status VARCHAR DEFAULT 'unknown',
+          health_message TEXT NULL,
+          last_tested_at TIMESTAMP NULL,
+          created_at TIMESTAMP NOT NULL,
+          updated_at TIMESTAMP NOT NULL
+        );
+        """
+
+        create_plant_genie_ai_connectors_user_idx_sql = """
+        CREATE INDEX IF NOT EXISTS idx_plant_genie_ai_connectors_user_updated
+          ON plant_genie_ai_connectors(user_id, updated_at DESC);
+        """
+
+        create_plant_genie_ai_connectors_active_unique_sql = """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_plant_genie_ai_connectors_active_unique
+          ON plant_genie_ai_connectors(user_id)
+          WHERE is_active = TRUE;
+        """
+
+        create_plant_genie_plant_data_connectors_sql = """
+        CREATE TABLE IF NOT EXISTS plant_genie_plant_data_connectors (
+          id UUID PRIMARY KEY,
+          user_id VARCHAR NOT NULL,
+          name VARCHAR NOT NULL,
+          connector_type VARCHAR NOT NULL,
+          poll_interval_ms INTEGER NOT NULL DEFAULT 5000,
+          config_json TEXT NOT NULL,
+          secrets_encrypted TEXT NULL,
+          enabled BOOLEAN NOT NULL DEFAULT FALSE,
+          running BOOLEAN NOT NULL DEFAULT FALSE,
+          healthy BOOLEAN NOT NULL DEFAULT FALSE,
+          last_update TIMESTAMP NULL,
+          last_tested_at TIMESTAMP NULL,
+          last_error TEXT NULL,
+          created_at TIMESTAMP NOT NULL,
+          updated_at TIMESTAMP NOT NULL
+        );
+        """
+
+        create_plant_genie_plant_data_connectors_user_idx_sql = """
+        CREATE INDEX IF NOT EXISTS idx_plant_genie_plant_data_connectors_user_updated
+          ON plant_genie_plant_data_connectors(user_id, updated_at DESC);
+        """
+
+        create_plant_genie_plant_data_connectors_enabled_idx_sql = """
+        CREATE INDEX IF NOT EXISTS idx_plant_genie_plant_data_connectors_enabled
+          ON plant_genie_plant_data_connectors(enabled, updated_at DESC);
+        """
+
         with self.connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(create_projects_sql)
@@ -627,6 +690,58 @@ class PostgresClient:
                 cursor.execute(create_runtime_deployments_project_unique_sql)
                 cursor.execute(create_version_records_sql)
                 cursor.execute(create_version_records_project_idx_sql)
+                cursor.execute(create_plant_genie_ai_connectors_sql)
+                cursor.execute("ALTER TABLE plant_genie_ai_connectors ADD COLUMN IF NOT EXISTS provider VARCHAR")
+                cursor.execute(
+                    """
+                    DO $$
+                    BEGIN
+                      IF EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_name = 'plant_genie_ai_connectors' AND column_name = 'endpoint_url'
+                      ) THEN
+                        UPDATE plant_genie_ai_connectors
+                        SET provider = CASE
+                          WHEN COALESCE(BTRIM(provider), '') <> '' THEN provider
+                          WHEN endpoint_url ILIKE 'https://api.openai.com/%' THEN 'openai'
+                          WHEN endpoint_url ILIKE 'https://api.anthropic.com/%' THEN 'anthropic'
+                          WHEN endpoint_url ILIKE '%openai.azure.com/%' THEN 'azure_openai'
+                          WHEN endpoint_url ILIKE 'https://openrouter.ai/api/%' THEN 'openrouter'
+                          ELSE 'custom_openai_compatible'
+                        END
+                        WHERE COALESCE(BTRIM(provider), '') = '';
+                      ELSE
+                        UPDATE plant_genie_ai_connectors
+                        SET provider = 'custom_openai_compatible'
+                        WHERE COALESCE(BTRIM(provider), '') = '';
+                      END IF;
+                    END $$;
+                    """
+                )
+                cursor.execute("ALTER TABLE plant_genie_ai_connectors ALTER COLUMN provider SET NOT NULL")
+                cursor.execute("ALTER TABLE plant_genie_ai_connectors DROP COLUMN IF EXISTS endpoint_url")
+                cursor.execute("ALTER TABLE plant_genie_ai_connectors ADD COLUMN IF NOT EXISTS model VARCHAR NULL")
+                cursor.execute(create_plant_genie_ai_connectors_user_idx_sql)
+                cursor.execute(create_plant_genie_ai_connectors_active_unique_sql)
+                cursor.execute(create_plant_genie_plant_data_connectors_sql)
+                cursor.execute("ALTER TABLE plant_genie_plant_data_connectors ADD COLUMN IF NOT EXISTS last_tested_at TIMESTAMP NULL")
+                cursor.execute(
+                    """
+                    WITH single_connector_users AS (
+                      SELECT user_id, MIN(id) AS connector_id
+                      FROM plant_genie_plant_data_connectors
+                      GROUP BY user_id
+                      HAVING COUNT(*) = 1 AND BOOL_OR(enabled) = FALSE
+                    )
+                    UPDATE plant_genie_plant_data_connectors AS connectors
+                    SET enabled = TRUE
+                    FROM single_connector_users
+                    WHERE connectors.id = single_connector_users.connector_id;
+                    """
+                )
+                cursor.execute(create_plant_genie_plant_data_connectors_user_idx_sql)
+                cursor.execute(create_plant_genie_plant_data_connectors_enabled_idx_sql)
 
     def fetch_all(self, sql: str, params: tuple | None = None) -> list[dict]:
         with self.connection() as conn:
