@@ -729,10 +729,6 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
     }
     if (item === "export_integrations") {
       setActiveProjectFeature(null);
-      setCodePanelMode("control_logic");
-      setActiveBottomView("logic");
-      setActiveModule("control_logic");
-      setActiveMainView("logic");
       return;
     }
     setActiveProjectFeature(null);
@@ -5047,6 +5043,15 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
                   <SettingsGeneralPanel />
                 ) : activeActivity === "settings" && activeSettingsItem === "ai_connectors" ? (
                   <PlantGenieConnectorSettings />
+                ) : activeActivity === "settings" && activeSettingsItem === "export_integrations" ? (
+                  <section className="graph-shell">
+                    <div className="main-workspace-view billing-settings-view plant-genie-connectors-view">
+                      <div className="workspace-placeholder-panel">
+                        <h3>Export project available in next version</h3>
+                        <p>Export and integration settings are not available in this release yet.</p>
+                      </div>
+                    </div>
+                  </section>
                 ) : activeActivity === "settings" && activeSettingsItem === "billing" && !isSandboxMode ? (
                   <BillingSettingsPanel />
                 ) : (

@@ -35,6 +35,52 @@ export type ProjectDocument = {
   uploaded_at: string;
 };
 
+export type AccessAccountType = "sandbox" | "paid";
+export type AccessPlan = "solo" | "team";
+export type TeamRole = "admin" | "editor" | "viewer";
+
+export type AccessUser = {
+  email: string;
+  account_type: AccessAccountType;
+  paid_plan?: string | null;
+  maintenance_active?: boolean;
+  team_members?: string[];
+  invited_members?: string[];
+  exports_used?: number;
+  export_limit?: number;
+};
+
+export type AccessSession = {
+  token: string;
+  email: string;
+  account_type: AccessAccountType;
+};
+
+export type SandboxStatus = {
+  email: string;
+  account_type: AccessAccountType;
+  exports_used?: number;
+  export_limit?: number;
+  paid_plan?: string | null;
+};
+
+export type AccessIdentifyResponse = {
+  exists: boolean;
+  user?: AccessUser | null;
+};
+
+export type CheckoutStartResponse = {
+  url: string;
+};
+
+export type RbacState = {
+  roles: {
+    owner?: string;
+    members: Record<string, TeamRole | string>;
+  };
+  permissions: Record<string, boolean>;
+};
+
 export type PlantGenieAIConnectorHealthStatus = "unknown" | "healthy" | "unhealthy";
 
 export type PlantGenieAIProvider =
@@ -2644,6 +2690,165 @@ const buildBearerHeader = (token?: string): Record<string, string> | undefined =
     Authorization: `Bearer ${normalized}`,
   };
 };
+
+const ACCESS_USER_EMAIL_KEY = "industrypath:access:user-email";
+
+const getAccessUserEmail = (): string => {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  return window.localStorage.getItem(ACCESS_USER_EMAIL_KEY)?.trim().toLowerCase() || "";
+};
+
+const buildAccessUserHeader = (email?: string): Record<string, string> | undefined => {
+  const normalized = (email ?? getAccessUserEmail()).trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  return {
+    "X-User-Email": normalized,
+  };
+};
+
+export function setAccessUserEmail(email: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) {
+    window.localStorage.removeItem(ACCESS_USER_EMAIL_KEY);
+    return;
+  }
+  window.localStorage.setItem(ACCESS_USER_EMAIL_KEY, normalized);
+}
+
+export async function identifyAccessUser(email: string): Promise<AccessIdentifyResponse> {
+  try {
+    const response = await api.post<AccessIdentifyResponse>("/access/identify", { email: email.trim().toLowerCase() });
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Access user lookup failed."));
+  }
+}
+
+export async function registerAccessUser(payload: {
+  email: string;
+  account_type?: AccessAccountType;
+  paid_plan?: string | null;
+}): Promise<AccessUser> {
+  try {
+    const response = await api.post<{ user: AccessUser }>("/access/register", {
+      email: payload.email.trim().toLowerCase(),
+      account_type: payload.account_type ?? "sandbox",
+      paid_plan: payload.paid_plan ?? null,
+    });
+    return response.data.user;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Access user registration failed."));
+  }
+}
+
+export async function loginAccessUser(email: string): Promise<AccessSession> {
+  try {
+    const response = await api.post<AccessSession>("/access/login", { email: email.trim().toLowerCase() });
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Access login failed."));
+  }
+}
+
+export async function getAccessSession(token: string): Promise<AccessUser> {
+  try {
+    const response = await api.get<{ user: AccessUser }>("/access/session", {
+      params: { token: token.trim() },
+    });
+    return response.data.user;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Access session lookup failed."));
+  }
+}
+
+export async function getSandboxStatus(email: string): Promise<SandboxStatus> {
+  try {
+    const response = await api.get<SandboxStatus>("/access/sandbox/status", {
+      params: { email: email.trim().toLowerCase() },
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Sandbox status request failed."));
+  }
+}
+
+export async function startCheckout(payload: {
+  email: string;
+  plan: AccessPlan;
+  maintenance?: boolean;
+  success_url?: string;
+  cancel_url?: string;
+}): Promise<CheckoutStartResponse> {
+  try {
+    const response = await api.post<CheckoutStartResponse>("/access/checkout/start", {
+      email: payload.email.trim().toLowerCase(),
+      plan: payload.plan,
+      maintenance: Boolean(payload.maintenance),
+      success_url: payload.success_url,
+      cancel_url: payload.cancel_url,
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Checkout start failed."));
+  }
+}
+
+export async function completeCheckout(payload: {
+  email: string;
+  plan: AccessPlan;
+  maintenance?: boolean;
+}): Promise<AccessUser> {
+  try {
+    const response = await api.post<{ user: AccessUser }>("/access/checkout/complete", {
+      email: payload.email.trim().toLowerCase(),
+      plan: payload.plan,
+      maintenance: Boolean(payload.maintenance),
+    });
+    return response.data.user;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Checkout completion failed."));
+  }
+}
+
+export async function getRbacState(email?: string): Promise<RbacState> {
+  try {
+    const normalizedEmail = (email ?? getAccessUserEmail()).trim().toLowerCase();
+    const response = await api.get<RbacState>("/access/rbac", {
+      params: normalizedEmail ? { email: normalizedEmail } : undefined,
+      headers: buildAccessUserHeader(normalizedEmail),
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "RBAC state request failed."));
+  }
+}
+
+export async function setTeamMemberRole(memberEmail: string, role: TeamRole, adminEmail?: string): Promise<RbacState["roles"]> {
+  try {
+    const resolvedAdminEmail = (adminEmail ?? getAccessUserEmail()).trim().toLowerCase();
+    const response = await api.post<{ roles: RbacState["roles"] }>(
+      "/access/rbac/set-role",
+      {
+        admin_email: resolvedAdminEmail || null,
+        member_email: memberEmail.trim().toLowerCase(),
+        role,
+      },
+      {
+        headers: buildAccessUserHeader(resolvedAdminEmail),
+      }
+    );
+    return response.data.roles;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Updating team member role failed."));
+  }
+}
 
 export async function getProductionHealth(token?: string): Promise<ProductionHealthResponse> {
   const response = await api.get<ProductionHealthResponse>("/production/health", {
