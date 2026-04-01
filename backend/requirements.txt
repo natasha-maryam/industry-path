@@ -14,6 +14,7 @@ numpy==2.4.2
 scikit-learn==1.8.0
 scipy==1.17.1
 spacy==3.8.11
+RapidFuzz==3.14.3
 
 GitPython==3.1.46
 asyncua==1.1.8
