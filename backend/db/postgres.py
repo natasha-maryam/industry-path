@@ -1,21 +1,57 @@
 from __future__ import annotations
 
+import logging
+import os
 from contextlib import contextmanager
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
 
-DATABASE_URL = "postgresql://postgres:ddhnjtOCggcfYDEgKLcIefxEVxEapXCA@postgres.railway.internal:5432/railway"
+logger = logging.getLogger(__name__)
+
+
+def _get_database_url() -> str | None:
+    database_url = os.getenv("DATABASE_URL")
+    if database_url:
+        database_url = database_url.strip()
+    return database_url or None
+
+
+def _get_postgres_connection_kwargs() -> dict[str, str | int]:
+    host = os.getenv("POSTGRES_HOST") or "localhost"
+    port = int(os.getenv("POSTGRES_PORT") or 5432)
+    dbname = os.getenv("POSTGRES_DB")
+    user = os.getenv("POSTGRES_USER")
+    password = os.getenv("POSTGRES_PASSWORD")
+
+    if not all([dbname, user, password]):
+        raise RuntimeError(
+            "PostgreSQL configuration is missing. Set DATABASE_URL or provide "
+            "POSTGRES_DB, POSTGRES_USER, and POSTGRES_PASSWORD. "
+            "POSTGRES_HOST and POSTGRES_PORT are optional and default to localhost:5432."
+        )
+
+    return {
+        "host": host,
+        "port": port,
+        "dbname": dbname,
+        "user": user,
+        "password": password,
+    }
 
 
 class PostgresClient:
     def __init__(self) -> None:
-      pass
+        pass
 
     @contextmanager
     def connection(self):
-        conn = psycopg2.connect(DATABASE_URL)
+        database_url = _get_database_url()
+        if database_url:
+            conn = psycopg2.connect(database_url)
+        else:
+            conn = psycopg2.connect(**_get_postgres_connection_kwargs())
         try:
             yield conn
             conn.commit()
@@ -26,6 +62,7 @@ class PostgresClient:
             conn.close()
 
     def init_schema(self) -> None:
+        logger.info("initializing postgres schema")
         create_projects_sql = """
         CREATE TABLE IF NOT EXISTS projects (
           id UUID PRIMARY KEY,
@@ -605,120 +642,139 @@ class PostgresClient:
           ON plant_genie_plant_data_connectors(enabled, updated_at DESC);
         """
 
-        with self.connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(create_projects_sql)
-                cursor.execute(alter_projects_industry_sql)
-                cursor.execute(alter_projects_plc_runtime_sql)
-                cursor.execute(alter_projects_owner_sql)
-                cursor.execute(alter_projects_active_version_sql)
-                cursor.execute(create_files_sql)
-                cursor.execute(create_parse_jobs_sql)
-                cursor.execute(alter_project_files_document_type_sql)
-                cursor.execute(alter_parse_jobs_parse_batch_sql)
-                cursor.execute(alter_parse_jobs_current_stage_sql)
-                cursor.execute(alter_parse_jobs_stage_message_sql)
-                cursor.execute(alter_parse_jobs_progress_percent_sql)
-                cursor.execute(create_parse_batches_sql)
-                cursor.execute(create_parse_batch_files_sql)
-                cursor.execute(create_extracted_metadata_sql)
-                cursor.execute(create_narrative_rules_sql)
-                cursor.execute(create_parse_conflicts_sql)
-                cursor.execute(create_control_loop_definitions_sql)
-                cursor.execute(create_alarm_definitions_sql)
-                cursor.execute(create_interlock_definitions_sql)
-                cursor.execute(create_logic_runs_sql)
-                cursor.execute(create_logic_warnings_sql)
-                cursor.execute(create_control_rules_sql)
-                cursor.execute(alter_control_rules_logic_run_id_sql)
-                cursor.execute(alter_control_rules_source_type_sql)
-                cursor.execute(alter_control_rules_target_type_sql)
-                cursor.execute(alter_control_rules_display_text_sql)
-                cursor.execute(alter_control_rules_st_preview_sql)
-                cursor.execute(alter_control_rules_source_references_sql)
-                cursor.execute(alter_control_rules_rule_group_sql)
-                cursor.execute(alter_control_rules_condition_kind_sql)
-                cursor.execute(alter_control_rules_threshold_name_sql)
-                cursor.execute(alter_control_rules_secondary_target_tag_sql)
-                cursor.execute(alter_control_rules_priority_sql)
-                cursor.execute(alter_control_rules_renderable_sql)
-                cursor.execute(alter_control_rules_unresolved_tokens_sql)
-                cursor.execute(alter_control_rules_comments_sql)
-                cursor.execute(alter_control_rules_is_symbolic_sql)
-                cursor.execute(alter_control_rules_resolution_strategy_sql)
-                cursor.execute(alter_logic_runs_warnings_sql)
-                cursor.execute(alter_logic_runs_project_version_sql)
-                cursor.execute(alter_logic_runs_warnings_count_sql)
-                cursor.execute(alter_logic_runs_st_preview_sql)
-                cursor.execute(alter_logic_runs_generator_version_sql)
-                cursor.execute(create_io_mapping_versions_sql)
-                cursor.execute(create_io_mappings_sql)
-                cursor.execute(create_io_mapping_issues_sql)
-                cursor.execute(create_io_mapping_versions_project_idx_sql)
-                cursor.execute(create_io_mapping_versions_active_unique_sql)
-                cursor.execute(create_io_mappings_project_version_idx_sql)
-                cursor.execute(create_io_mapping_issues_project_version_idx_sql)
-                cursor.execute(create_control_loops_sql)
-                cursor.execute(create_control_loops_project_idx_sql)
-                cursor.execute(create_control_loops_tag_idx_sql)
-                cursor.execute(create_control_loops_project_loop_unique_sql)
-                cursor.execute(create_runtime_deployments_sql)
-                cursor.execute(create_runtime_deployments_project_idx_sql)
-                cursor.execute(create_runtime_deployments_project_unique_sql)
-                cursor.execute(create_version_records_sql)
-                cursor.execute(create_version_records_project_idx_sql)
-                cursor.execute(create_plant_genie_ai_connectors_sql)
-                cursor.execute("ALTER TABLE plant_genie_ai_connectors ADD COLUMN IF NOT EXISTS provider VARCHAR")
-                cursor.execute(
-                    """
-                    DO $$
-                    BEGIN
-                      IF EXISTS (
-                        SELECT 1
-                        FROM information_schema.columns
-                        WHERE table_name = 'plant_genie_ai_connectors' AND column_name = 'endpoint_url'
-                      ) THEN
-                        UPDATE plant_genie_ai_connectors
-                        SET provider = CASE
-                          WHEN COALESCE(BTRIM(provider), '') <> '' THEN provider
-                          WHEN endpoint_url ILIKE 'https://api.openai.com/%' THEN 'openai'
-                          WHEN endpoint_url ILIKE 'https://api.anthropic.com/%' THEN 'anthropic'
-                          WHEN endpoint_url ILIKE '%openai.azure.com/%' THEN 'azure_openai'
-                          WHEN endpoint_url ILIKE 'https://openrouter.ai/api/%' THEN 'openrouter'
-                          ELSE 'custom_openai_compatible'
-                        END
-                        WHERE COALESCE(BTRIM(provider), '') = '';
-                      ELSE
-                        UPDATE plant_genie_ai_connectors
-                        SET provider = 'custom_openai_compatible'
-                        WHERE COALESCE(BTRIM(provider), '') = '';
-                      END IF;
-                    END $$;
-                    """
+        statements: list[tuple[str, str]] = [
+            ("create projects table", create_projects_sql),
+            ("alter projects industry column", alter_projects_industry_sql),
+            ("alter projects plc_runtime column", alter_projects_plc_runtime_sql),
+            ("alter projects owner column", alter_projects_owner_sql),
+            ("alter projects active_version column", alter_projects_active_version_sql),
+            ("create project_files table", create_files_sql),
+            ("create parse_jobs table", create_parse_jobs_sql),
+            ("alter project_files document_type column", alter_project_files_document_type_sql),
+            ("alter parse_jobs parse_batch_id column", alter_parse_jobs_parse_batch_sql),
+            ("alter parse_jobs current_stage column", alter_parse_jobs_current_stage_sql),
+            ("alter parse_jobs stage_message column", alter_parse_jobs_stage_message_sql),
+            ("alter parse_jobs progress_percent column", alter_parse_jobs_progress_percent_sql),
+            ("create parse_batches table", create_parse_batches_sql),
+            ("create parse_batch_files table", create_parse_batch_files_sql),
+            ("create extracted_metadata table", create_extracted_metadata_sql),
+            ("create narrative_rules table", create_narrative_rules_sql),
+            ("create parse_conflicts table", create_parse_conflicts_sql),
+            ("create control_loop_definitions table", create_control_loop_definitions_sql),
+            ("create alarm_definitions table", create_alarm_definitions_sql),
+            ("create interlock_definitions table", create_interlock_definitions_sql),
+            ("create logic_runs table", create_logic_runs_sql),
+            ("create logic_warnings table", create_logic_warnings_sql),
+            ("create control_rules table", create_control_rules_sql),
+            ("alter control_rules logic_run_id column", alter_control_rules_logic_run_id_sql),
+            ("alter control_rules source_type column", alter_control_rules_source_type_sql),
+            ("alter control_rules target_type column", alter_control_rules_target_type_sql),
+            ("alter control_rules display_text column", alter_control_rules_display_text_sql),
+            ("alter control_rules st_preview column", alter_control_rules_st_preview_sql),
+            ("alter control_rules source_references column", alter_control_rules_source_references_sql),
+            ("alter control_rules rule_group column", alter_control_rules_rule_group_sql),
+            ("alter control_rules condition_kind column", alter_control_rules_condition_kind_sql),
+            ("alter control_rules threshold_name column", alter_control_rules_threshold_name_sql),
+            ("alter control_rules secondary_target_tag column", alter_control_rules_secondary_target_tag_sql),
+            ("alter control_rules priority column", alter_control_rules_priority_sql),
+            ("alter control_rules renderable column", alter_control_rules_renderable_sql),
+            ("alter control_rules unresolved_tokens column", alter_control_rules_unresolved_tokens_sql),
+            ("alter control_rules comments column", alter_control_rules_comments_sql),
+            ("alter control_rules is_symbolic column", alter_control_rules_is_symbolic_sql),
+            ("alter control_rules resolution_strategy column", alter_control_rules_resolution_strategy_sql),
+            ("alter logic_runs warnings column", alter_logic_runs_warnings_sql),
+            ("alter logic_runs project_version column", alter_logic_runs_project_version_sql),
+            ("alter logic_runs warnings_count column", alter_logic_runs_warnings_count_sql),
+            ("alter logic_runs st_preview column", alter_logic_runs_st_preview_sql),
+            ("alter logic_runs generator_version column", alter_logic_runs_generator_version_sql),
+            ("create io_mapping_versions table", create_io_mapping_versions_sql),
+            ("create io_mappings table", create_io_mappings_sql),
+            ("create io_mapping_issues table", create_io_mapping_issues_sql),
+            ("create io_mapping_versions project index", create_io_mapping_versions_project_idx_sql),
+            ("create io_mapping_versions active unique index", create_io_mapping_versions_active_unique_sql),
+            ("create io_mappings project version index", create_io_mappings_project_version_idx_sql),
+            ("create io_mapping_issues project version index", create_io_mapping_issues_project_version_idx_sql),
+            ("create control_loops table", create_control_loops_sql),
+            ("create control_loops project index", create_control_loops_project_idx_sql),
+            ("create control_loops tag index", create_control_loops_tag_idx_sql),
+            ("create control_loops project unique index", create_control_loops_project_loop_unique_sql),
+            ("create runtime_deployments table", create_runtime_deployments_sql),
+            ("create runtime_deployments project index", create_runtime_deployments_project_idx_sql),
+            ("create runtime_deployments project unique index", create_runtime_deployments_project_unique_sql),
+            ("create version_records table", create_version_records_sql),
+            ("create version_records project index", create_version_records_project_idx_sql),
+            ("create plant_genie_ai_connectors table", create_plant_genie_ai_connectors_sql),
+            ("alter plant_genie_ai_connectors provider column", "ALTER TABLE plant_genie_ai_connectors ADD COLUMN IF NOT EXISTS provider VARCHAR"),
+            (
+                "backfill plant_genie_ai_connectors provider values",
+                """
+                DO $$
+                BEGIN
+                  IF EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = 'plant_genie_ai_connectors' AND column_name = 'endpoint_url'
+                  ) THEN
+                    UPDATE plant_genie_ai_connectors
+                    SET provider = CASE
+                      WHEN COALESCE(BTRIM(provider), '') <> '' THEN provider
+                      WHEN endpoint_url ILIKE 'https://api.openai.com/%' THEN 'openai'
+                      WHEN endpoint_url ILIKE 'https://api.anthropic.com/%' THEN 'anthropic'
+                      WHEN endpoint_url ILIKE '%openai.azure.com/%' THEN 'azure_openai'
+                      WHEN endpoint_url ILIKE 'https://openrouter.ai/api/%' THEN 'openrouter'
+                      ELSE 'custom_openai_compatible'
+                    END
+                    WHERE COALESCE(BTRIM(provider), '') = '';
+                  ELSE
+                    UPDATE plant_genie_ai_connectors
+                    SET provider = 'custom_openai_compatible'
+                    WHERE COALESCE(BTRIM(provider), '') = '';
+                  END IF;
+                END $$;
+                """
+            ),
+            ("enforce plant_genie_ai_connectors provider not null", "ALTER TABLE plant_genie_ai_connectors ALTER COLUMN provider SET NOT NULL"),
+            ("drop plant_genie_ai_connectors endpoint_url column", "ALTER TABLE plant_genie_ai_connectors DROP COLUMN IF EXISTS endpoint_url"),
+            ("alter plant_genie_ai_connectors model column", "ALTER TABLE plant_genie_ai_connectors ADD COLUMN IF NOT EXISTS model VARCHAR NULL"),
+            ("create plant_genie_ai_connectors user index", create_plant_genie_ai_connectors_user_idx_sql),
+            ("create plant_genie_ai_connectors active unique index", create_plant_genie_ai_connectors_active_unique_sql),
+            ("create plant_genie_plant_data_connectors table", create_plant_genie_plant_data_connectors_sql),
+            ("alter plant_genie_plant_data_connectors last_tested_at column", "ALTER TABLE plant_genie_plant_data_connectors ADD COLUMN IF NOT EXISTS last_tested_at TIMESTAMP NULL"),
+            (
+                "backfill plant_genie_plant_data_connectors enabled flag",
+                """
+                WITH single_connector_users AS (
+                  SELECT user_id, id AS connector_id
+                  FROM (
+                    SELECT
+                      user_id,
+                      id,
+                      COUNT(*) OVER (PARTITION BY user_id) AS connector_count,
+                      BOOL_OR(enabled) OVER (PARTITION BY user_id) AS any_enabled
+                    FROM plant_genie_plant_data_connectors
+                  ) AS connector_stats
+                  WHERE connector_count = 1 AND any_enabled = FALSE
                 )
-                cursor.execute("ALTER TABLE plant_genie_ai_connectors ALTER COLUMN provider SET NOT NULL")
-                cursor.execute("ALTER TABLE plant_genie_ai_connectors DROP COLUMN IF EXISTS endpoint_url")
-                cursor.execute("ALTER TABLE plant_genie_ai_connectors ADD COLUMN IF NOT EXISTS model VARCHAR NULL")
-                cursor.execute(create_plant_genie_ai_connectors_user_idx_sql)
-                cursor.execute(create_plant_genie_ai_connectors_active_unique_sql)
-                cursor.execute(create_plant_genie_plant_data_connectors_sql)
-                cursor.execute("ALTER TABLE plant_genie_plant_data_connectors ADD COLUMN IF NOT EXISTS last_tested_at TIMESTAMP NULL")
-                cursor.execute(
-                    """
-                    WITH single_connector_users AS (
-                      SELECT user_id, MIN(id) AS connector_id
-                      FROM plant_genie_plant_data_connectors
-                      GROUP BY user_id
-                      HAVING COUNT(*) = 1 AND BOOL_OR(enabled) = FALSE
-                    )
-                    UPDATE plant_genie_plant_data_connectors AS connectors
-                    SET enabled = TRUE
-                    FROM single_connector_users
-                    WHERE connectors.id = single_connector_users.connector_id;
-                    """
-                )
-                cursor.execute(create_plant_genie_plant_data_connectors_user_idx_sql)
-                cursor.execute(create_plant_genie_plant_data_connectors_enabled_idx_sql)
+                UPDATE plant_genie_plant_data_connectors AS connectors
+                SET enabled = TRUE
+                FROM single_connector_users
+                WHERE connectors.id = single_connector_users.connector_id;
+                """
+            ),
+            ("create plant_genie_plant_data_connectors user index", create_plant_genie_plant_data_connectors_user_idx_sql),
+            ("create plant_genie_plant_data_connectors enabled index", create_plant_genie_plant_data_connectors_enabled_idx_sql),
+        ]
+
+        try:
+            with self.connection() as conn:
+                with conn.cursor() as cursor:
+                    for statement_name, statement_sql in statements:
+                        cursor.execute(statement_sql)
+        except Exception:
+            logger.exception("postgres schema initialization failed")
+            raise
+
+        logger.info("postgres schema initialization complete")
 
     def fetch_all(self, sql: str, params: tuple | None = None) -> list[dict]:
         with self.connection() as conn:

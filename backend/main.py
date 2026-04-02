@@ -98,12 +98,12 @@ def root() -> dict[str, str]:
 
 @app.on_event("startup")
 def startup() -> None:
+    logger.info("backend startup initializing postgres schema")
     try:
         postgres_client.init_schema()
     except Exception as exc:
-        # Allow the API server to start even when Postgres isn't available yet.
-        # Most endpoints will still fail, but the FE can load and `/api/health` will report DB status.
         logger.exception("postgres init_schema failed: %s", exc)
+        raise
     logger.info("backend startup complete")
     logger.info("system router registered prefix=/api")
     logger.info("behavior rows currently loaded count=%s", deterministic_behavior_service.get_rows_loaded_count())
