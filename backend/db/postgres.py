@@ -11,25 +11,31 @@ from psycopg2.extras import RealDictCursor
 logger = logging.getLogger(__name__)
 
 
+def _getenv_first(*names: str) -> str | None:
+    for name in names:
+        value = os.getenv(name)
+        if value and value.strip():
+            return value.strip()
+    return None
+
+
 def _get_database_url() -> str | None:
-    database_url = os.getenv("DATABASE_URL")
-    if database_url:
-        database_url = database_url.strip()
-    return database_url or None
+    return _getenv_first("DATABASE_URL")
 
 
 def _get_postgres_connection_kwargs() -> dict[str, str | int]:
-    host = os.getenv("POSTGRES_HOST") or "localhost"
-    port = int(os.getenv("POSTGRES_PORT") or 5432)
-    dbname = os.getenv("POSTGRES_DB")
-    user = os.getenv("POSTGRES_USER")
-    password = os.getenv("POSTGRES_PASSWORD")
+    host = _getenv_first("POSTGRES_HOST", "PGHOST") or "localhost"
+    port = int(_getenv_first("POSTGRES_PORT", "PGPORT") or 5432)
+    dbname = _getenv_first("POSTGRES_DB", "PGDATABASE")
+    user = _getenv_first("POSTGRES_USER", "PGUSER")
+    password = _getenv_first("POSTGRES_PASSWORD", "PGPASSWORD")
 
     if not all([dbname, user, password]):
         raise RuntimeError(
             "PostgreSQL configuration is missing. Set DATABASE_URL or provide "
-            "POSTGRES_DB, POSTGRES_USER, and POSTGRES_PASSWORD. "
-            "POSTGRES_HOST and POSTGRES_PORT are optional and default to localhost:5432."
+            "POSTGRES_DB/PGDATABASE, POSTGRES_USER/PGUSER, and "
+            "POSTGRES_PASSWORD/PGPASSWORD. POSTGRES_HOST/PGHOST and "
+            "POSTGRES_PORT/PGPORT are optional and default to localhost:5432."
         )
 
     return {
