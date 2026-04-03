@@ -1,0 +1,431 @@
+.control-logic-workspace {
+  min-height: min(720px, calc(100vh - 180px));
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.control-logic-workspace-main {
+  min-width: 0;
+  min-height: min(720px, calc(100vh - 180px));
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 0.6rem;
+}
+
+.control-logic-workspace-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.control-logic-quick-edit-panel {
+  --quick-edit-expanded-width: 360px;
+  --quick-edit-collapsed-width: 46px;
+  width: var(--quick-edit-expanded-width);
+  min-width: var(--quick-edit-expanded-width);
+  max-width: 100%;
+  display: grid;
+  grid-template-columns: var(--quick-edit-collapsed-width) minmax(0, 1fr);
+  gap: 0.55rem;
+  align-self: start;
+  position: sticky;
+  top: 0.55rem;
+}
+
+.control-logic-quick-edit-panel.is-collapsed {
+  width: var(--quick-edit-collapsed-width);
+  min-width: var(--quick-edit-collapsed-width);
+  grid-template-columns: var(--quick-edit-collapsed-width);
+}
+
+.control-logic-quick-edit-toggle {
+  width: var(--quick-edit-collapsed-width);
+  min-height: 112px;
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(233, 239, 245, 0.98));
+  box-shadow: 0 12px 24px rgba(24, 36, 52, 0.08);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.5rem;
+  padding: 0.55rem 0.35rem;
+  cursor: pointer;
+}
+
+.control-logic-quick-edit-toggle:hover {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(238, 243, 248, 1));
+}
+
+.control-logic-quick-edit-toggle-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: rgba(209, 219, 230, 0.7);
+}
+
+.control-logic-quick-edit-toggle-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.control-logic-quick-edit-toggle-title {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.control-logic-quick-edit-toggle-meta {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 0.52rem;
+  color: var(--muted);
+  max-height: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.control-logic-quick-edit-card {
+  min-height: min(720px, calc(100vh - 180px));
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(242, 246, 250, 0.98));
+  box-shadow: 0 14px 28px rgba(24, 36, 52, 0.1);
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.control-logic-quick-edit-panel.is-collapsed .control-logic-quick-edit-card {
+  display: none;
+}
+
+.control-logic-quick-edit-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.85rem 0.95rem 0.75rem;
+  border-bottom: 1px solid rgba(199, 208, 217, 0.95);
+  background: linear-gradient(180deg, rgba(247, 250, 252, 0.98), rgba(235, 241, 246, 0.98));
+}
+
+.control-logic-quick-edit-eyebrow {
+  margin: 0 0 0.2rem;
+  font-size: 0.52rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #5a6a79;
+}
+
+.control-logic-quick-edit-header h3 {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
+.control-logic-quick-edit-header-btn {
+  border: 1px solid var(--stroke);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.8);
+  color: var(--text);
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.control-logic-quick-edit-body {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 0.7rem;
+  padding: 0.85rem 0.95rem 0.95rem;
+}
+
+.control-logic-quick-edit-section {
+  display: grid;
+  gap: 0.52rem;
+  padding: 0.78rem 0.82rem;
+  border: 1px solid rgba(204, 214, 223, 0.95);
+  border-radius: 10px;
+  background: rgba(248, 251, 253, 0.94);
+}
+
+.control-logic-quick-edit-section.muted {
+  background: rgba(242, 246, 250, 0.92);
+}
+
+.control-logic-quick-edit-section-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  color: #2d465d;
+}
+
+.control-logic-quick-edit-section-header h4 {
+  margin: 0;
+  font-size: 0.72rem;
+}
+
+.control-logic-quick-edit-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.control-logic-quick-edit-metric-grid.compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.control-logic-quick-edit-stat {
+  min-width: 0;
+  display: grid;
+  gap: 0.16rem;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid rgba(208, 217, 226, 0.95);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.control-logic-quick-edit-stat.status-critical {
+  background: rgba(255, 243, 243, 0.92);
+}
+
+.control-logic-quick-edit-stat.status-warning {
+  background: rgba(255, 249, 235, 0.92);
+}
+
+.control-logic-quick-edit-stat-label {
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #617485;
+}
+
+.control-logic-quick-edit-stat strong {
+  font-size: 0.72rem;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.control-logic-quick-edit-path {
+  margin: 0;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.62rem;
+  line-height: 1.45;
+  color: #33495c;
+  word-break: break-word;
+}
+
+.control-logic-quick-edit-note {
+  margin: 0;
+  font-size: 0.64rem;
+  line-height: 1.5;
+  color: #536577;
+}
+
+.control-logic-quick-edit-preview {
+  margin: 0;
+  font-size: 0.6rem;
+  line-height: 1.45;
+  color: #5a6d80;
+}
+
+.control-logic-quick-edit-preview.is-ready {
+  color: #2f6840;
+}
+
+.control-logic-quick-edit-preview.is-error {
+  color: #8b2d2d;
+}
+
+.control-logic-quick-edit-validation-shell {
+  gap: 0.7rem;
+}
+
+.control-logic-quick-edit-validation-trigger {
+  width: 100%;
+  justify-content: center;
+}
+
+.control-logic-quick-edit-validation-results {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.control-logic-quick-edit-validation-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  font-size: 0.6rem;
+  color: #4f6172;
+}
+
+.control-logic-quick-edit-validation-summary span {
+  padding: 0.18rem 0.42rem;
+  border: 1px solid rgba(202, 212, 221, 0.95);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.control-logic-quick-edit-issue-list {
+  display: grid;
+  gap: 0.45rem;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.control-logic-quick-edit-issue-item {
+  border: 1px solid rgba(204, 214, 223, 0.95);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.92);
+  display: grid;
+  gap: 0.24rem;
+  text-align: left;
+  padding: 0.6rem 0.68rem;
+  cursor: pointer;
+}
+
+.control-logic-quick-edit-issue-item:hover {
+  background: rgba(241, 246, 251, 0.96);
+}
+
+.control-logic-quick-edit-issue-type {
+  justify-self: start;
+  padding: 0.1rem 0.36rem;
+  border-radius: 999px;
+  font-size: 0.54rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.control-logic-quick-edit-issue-type.type-undefined_tag,
+.control-logic-quick-edit-issue-type.type-broken_reference,
+.control-logic-quick-edit-issue-type.type-duplicate_tag {
+  background: rgba(255, 239, 239, 0.95);
+  color: #8b2d2d;
+}
+
+.control-logic-quick-edit-issue-type.type-unused_variable,
+.control-logic-quick-edit-issue-type.type-inconsistent_naming {
+  background: rgba(255, 248, 229, 0.95);
+  color: #7b5a12;
+}
+
+.control-logic-quick-edit-issue-item strong {
+  font-size: 0.7rem;
+  color: var(--text);
+}
+
+.control-logic-quick-edit-issue-line {
+  font-size: 0.58rem;
+  color: #5d7082;
+}
+
+.control-logic-quick-edit-issue-item code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.6rem;
+  line-height: 1.45;
+  color: #33495c;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.control-logic-quick-edit-validation-empty {
+  border: 1px solid rgba(201, 219, 208, 0.95);
+  border-radius: 9px;
+  background: rgba(240, 249, 243, 0.92);
+  padding: 0.68rem 0.74rem;
+  color: #2f6840;
+  font-size: 0.64rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+}
+
+.control-logic-quick-edit-form-grid {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.control-logic-quick-edit-form-grid.compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.control-logic-quick-edit-field {
+  min-width: 0;
+  display: grid;
+  gap: 0.22rem;
+}
+
+.control-logic-quick-edit-field span {
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #617485;
+}
+
+.control-logic-quick-edit-field .modal-input {
+  width: 100%;
+  min-width: 0;
+  font-size: 0.7rem;
+}
+
+.control-logic-quick-edit-field.bulk-value-field {
+  grid-column: 1 / -1;
+}
+
+.control-logic-quick-edit-apply {
+  justify-self: start;
+}
+
+@media (max-width: 1180px) {
+  .control-logic-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .control-logic-quick-edit-panel {
+    position: static;
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: var(--quick-edit-collapsed-width) minmax(0, 1fr);
+  }
+
+  .control-logic-quick-edit-panel.is-collapsed {
+    width: var(--quick-edit-collapsed-width);
+  }
+}
+
+@media (max-width: 760px) {
+  .control-logic-workspace,
+  .control-logic-workspace-main,
+  .control-logic-quick-edit-card {
+    min-height: 0;
+  }
+
+  .control-logic-quick-edit-form-grid.compact,
+  .control-logic-quick-edit-metric-grid,
+  .control-logic-quick-edit-metric-grid.compact {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

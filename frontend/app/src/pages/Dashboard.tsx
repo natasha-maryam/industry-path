@@ -22,6 +22,7 @@ import MainWorkspaceRouter from "../components/MainWorkspaceRouter";
 import PlantGenieConnectorSettings from "../components/PlantGenieConnectorSettings";
 import PlantGenieWorkspace from "../components/PlantGenieWorkspace";
 import SettingsGeneralPanel from "../components/SettingsGeneralPanel";
+import ControlLogicQuickEditPanel from "../components/ControlLogicQuickEditPanel";
 import EngineeringDeterministicTable from "../components/plant/EngineeringDeterministicTable";
 import RightControlLoopsTab from "../components/rightTabs/RightControlLoopsTab";
 import RightDiagnosticsTab from "../components/rightTabs/RightDiagnosticsTab";
@@ -51,6 +52,7 @@ import { getSandboxEmailFromLocation, isSandboxAppUrl } from "../sandbox/isSandb
 import { useWorkspaceContext } from "../context/WorkspaceContext";
 import { mapSystemContextToPanelView } from "../intelligence/mapSystemContextToPanelView";
 import { buildBehavior, buildImpact, buildSystemContext, type SystemContext, type SystemImpact } from "../intelligence/systemContext";
+import { normalizeLogicPath } from "../utils/controlLogicTransforms";
 import {
   createSnapshot,
   diffVersions,
@@ -284,6 +286,16 @@ const parseGeneratedLogicFiles = (bundledCode: string): GeneratedLogicFile[] => 
       return { path, content };
     })
     .filter((item, index, array) => array.findIndex((candidate) => candidate.path === item.path) === index);
+};
+
+const serializeGeneratedLogicFiles = (files: GeneratedLogicFile[]): string => {
+  if (files.length === 0) {
+    return "";
+  }
+
+  return files
+    .map((file) => `(* ===== FILE: ${normalizeGeneratedFilePath(file.path || "main.st")} ===== *)\n${file.content || ""}`)
+    .join("\n\n");
 };
 
 const toWorkspaceVerifyTarget = (projectId: string): string => projectId;
@@ -758,6 +770,45 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
   const [selectedSTFilePath, setSelectedSTFilePath] = useState<string | null>(null);
   const [stDiagnosticsByFile, setSTDiagnosticsByFile] = useState<Record<string, STDiagnosticMarker[]>>({});
   const [stJumpLocation, setSTJumpLocation] = useState<STJumpLocation | null>(null);
+
+  const handleUpdateSelectedSTFileContent = useCallback(
+    (nextContent: string): void => {
+      setGeneratedSTFiles((previous) => {
+        if (previous.length === 0) {
+          return previous;
+        }
+
+        const fallbackPath = previous[0]?.path || "main.st";
+        const targetPath = normalizeLogicPath(selectedSTFilePath || fallbackPath);
+        let didChange = false;
+
+        const nextFiles = previous.map((file) => {
+          if (normalizeLogicPath(file.path) !== targetPath) {
+            return file;
+          }
+          if (file.content === nextContent) {
+            return file;
+          }
+          didChange = true;
+          return { ...file, content: nextContent };
+        });
+
+        if (!didChange) {
+          return previous;
+        }
+
+        setGeneratedLogic(serializeGeneratedLogicFiles(nextFiles));
+        setSTDiagnosticsByFile((current) => {
+          const nextDiagnostics = { ...current };
+          delete nextDiagnostics[targetPath];
+          delete nextDiagnostics[`control_logic/${targetPath}`];
+          return nextDiagnostics;
+        });
+        return nextFiles;
+      });
+    },
+    [selectedSTFilePath]
+  );
   const [, setLogicWarnings] = useState<string[]>([]);
   const [, setLogicValidationIssues] = useState<string[]>([]);
   const [, setSTVerificationData] = useState<STWorkspaceVerificationResponse | null>(null);
@@ -4110,30 +4161,42 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
       />
 
       {generatedSTFiles.length > 0 || generatedLogic.trim().length > 0 ? (
-        <>
-          <CodeExplorerPanel
-            files={generatedSTFiles}
-            bundledCode={generatedLogic}
-            selectedFilePath={selectedSTFilePath}
-            onSelectFile={setSelectedSTFilePath}
-            diagnosticsByFile={stDiagnosticsByFile}
-            jumpToLocation={stJumpLocation}
-            loading={pipelineStatuses.st_generation === "running"}
-            requiredPreviousStep="Generate ST"
-          />
-          <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: "0.6rem" }}>
-            <button
-              className="command-btn primary"
-              type="button"
-              disabled={isSandboxMode ? exportLimitReached : !selectedProjectId}
-              onClick={() => {
-                void handleToolbarAction("export_logic");
-              }}
-            >
-              {isSandboxMode ? "Export Logic (Sandbox)" : "Export Logic"}
-            </button>
+        <div className="control-logic-workspace">
+          <div className="control-logic-workspace-main">
+            <CodeExplorerPanel
+              files={generatedSTFiles}
+              bundledCode={generatedLogic}
+              selectedFilePath={selectedSTFilePath}
+              onSelectFile={setSelectedSTFilePath}
+              diagnosticsByFile={stDiagnosticsByFile}
+              jumpToLocation={stJumpLocation}
+              loading={pipelineStatuses.st_generation === "running"}
+              requiredPreviousStep="Generate ST"
+            />
+            <div className="control-logic-workspace-actions">
+              <button
+                className="command-btn primary"
+                type="button"
+                disabled={isSandboxMode ? exportLimitReached : !selectedProjectId}
+                onClick={() => {
+                  void handleToolbarAction("export_logic");
+                }}
+              >
+                {isSandboxMode ? "Export Logic (Sandbox)" : "Export Logic"}
+              </button>
+            </div>
           </div>
-        </>
+          <ControlLogicQuickEditPanel
+            files={generatedSTFiles}
+            selectedFilePath={selectedSTFilePath}
+            diagnosticsByFile={stDiagnosticsByFile}
+            loading={pipelineStatuses.st_generation === "running"}
+            onUpdateSelectedFileContent={handleUpdateSelectedSTFileContent}
+            onJumpToLocation={(location) => {
+              setSTJumpLocation({ ...location, nonce: Date.now() });
+            }}
+          />
+        </div>
       ) : (
         <div className="workspace-placeholder-panel">
           <h3>No logic artifact available yet</h3>

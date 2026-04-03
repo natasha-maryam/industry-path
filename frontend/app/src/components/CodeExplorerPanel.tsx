@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as monaco from "monaco-editor";
 import { AlertTriangle, ChevronDown, ChevronRight, FileCode2, FileX, Folder, LoaderCircle } from "lucide-react";
+import { parseStructuredTextIntelligence, type StructuredTextIdentifierInfo } from "../utils/controlLogicIntelligence";
 import "../styles/code-explorer-panel.css";
 
 const SUPPORTED_FOLDERS = ["equipment", "control_loops", "sequences", "interlocks", "alarms", "utilities"] as const;
@@ -45,6 +46,13 @@ export type CodeExplorerPanelProps = {
 type FolderTree = {
   rootFiles: GeneratedLogicFile[];
   folders: Record<SupportedFolder, GeneratedLogicFile[]>;
+};
+
+type IntelligenceOverlayState = {
+  info: StructuredTextIdentifierInfo;
+  top: number;
+  left: number;
+  activeUsageIndex: number;
 };
 
 const normalizePath = (path: string): string => path.replace(/^\/+/, "").replace(/\\/g, "/").trim();
@@ -131,12 +139,17 @@ export default function CodeExplorerPanel({
   jumpToLocation = null,
   className = "",
 }: CodeExplorerPanelProps) {
+  const editorWrapRef = useRef<HTMLDivElement | null>(null);
   const editorMountRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const diffEditorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
   const jumpTimerRef = useRef<number | null>(null);
+  const highlightTimerRef = useRef<number | null>(null);
+  const hoverTimerRef = useRef<number | null>(null);
   const modelByPathRef = useRef<Map<string, monaco.editor.ITextModel>>(new Map());
   const originalModelByPathRef = useRef<Map<string, monaco.editor.ITextModel>>(new Map());
+  const highlightDecorationsRef = useRef<string[]>([]);
+  const pinnedPopoverRef = useRef<HTMLDivElement | null>(null);
 
   const resolvedFiles = useMemo<GeneratedLogicFile[]>(() => {
     const sourceFiles = files && files.length > 0 ? files : parseBundledFiles(bundledCode);
@@ -192,6 +205,13 @@ export default function CodeExplorerPanel({
     }
     return resolvedFiles.find((file) => file.path === selectedPath) ?? null;
   }, [resolvedFiles, selectedPath]);
+  const identifierIntelligence = useMemo(
+    () => parseStructuredTextIntelligence(selectedFile?.content || ""),
+    [selectedFile?.content]
+  );
+  const [hoveredIdentifier, setHoveredIdentifier] = useState<IntelligenceOverlayState | null>(null);
+  const [pinnedIdentifier, setPinnedIdentifier] = useState<IntelligenceOverlayState | null>(null);
+  const usageDecorationsRef = useRef<string[]>([]);
 
   const normalizedDiagnosticsByFile = useMemo<Record<string, STDiagnosticMarker[]>>(() => {
     const output: Record<string, STDiagnosticMarker[]> = {};
@@ -268,6 +288,124 @@ export default function CodeExplorerPanel({
     diffEditorRef.current = null;
   };
 
+  const getActiveEditorInstance = (): monaco.editor.IStandaloneCodeEditor | null => editorRef.current ?? diffEditorRef.current?.getModifiedEditor() ?? null;
+
+  const getOverlayCoordinates = (
+    editor: monaco.editor.IStandaloneCodeEditor,
+    position: monaco.Position
+  ): { top: number; left: number } | null => {
+    if (!editorMountRef.current) {
+      return null;
+    }
+    const visiblePosition = editor.getScrolledVisiblePosition(position);
+    if (!visiblePosition) {
+      return null;
+    }
+    const top = editorMountRef.current.offsetTop + visiblePosition.top + visiblePosition.height + 8;
+    const left = editorMountRef.current.offsetLeft + visiblePosition.left + 8;
+    return { top, left };
+  };
+
+  const resolveIdentifierAtPosition = (
+    editor: monaco.editor.IStandaloneCodeEditor,
+    position: monaco.Position
+  ): { info: StructuredTextIdentifierInfo; top: number; left: number; activeUsageIndex: number } | null => {
+    const model = editor.getModel();
+    if (!model) {
+      return null;
+    }
+    const word = model.getWordAtPosition(position);
+    if (!word?.word) {
+      return null;
+    }
+    const info = identifierIntelligence.byName[word.word];
+    if (!info) {
+      return null;
+    }
+    const coordinates = getOverlayCoordinates(editor, position);
+    if (!coordinates) {
+      return null;
+    }
+    const usageOccurrences = [...info.writeOccurrences, ...info.readOccurrences].sort((left, right) =>
+      left.line === right.line ? left.column - right.column : left.line - right.line
+    );
+    const activeUsageIndex = Math.max(
+      0,
+      usageOccurrences.findIndex((occurrence) => occurrence.line === position.lineNumber && occurrence.column === position.column)
+    );
+    return { info, ...coordinates, activeUsageIndex: activeUsageIndex >= 0 ? activeUsageIndex : 0 };
+  };
+
+  const clearUsageHighlights = (): void => {
+    const activeEditor = getActiveEditorInstance();
+    if (!activeEditor) {
+      usageDecorationsRef.current = [];
+      return;
+    }
+    usageDecorationsRef.current = activeEditor.deltaDecorations(usageDecorationsRef.current, []);
+  };
+
+  const highlightAllUsages = (info: StructuredTextIdentifierInfo): void => {
+    const activeEditor = getActiveEditorInstance();
+    if (!activeEditor) {
+      return;
+    }
+    usageDecorationsRef.current = activeEditor.deltaDecorations(
+      usageDecorationsRef.current,
+      info.occurrences.map((occurrence) => ({
+        range: new monaco.Range(occurrence.line, occurrence.column, occurrence.line, occurrence.column + info.name.length),
+        options: {
+          inlineClassName: occurrence.role === "write" ? "code-explorer-usage-highlight-write" : "code-explorer-usage-highlight-read",
+        },
+      }))
+    );
+  };
+
+  const focusOccurrence = (info: StructuredTextIdentifierInfo, occurrence: StructuredTextIdentifierInfo["occurrences"][number]): void => {
+    const activeEditor = getActiveEditorInstance();
+    if (!activeEditor) {
+      return;
+    }
+    activeEditor.revealPositionInCenter({ lineNumber: occurrence.line, column: occurrence.column });
+    activeEditor.setPosition({ lineNumber: occurrence.line, column: occurrence.column });
+    activeEditor.focus();
+    activeEditor.setSelection({
+      startLineNumber: occurrence.line,
+      startColumn: occurrence.column,
+      endLineNumber: occurrence.line,
+      endColumn: occurrence.column + info.name.length,
+    });
+    if (highlightTimerRef.current) {
+      window.clearTimeout(highlightTimerRef.current);
+    }
+    highlightDecorationsRef.current = activeEditor.deltaDecorations(highlightDecorationsRef.current, [
+      {
+        range: new monaco.Range(occurrence.line, 1, occurrence.line, 1),
+        options: { isWholeLine: true, className: "code-explorer-line-highlight" },
+      },
+    ]);
+    highlightTimerRef.current = window.setTimeout(() => {
+      highlightDecorationsRef.current = activeEditor.deltaDecorations(highlightDecorationsRef.current, []);
+      highlightTimerRef.current = null;
+    }, 1800);
+  };
+
+  const usageOccurrencesForPinned = pinnedIdentifier
+    ? [...pinnedIdentifier.info.writeOccurrences, ...pinnedIdentifier.info.readOccurrences].sort((left, right) =>
+        left.line === right.line ? left.column - right.column : left.line - right.line
+      )
+    : [];
+
+  useEffect(() => {
+    setHoveredIdentifier(null);
+    setPinnedIdentifier(null);
+    clearUsageHighlights();
+    if (hoverTimerRef.current) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  }, [selectedFile?.path]);
+
   useEffect(() => {
     if (!editorMountRef.current || loading || error || !hasFiles) {
       disposeEditors();
@@ -341,6 +479,110 @@ export default function CodeExplorerPanel({
   }, [error, hasFiles, isDiffMode, loading, resolvedFiles, selectedFile]);
 
   useEffect(() => {
+    const activeEditor = getActiveEditorInstance();
+    if (!activeEditor) {
+      return;
+    }
+
+    const handleOutsidePointer = (event: MouseEvent): void => {
+      const target = event.target as Node | null;
+      if (target && pinnedPopoverRef.current?.contains(target)) {
+        return;
+      }
+      setPinnedIdentifier(null);
+      clearUsageHighlights();
+    };
+
+    const handleEscape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setPinnedIdentifier(null);
+        clearUsageHighlights();
+      }
+    };
+
+    const updatePinnedPosition = (): void => {
+      setPinnedIdentifier((current) => {
+        if (!current) {
+          return current;
+        }
+        const anchor = current.info.occurrences[0];
+        if (!anchor) {
+          return current;
+        }
+        const coordinates = getOverlayCoordinates(activeEditor, new monaco.Position(anchor.line, anchor.column));
+        if (!coordinates) {
+          return current;
+        }
+        return { ...current, ...coordinates };
+      });
+    };
+
+    const mouseMoveDisposable = activeEditor.onMouseMove((event) => {
+      if (pinnedIdentifier) {
+        return;
+      }
+      if (!event.target.position || event.target.type !== monaco.editor.MouseTargetType.CONTENT_TEXT) {
+        if (hoverTimerRef.current) {
+          window.clearTimeout(hoverTimerRef.current);
+          hoverTimerRef.current = null;
+        }
+        setHoveredIdentifier(null);
+        return;
+      }
+
+      if (hoverTimerRef.current) {
+        window.clearTimeout(hoverTimerRef.current);
+      }
+
+      const position = event.target.position;
+      hoverTimerRef.current = window.setTimeout(() => {
+        const nextOverlay = resolveIdentifierAtPosition(activeEditor, position);
+        setHoveredIdentifier(nextOverlay ? { info: nextOverlay.info, top: nextOverlay.top, left: nextOverlay.left, activeUsageIndex: nextOverlay.activeUsageIndex } : null);
+        hoverTimerRef.current = null;
+      }, 90);
+    });
+
+    const mouseLeaveDisposable = activeEditor.onMouseLeave(() => {
+      if (hoverTimerRef.current) {
+        window.clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = null;
+      }
+      setHoveredIdentifier(null);
+    });
+
+    const mouseDownDisposable = activeEditor.onMouseDown((event) => {
+      if (!event.target.position || event.target.type !== monaco.editor.MouseTargetType.CONTENT_TEXT) {
+        setPinnedIdentifier(null);
+        return;
+      }
+      const nextOverlay = resolveIdentifierAtPosition(activeEditor, event.target.position);
+      if (!nextOverlay) {
+        setPinnedIdentifier(null);
+        clearUsageHighlights();
+        return;
+      }
+      setPinnedIdentifier({ info: nextOverlay.info, top: nextOverlay.top, left: nextOverlay.left, activeUsageIndex: nextOverlay.activeUsageIndex });
+      setHoveredIdentifier(null);
+    });
+
+    const scrollDisposable = activeEditor.onDidScrollChange(() => {
+      updatePinnedPosition();
+    });
+
+    document.addEventListener("mousedown", handleOutsidePointer, true);
+    document.addEventListener("keydown", handleEscape);
+
+    return () => {
+      mouseMoveDisposable.dispose();
+      mouseLeaveDisposable.dispose();
+      mouseDownDisposable.dispose();
+      scrollDisposable.dispose();
+      document.removeEventListener("mousedown", handleOutsidePointer, true);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [identifierIntelligence.byName, pinnedIdentifier]);
+
+  useEffect(() => {
     for (const file of resolvedFiles) {
       const model = getOrCreateModel(file.path, file.content || "");
       const markers = (normalizedDiagnosticsByFile[normalizePath(file.path)] ?? []).map((item) => ({
@@ -394,12 +636,45 @@ export default function CodeExplorerPanel({
         endLineNumber: lineNumber,
         endColumn: column + 1,
       });
+
+      if (highlightTimerRef.current) {
+        window.clearTimeout(highlightTimerRef.current);
+        highlightTimerRef.current = null;
+      }
+
+      highlightDecorationsRef.current = activeEditor.deltaDecorations(highlightDecorationsRef.current, [
+        {
+          range: new monaco.Range(lineNumber, 1, lineNumber, 1),
+          options: {
+            isWholeLine: true,
+            className: "code-explorer-line-highlight",
+          },
+        },
+      ]);
+
+      highlightTimerRef.current = window.setTimeout(() => {
+        highlightDecorationsRef.current = activeEditor.deltaDecorations(highlightDecorationsRef.current, []);
+        highlightTimerRef.current = null;
+      }, 1800);
     }, 0);
 
     return () => {
       if (jumpTimerRef.current) {
         window.clearTimeout(jumpTimerRef.current);
         jumpTimerRef.current = null;
+      }
+      if (hoverTimerRef.current) {
+        window.clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = null;
+      }
+      clearUsageHighlights();
+      if (highlightTimerRef.current) {
+        window.clearTimeout(highlightTimerRef.current);
+        highlightTimerRef.current = null;
+      }
+      const activeEditor = editorRef.current ?? diffEditorRef.current?.getModifiedEditor();
+      if (activeEditor) {
+        highlightDecorationsRef.current = activeEditor.deltaDecorations(highlightDecorationsRef.current, []);
       }
     };
   }, [jumpToLocation, onSelectFile, resolvedFiles]);
@@ -409,6 +684,10 @@ export default function CodeExplorerPanel({
       if (jumpTimerRef.current) {
         window.clearTimeout(jumpTimerRef.current);
         jumpTimerRef.current = null;
+      }
+      if (highlightTimerRef.current) {
+        window.clearTimeout(highlightTimerRef.current);
+        highlightTimerRef.current = null;
       }
       disposeEditors();
       for (const model of modelByPathRef.current.values()) {
@@ -545,9 +824,199 @@ export default function CodeExplorerPanel({
           ) : null}
         </aside>
 
-        <div className="code-explorer-editor-wrap">
+        <div className="code-explorer-editor-wrap" ref={editorWrapRef}>
           <div className="code-explorer-file-header">{selectedFile?.path || "No file selected"}</div>
           <div ref={editorMountRef} className="code-explorer-editor" />
+          {hoveredIdentifier && !pinnedIdentifier ? (
+            <div className="code-explorer-intel-tooltip" style={{ top: hoveredIdentifier.top, left: hoveredIdentifier.left }}>
+              <strong>{hoveredIdentifier.info.name}</strong>
+              <span>
+                {hoveredIdentifier.info.declaredType || "Undeclared"} · {hoveredIdentifier.info.usageCount} use{hoveredIdentifier.info.usageCount === 1 ? "" : "s"}
+              </span>
+            </div>
+          ) : null}
+          {pinnedIdentifier ? (
+            <div
+              ref={pinnedPopoverRef}
+              className="code-explorer-intel-popover"
+              style={{ top: pinnedIdentifier.top, left: pinnedIdentifier.left }}
+            >
+              <div className="code-explorer-intel-popover-header">
+                <strong>{pinnedIdentifier.info.name}</strong>
+                <span>{pinnedIdentifier.info.category}</span>
+              </div>
+              <div className="code-explorer-intel-popover-grid">
+                <div>
+                  <span>Type</span>
+                  <strong>{pinnedIdentifier.info.declaredType || "Undeclared"}</strong>
+                </div>
+                <div>
+                  <span>Occurrences</span>
+                  <strong>{pinnedIdentifier.info.occurrenceCount}</strong>
+                </div>
+                <div>
+                  <span>Reads</span>
+                  <strong>{pinnedIdentifier.info.readCount}</strong>
+                </div>
+                <div>
+                  <span>Writes</span>
+                  <strong>{pinnedIdentifier.info.writeCount}</strong>
+                </div>
+              </div>
+              <div className="code-explorer-intel-popover-section">
+                <span>Definition</span>
+                <strong>
+                  {pinnedIdentifier.info.declarationLine
+                    ? `Line ${pinnedIdentifier.info.declarationLine}`
+                    : pinnedIdentifier.info.firstSeenLine
+                      ? `First seen on line ${pinnedIdentifier.info.firstSeenLine}`
+                      : "No local declaration"}
+                </strong>
+                <code>{pinnedIdentifier.info.declarationSnippet || "Identifier is used in this file without a declaration."}</code>
+              </div>
+              <div className="code-explorer-intel-popover-section">
+                <span>Usage</span>
+                <div className="code-explorer-intel-usage-summary">
+                  <strong>{pinnedIdentifier.info.usageCount} total usage{pinnedIdentifier.info.usageCount === 1 ? "" : "s"}</strong>
+                  <span>All lines: {pinnedIdentifier.info.lineReferences.join(", ") || "None"}</span>
+                </div>
+                <div className="code-explorer-intel-reference-list split">
+                  <div className="code-explorer-intel-usage-group">
+                    <span>Assigned / Written</span>
+                    {pinnedIdentifier.info.writeOccurrences.length > 0 ? (
+                      pinnedIdentifier.info.writeOccurrences.map((occurrence) => (
+                        <button
+                          key={`write-${occurrence.line}-${occurrence.column}`}
+                          className="code-explorer-intel-reference-item"
+                          type="button"
+                          onClick={() => {
+                            focusOccurrence(pinnedIdentifier.info, occurrence);
+                            setPinnedIdentifier((current) =>
+                              current
+                                ? {
+                                    ...current,
+                                    activeUsageIndex: usageOccurrencesForPinned.findIndex(
+                                      (item) => item.line === occurrence.line && item.column === occurrence.column
+                                    ),
+                                  }
+                                : current
+                            );
+                          }}
+                        >
+                          <span>Line {occurrence.line}</span>
+                          <code>{occurrence.snippet}</code>
+                        </button>
+                      ))
+                    ) : (
+                      <p className="code-explorer-intel-empty">No write contexts in this file.</p>
+                    )}
+                  </div>
+                  <div className="code-explorer-intel-usage-group">
+                    <span>Read / Used</span>
+                    {pinnedIdentifier.info.readOccurrences.length > 0 ? (
+                      pinnedIdentifier.info.readOccurrences.map((occurrence) => (
+                        <button
+                          key={`read-${occurrence.line}-${occurrence.column}`}
+                          className="code-explorer-intel-reference-item"
+                          type="button"
+                          onClick={() => {
+                            focusOccurrence(pinnedIdentifier.info, occurrence);
+                            setPinnedIdentifier((current) =>
+                              current
+                                ? {
+                                    ...current,
+                                    activeUsageIndex: usageOccurrencesForPinned.findIndex(
+                                      (item) => item.line === occurrence.line && item.column === occurrence.column
+                                    ),
+                                  }
+                                : current
+                            );
+                          }}
+                        >
+                          <span>Line {occurrence.line}</span>
+                          <code>{occurrence.snippet}</code>
+                        </button>
+                      ))
+                    ) : (
+                      <p className="code-explorer-intel-empty">No read contexts in this file.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="code-explorer-intel-popover-section">
+                <span>Actions</span>
+                <div className="code-explorer-intel-actions">
+                  <button
+                    className="code-explorer-intel-action-btn"
+                    type="button"
+                    onClick={() => {
+                      const definitionOccurrence = pinnedIdentifier.info.occurrences.find((item) => item.role === "declaration") ?? pinnedIdentifier.info.occurrences[0];
+                      if (definitionOccurrence) {
+                        focusOccurrence(pinnedIdentifier.info, definitionOccurrence);
+                      }
+                    }}
+                  >
+                    Jump to Definition
+                  </button>
+                  <button
+                    className="code-explorer-intel-action-btn"
+                    type="button"
+                    onClick={() => {
+                      highlightAllUsages(pinnedIdentifier.info);
+                    }}
+                  >
+                    Highlight All Usages
+                  </button>
+                  <button
+                    className="code-explorer-intel-action-btn"
+                    type="button"
+                    disabled={usageOccurrencesForPinned.length === 0}
+                    onClick={() => {
+                      if (usageOccurrencesForPinned.length === 0) {
+                        return;
+                      }
+                      setPinnedIdentifier((current) => {
+                        if (!current) {
+                          return current;
+                        }
+                        const nextIndex = (current.activeUsageIndex - 1 + usageOccurrencesForPinned.length) % usageOccurrencesForPinned.length;
+                        focusOccurrence(current.info, usageOccurrencesForPinned[nextIndex]);
+                        return { ...current, activeUsageIndex: nextIndex };
+                      });
+                    }}
+                  >
+                    Previous Usage
+                  </button>
+                  <button
+                    className="code-explorer-intel-action-btn"
+                    type="button"
+                    disabled={usageOccurrencesForPinned.length === 0}
+                    onClick={() => {
+                      if (usageOccurrencesForPinned.length === 0) {
+                        return;
+                      }
+                      setPinnedIdentifier((current) => {
+                        if (!current) {
+                          return current;
+                        }
+                        const nextIndex = (current.activeUsageIndex + 1) % usageOccurrencesForPinned.length;
+                        focusOccurrence(current.info, usageOccurrencesForPinned[nextIndex]);
+                        return { ...current, activeUsageIndex: nextIndex };
+                      });
+                    }}
+                  >
+                    Next Usage
+                  </button>
+                </div>
+              </div>
+              {pinnedIdentifier.info.casingVariants.length > 1 ? (
+                <div className="code-explorer-intel-popover-section">
+                  <span>Casing variants</span>
+                  <strong>{pinnedIdentifier.info.casingVariants.join(", ")}</strong>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </div>
     </section>

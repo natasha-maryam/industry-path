@@ -123,6 +123,7 @@
 }
 
 .code-explorer-editor-wrap {
+  position: relative;
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -178,4 +179,220 @@
 
 .code-explorer-spin {
   animation: spin-1 900ms linear infinite;
+}
+
+.code-explorer-line-highlight {
+  background: linear-gradient(90deg, rgba(255, 227, 138, 0.44), rgba(255, 214, 94, 0.18));
+  border-left: 3px solid rgba(211, 152, 36, 0.9);
+}
+
+.code-explorer-intel-tooltip,
+.code-explorer-intel-popover {
+  position: absolute;
+  z-index: 6;
+  max-width: min(320px, calc(100% - 1rem));
+  border: 1px solid rgba(193, 204, 215, 0.96);
+  border-radius: 10px;
+  background: rgba(250, 252, 254, 0.98);
+  box-shadow: 0 14px 28px rgba(22, 34, 46, 0.14);
+}
+
+.code-explorer-intel-tooltip {
+  pointer-events: none;
+  display: grid;
+  gap: 0.12rem;
+  padding: 0.42rem 0.5rem;
+}
+
+.code-explorer-intel-tooltip strong {
+  font-size: 0.64rem;
+  color: #1d3348;
+}
+
+.code-explorer-intel-tooltip span {
+  font-size: 0.56rem;
+  color: #5e7388;
+  text-transform: capitalize;
+}
+
+.code-explorer-intel-popover {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.72rem 0.78rem;
+  width: min(420px, calc(100% - 1rem));
+}
+
+.code-explorer-intel-popover-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.code-explorer-intel-popover-header strong {
+  font-size: 0.72rem;
+  color: #183047;
+}
+
+.code-explorer-intel-popover-header span {
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #5f7386;
+}
+
+.code-explorer-intel-popover-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.code-explorer-intel-popover-grid div,
+.code-explorer-intel-popover-section {
+  display: grid;
+  gap: 0.14rem;
+}
+
+.code-explorer-intel-popover-grid span,
+.code-explorer-intel-popover-section span {
+  font-size: 0.54rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #65798b;
+}
+
+.code-explorer-intel-popover-grid strong,
+.code-explorer-intel-popover-section strong {
+  font-size: 0.64rem;
+  color: #22384c;
+}
+
+.code-explorer-intel-popover-section code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.58rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #395063;
+}
+
+.code-explorer-intel-popover-section.compact {
+  gap: 0.32rem;
+}
+
+.code-explorer-intel-reference-list {
+  display: grid;
+  gap: 0.36rem;
+}
+
+.code-explorer-intel-reference-list.split {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.code-explorer-intel-usage-group {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.code-explorer-intel-usage-group > span {
+  font-size: 0.54rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #65798b;
+}
+
+.code-explorer-intel-usage-summary {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.code-explorer-intel-usage-summary span {
+  font-size: 0.58rem;
+  color: #596d80;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.code-explorer-intel-reference-item {
+  border: 1px solid rgba(212, 220, 228, 0.95);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  display: grid;
+  gap: 0.18rem;
+  text-align: left;
+  padding: 0.44rem 0.5rem;
+  cursor: pointer;
+}
+
+.code-explorer-intel-reference-item:hover {
+  background: rgba(240, 246, 252, 0.96);
+}
+
+.code-explorer-intel-reference-item span {
+  font-size: 0.56rem;
+  color: #5c7084;
+  text-transform: capitalize;
+}
+
+.code-explorer-intel-reference-item code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.56rem;
+  line-height: 1.4;
+  color: #33495c;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.code-explorer-intel-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.38rem;
+}
+
+.code-explorer-intel-action-btn {
+  border: 1px solid rgba(195, 205, 214, 0.95);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #21384d;
+  padding: 0.38rem 0.5rem;
+  font-size: 0.6rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.code-explorer-intel-action-btn:hover:enabled {
+  background: rgba(241, 246, 251, 0.96);
+}
+
+.code-explorer-intel-action-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.code-explorer-intel-empty {
+  margin: 0;
+  font-size: 0.58rem;
+  line-height: 1.4;
+  color: #667a8d;
+}
+
+.code-explorer-usage-highlight-read {
+  background: rgba(120, 178, 235, 0.24);
+  border-bottom: 1px solid rgba(75, 136, 197, 0.55);
+}
+
+.code-explorer-usage-highlight-write {
+  background: rgba(244, 191, 104, 0.28);
+  border-bottom: 1px solid rgba(203, 139, 33, 0.68);
+}
+
+@media (max-width: 900px) {
+  .code-explorer-intel-reference-list.split,
+  .code-explorer-intel-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
