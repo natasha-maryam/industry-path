@@ -21,6 +21,7 @@ import {
   validateStructuredTextIssues,
   type StructuredTextValidationIssue,
 } from "../utils/controlLogicValidation";
+import type { LogicSnapshotSource } from "../utils/logicSnapshots";
 import "../styles/control-logic-quick-edit-panel.css";
 
 type ControlLogicQuickEditPanelProps = {
@@ -28,7 +29,9 @@ type ControlLogicQuickEditPanelProps = {
   selectedFilePath?: string | null;
   diagnosticsByFile?: Record<string, STDiagnosticMarker[]>;
   loading?: boolean;
-  onUpdateSelectedFileContent?: (nextContent: string) => void;
+  collapsed?: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
+  onUpdateSelectedFileContent?: (nextContent: string, options?: { source?: LogicSnapshotSource }) => void;
   onJumpToLocation?: (location: { file: string; line: number; column: number }) => void;
 };
 
@@ -44,10 +47,11 @@ export default function ControlLogicQuickEditPanel({
   selectedFilePath = null,
   diagnosticsByFile = {},
   loading = false,
+  collapsed = false,
+  onCollapsedChange,
   onUpdateSelectedFileContent,
   onJumpToLocation,
 }: ControlLogicQuickEditPanelProps) {
-  const [collapsed, setCollapsed] = useState<boolean>(true);
   const [showValidationResults, setShowValidationResults] = useState<boolean>(false);
   const [renameFrom, setRenameFrom] = useState<string>("");
   const [renameTo, setRenameTo] = useState<string>("");
@@ -207,7 +211,7 @@ export default function ControlLogicQuickEditPanel({
       return;
     }
 
-    onUpdateSelectedFileContent(result.content);
+    onUpdateSelectedFileContent(result.content, { source: "quick-edit" });
     if (result.changedLines.length > 0 && onJumpToLocation) {
       onJumpToLocation({
         file: activeFile.path,
@@ -301,7 +305,7 @@ export default function ControlLogicQuickEditPanel({
         aria-expanded={!collapsed}
         aria-controls="control-logic-quick-edit-panel-body"
         onClick={() => {
-          setCollapsed((current) => !current);
+          onCollapsedChange?.(!collapsed);
         }}
       >
         <span className="control-logic-quick-edit-toggle-icon" aria-hidden="true">
@@ -324,7 +328,7 @@ export default function ControlLogicQuickEditPanel({
             type="button"
             aria-label="Collapse quick edit panel"
             onClick={() => {
-              setCollapsed(true);
+              onCollapsedChange?.(true);
             }}
           >
             <ChevronRight size={16} />

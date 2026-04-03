@@ -1,0 +1,178 @@
+.logic-editor-command-palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 46;
+  background: rgba(18, 27, 34, 0.2);
+  display: grid;
+  align-items: start;
+  justify-items: center;
+  padding: 12vh 1rem 1rem;
+}
+
+.logic-editor-command-palette {
+  width: min(640px, calc(100vw - 2rem));
+  border: 1px solid rgba(171, 184, 196, 0.92);
+  border-radius: 14px;
+  background: rgba(247, 250, 252, 0.98);
+  box-shadow: 0 24px 60px rgba(23, 34, 44, 0.22);
+  backdrop-filter: blur(14px);
+  display: grid;
+  gap: 0.3rem;
+  overflow: hidden;
+}
+
+.logic-editor-command-palette-input-shell {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.8rem 0.9rem 0.45rem;
+  border-bottom: 1px solid rgba(215, 223, 230, 0.96);
+  color: #2d4b5f;
+}
+
+.logic-editor-command-palette-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 0.94rem;
+  color: #183047;
+  outline: none;
+}
+
+.logic-editor-command-palette-input::placeholder {
+  color: #6c8092;
+}
+
+.logic-editor-command-palette-file-pill {
+  flex-shrink: 0;
+  border: 1px solid rgba(185, 197, 207, 0.96);
+  border-radius: 999px;
+  background: rgba(238, 244, 248, 0.92);
+  color: #4b6275;
+  padding: 0.18rem 0.5rem;
+  font-size: 0.63rem;
+  font-weight: 700;
+}
+
+.logic-editor-command-palette-results {
+  max-height: min(420px, 54vh);
+  overflow: auto;
+  display: grid;
+}
+
+.logic-editor-command-palette-result {
+  border: 0;
+  border-bottom: 1px solid rgba(229, 235, 240, 0.92);
+  background: transparent;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.72rem 0.9rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.logic-editor-command-palette-result:last-child {
+  border-bottom: 0;
+}
+
+.logic-editor-command-palette-result:hover,
+.logic-editor-command-palette-result.is-active {
+  background: rgba(226, 237, 245, 0.88);
+}
+
+.logic-editor-command-palette-result-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 10px;
+  background: rgba(228, 236, 242, 0.98);
+  color: #28475a;
+}
+
+.logic-editor-command-palette-result-copy {
+  min-width: 0;
+  display: grid;
+  gap: 0.12rem;
+}
+
+.logic-editor-command-palette-result-copy strong {
+  font-size: 0.78rem;
+  color: #183047;
+}
+
+.logic-editor-command-palette-result-copy span {
+  font-size: 0.66rem;
+  color: #617688;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.logic-editor-command-palette-result-kind {
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #607789;
+}
+
+.logic-editor-command-palette-empty,
+.logic-editor-command-palette-rename-panel {
+  display: grid;
+  gap: 0.22rem;
+  padding: 0.85rem 0.9rem;
+}
+
+.logic-editor-command-palette-empty strong,
+.logic-editor-command-palette-rename-copy strong {
+  font-size: 0.76rem;
+  color: #173047;
+}
+
+.logic-editor-command-palette-empty span,
+.logic-editor-command-palette-rename-copy span {
+  font-size: 0.66rem;
+  color: #667b8d;
+}
+
+.logic-editor-command-palette-footer-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  padding: 0.52rem 0.9rem 0.75rem;
+  border-top: 1px solid rgba(229, 235, 240, 0.92);
+  color: #607789;
+  font-size: 0.64rem;
+}
+
+@media (max-width: 720px) {
+  .logic-editor-command-palette-backdrop {
+    padding-top: 7vh;
+  }
+
+  .logic-editor-command-palette {
+    width: min(100vw - 1rem, 640px);
+  }
+
+  .logic-editor-command-palette-input-shell {
+    flex-wrap: wrap;
+  }
+
+  .logic-editor-command-palette-file-pill {
+    order: 3;
+  }
+
+  .logic-editor-command-palette-result {
+    grid-template-columns: auto 1fr;
+  }
+
+  .logic-editor-command-palette-result-kind {
+    grid-column: 2;
+  }
+}

@@ -32,6 +32,56 @@ export type StructuredTextIntelligenceResult = {
   identifiers: StructuredTextIdentifierInfo[];
 };
 
+export type InlineTagIntelligenceReferenceRole = "definition" | "write" | "read";
+
+export type InlineTagIntelligenceReference = {
+  line: number;
+  column: number;
+  snippet: string;
+  role: InlineTagIntelligenceReferenceRole;
+};
+
+export type InlineTagIntelligenceLineReference = {
+  line: number;
+  roles: InlineTagIntelligenceReferenceRole[];
+  primaryRole: InlineTagIntelligenceReferenceRole;
+};
+
+export type InlineTagIntelligenceEntry = {
+  tagName: string;
+  canonicalName: string;
+  category: StructuredTextIdentifierInfo["category"];
+  dataType: string | null;
+  declarationLocation: {
+    line: number | null;
+    snippet: string | null;
+    scope: string | null;
+    reference: InlineTagIntelligenceReference | null;
+  };
+  firstSeenLine: number | null;
+  totalUsageCount: number;
+  totalOccurrenceCount: number;
+  counts: {
+    reads: number;
+    writes: number;
+    declarations: number;
+  };
+  usageContexts: {
+    written: InlineTagIntelligenceReference[];
+    read: InlineTagIntelligenceReference[];
+    all: InlineTagIntelligenceReference[];
+  };
+  allLineReferences: InlineTagIntelligenceLineReference[];
+  casingVariants: string[];
+  isDeclared: boolean;
+  sourceModel: "structured-text";
+};
+
+export type InlineTagIntelligenceResult = {
+  byName: Record<string, InlineTagIntelligenceEntry>;
+  entries: InlineTagIntelligenceEntry[];
+};
+
 const RESERVED_WORDS = new Set([
   "AND",
   "ARRAY",
@@ -178,6 +228,24 @@ function uniqueSortedNumbers(values: number[]): number[] {
   return [...new Set(values)].sort((left, right) => left - right);
 }
 
+function sortOccurrences<T extends { line: number; column: number }>(values: T[]): T[] {
+  return [...values].sort((left, right) => (left.line === right.line ? left.column - right.column : left.line - right.line));
+}
+
+function rankReferenceRole(role: InlineTagIntelligenceReferenceRole): number {
+  if (role === "definition") {
+    return 0;
+  }
+  if (role === "write") {
+    return 1;
+  }
+  return 2;
+}
+
+function sortReferenceRoles(values: Iterable<InlineTagIntelligenceReferenceRole>): InlineTagIntelligenceReferenceRole[] {
+  return [...new Set(values)].sort((left, right) => rankReferenceRole(left) - rankReferenceRole(right));
+}
+
 function inferCategory(scope: string | null, declaredType: string | null): StructuredTextIdentifierInfo["category"] {
   if (declaredType && TIMER_TYPES.has(declaredType.toUpperCase())) {
     return "timer";
@@ -202,17 +270,21 @@ export function parseStructuredTextIntelligence(content: string): StructuredText
   const sanitized = stripCommentsAndStringsPreserveLines(content);
   const originalLines = content.split(/\r?\n/);
   const sanitizedLines = sanitized.split(/\r?\n/);
-  const byName = new Map<string, StructuredTextIdentifierInfo>();
+  const byCanonicalName = new Map<string, StructuredTextIdentifierInfo>();
   let currentVarScope: string | null = null;
 
   const ensureRecord = (name: string): StructuredTextIdentifierInfo => {
-    const existing = byName.get(name);
+    const canonicalName = canonicalizeName(name);
+    const existing = byCanonicalName.get(canonicalName);
     if (existing) {
+      if (!existing.casingVariants.includes(name)) {
+        existing.casingVariants.push(name);
+      }
       return existing;
     }
     const next: StructuredTextIdentifierInfo = {
       name,
-      canonicalName: canonicalizeName(name),
+      canonicalName,
       category: "identifier",
       declaredType: null,
       declarationScope: null,
@@ -231,7 +303,7 @@ export function parseStructuredTextIntelligence(content: string): StructuredText
       readOccurrences: [],
       writeOccurrences: [],
     };
-    byName.set(name, next);
+    byCanonicalName.set(canonicalName, next);
     return next;
   };
 
@@ -262,6 +334,7 @@ export function parseStructuredTextIntelligence(content: string): StructuredText
 
         for (const name of declaredNames) {
           const record = ensureRecord(name);
+          record.name = name;
           record.isDeclared = true;
           record.declaredType = record.declaredType || declaredType;
           record.declarationScope = record.declarationScope || currentVarScope;
@@ -272,9 +345,6 @@ export function parseStructuredTextIntelligence(content: string): StructuredText
           record.occurrenceCount += 1;
           record.lineReferences.push(lineNumber);
           record.category = inferCategory(record.declarationScope, record.declaredType);
-          if (!record.casingVariants.includes(name)) {
-            record.casingVariants.push(name);
-          }
           record.occurrences.push({
             line: lineNumber,
             column: Math.max(1, originalLine.indexOf(name) + 1),
@@ -292,14 +362,12 @@ export function parseStructuredTextIntelligence(content: string): StructuredText
               continue;
             }
             const record = ensureRecord(name);
+            record.name = record.isDeclared ? record.name : name;
             record.firstSeenLine = record.firstSeenLine ?? lineNumber;
             record.usageCount += 1;
             record.readCount += 1;
             record.occurrenceCount += 1;
             record.lineReferences.push(lineNumber);
-            if (!record.casingVariants.includes(name)) {
-              record.casingVariants.push(name);
-            }
             const occurrence = {
               line: lineNumber,
               column: initializerIndex + (match.index ?? 0) + 3,
@@ -323,12 +391,10 @@ export function parseStructuredTextIntelligence(content: string): StructuredText
         continue;
       }
       const record = ensureRecord(name);
+      record.name = record.isDeclared ? record.name : record.name || name;
       record.firstSeenLine = record.firstSeenLine ?? lineNumber;
       record.occurrenceCount += 1;
       record.lineReferences.push(lineNumber);
-      if (!record.casingVariants.includes(name)) {
-        record.casingVariants.push(name);
-      }
       const occurrence = {
         line: lineNumber,
         column: (match.index ?? 0) + 1,
@@ -348,20 +414,111 @@ export function parseStructuredTextIntelligence(content: string): StructuredText
     }
   }
 
-  const identifiers = [...byName.values()]
+  const identifiers = [...byCanonicalName.values()]
     .map((item) => ({
       ...item,
       category: inferCategory(item.declarationScope, item.declaredType),
       lineReferences: uniqueSortedNumbers(item.lineReferences),
       casingVariants: [...item.casingVariants].sort((left, right) => left.localeCompare(right)),
-      occurrences: [...item.occurrences].sort((left, right) => (left.line === right.line ? left.column - right.column : left.line - right.line)),
-      readOccurrences: [...item.readOccurrences].sort((left, right) => (left.line === right.line ? left.column - right.column : left.line - right.line)),
-      writeOccurrences: [...item.writeOccurrences].sort((left, right) => (left.line === right.line ? left.column - right.column : left.line - right.line)),
+      occurrences: sortOccurrences(item.occurrences),
+      readOccurrences: sortOccurrences(item.readOccurrences),
+      writeOccurrences: sortOccurrences(item.writeOccurrences),
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
 
+  const byName = Object.fromEntries(
+    identifiers.flatMap((item) => {
+      const keys = new Set([item.name, item.canonicalName, ...item.casingVariants]);
+      return [...keys].map((key) => [key, item] as const);
+    })
+  );
+
   return {
-    byName: Object.fromEntries(identifiers.map((item) => [item.name, item])),
+    byName,
     identifiers,
   };
+}
+
+function toInlineReference(occurrence: StructuredTextIdentifierOccurrence): InlineTagIntelligenceReference {
+  return {
+    line: occurrence.line,
+    column: occurrence.column,
+    snippet: occurrence.snippet,
+    role: occurrence.role === "declaration" ? "definition" : occurrence.role,
+  };
+}
+
+export function buildInlineTagIntelligence(result: StructuredTextIntelligenceResult): InlineTagIntelligenceResult {
+  const entries = result.identifiers.map<InlineTagIntelligenceEntry>((item) => {
+    const definitionReference = item.occurrences.find((occurrence) => occurrence.role === "declaration")
+      ? toInlineReference(item.occurrences.find((occurrence) => occurrence.role === "declaration") as StructuredTextIdentifierOccurrence)
+      : null;
+    const written = item.writeOccurrences.map(toInlineReference);
+    const read = item.readOccurrences.map(toInlineReference);
+    const all = sortOccurrences([...written, ...read]);
+    const lineRoles = new Map<number, Set<InlineTagIntelligenceReferenceRole>>();
+
+    for (const occurrence of item.occurrences) {
+      const reference = toInlineReference(occurrence);
+      const existing = lineRoles.get(reference.line) ?? new Set<InlineTagIntelligenceReferenceRole>();
+      existing.add(reference.role);
+      lineRoles.set(reference.line, existing);
+    }
+
+    return {
+      tagName: item.name,
+      canonicalName: item.canonicalName,
+      category: item.category,
+      dataType: item.declaredType,
+      declarationLocation: {
+        line: item.declarationLine,
+        snippet: item.declarationSnippet,
+        scope: item.declarationScope,
+        reference: definitionReference,
+      },
+      firstSeenLine: item.firstSeenLine,
+      totalUsageCount: item.usageCount,
+      totalOccurrenceCount: item.occurrenceCount,
+      counts: {
+        reads: item.readCount,
+        writes: item.writeCount,
+        declarations: item.declarationCount,
+      },
+      usageContexts: {
+        written,
+        read,
+        all,
+      },
+      allLineReferences: [...lineRoles.entries()]
+        .map(([line, roles]) => {
+          const orderedRoles = sortReferenceRoles(roles);
+          return {
+            line,
+            roles: orderedRoles,
+            primaryRole: orderedRoles[0],
+          };
+        })
+        .sort((left, right) => left.line - right.line),
+      casingVariants: item.casingVariants,
+      isDeclared: item.isDeclared,
+      sourceModel: "structured-text",
+    };
+  });
+
+  const byName = Object.fromEntries(
+    entries.flatMap((entry) => {
+      const source = result.byName[entry.tagName];
+      const keys = source ? new Set([entry.tagName, entry.canonicalName, ...source.casingVariants]) : new Set([entry.tagName, entry.canonicalName]);
+      return [...keys].map((key) => [key, entry] as const);
+    })
+  );
+
+  return {
+    byName,
+    entries,
+  };
+}
+
+export function parseInlineTagIntelligence(content: string): InlineTagIntelligenceResult {
+  return buildInlineTagIntelligence(parseStructuredTextIntelligence(content));
 }

@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as monaco from "monaco-editor";
 import { AlertTriangle, ChevronDown, ChevronRight, FileCode2, FileX, Folder, LoaderCircle } from "lucide-react";
-import { parseStructuredTextIntelligence, type StructuredTextIdentifierInfo } from "../utils/controlLogicIntelligence";
+import { toast } from "react-hot-toast";
+import type { InlineTagIntelligenceEntry, InlineTagIntelligenceLineReference, InlineTagIntelligenceReference } from "../utils/controlLogicIntelligence";
+import { computeInlineChangeSet } from "../utils/logicInlineChanges";
+import { ST_TYPE_OPTIONS } from "../utils/controlLogicTransforms";
+import { getLogicTagIntelligenceSource } from "../utils/logicTagIntelligenceSource";
+import TagIntelligenceDetailView from "./TagIntelligenceDetailView";
 import "../styles/code-explorer-panel.css";
 
 const SUPPORTED_FOLDERS = ["equipment", "control_loops", "sequences", "interlocks", "alarms", "utilities"] as const;
@@ -28,8 +33,18 @@ export type STJumpLocation = {
   nonce?: number;
 };
 
+export type TagIntelligenceEditorCommand = {
+  file: string;
+  tagName: string;
+  action: "focus-reference" | "jump-to-definition" | "highlight-all-usages" | "next-usage" | "previous-usage";
+  line?: number;
+  column?: number;
+  nonce: number;
+};
+
 export type CodeExplorerPanelProps = {
   files?: GeneratedLogicFile[];
+  changeBaselineFiles?: GeneratedLogicFile[];
   bundledCode?: string;
   selectedFilePath?: string | null;
   onSelectFile?: (path: string) => void;
@@ -40,6 +55,10 @@ export type CodeExplorerPanelProps = {
   warningMessage?: string | null;
   diagnosticsByFile?: Record<string, STDiagnosticMarker[]>;
   jumpToLocation?: STJumpLocation | null;
+  tagIntelligenceCommand?: TagIntelligenceEditorCommand | null;
+  onRenameTagAction?: (params: { filePath: string; from: string; to: string; mode: "rename" | "remap" }) => boolean;
+  onChangeTagTypeAction?: (params: { filePath: string; tagName: string; nextType: string }) => boolean;
+  showChangeHighlights?: boolean;
   className?: string;
 };
 
@@ -49,13 +68,70 @@ type FolderTree = {
 };
 
 type IntelligenceOverlayState = {
-  info: StructuredTextIdentifierInfo;
+  matchedTagName: string;
+  info: InlineTagIntelligenceEntry;
+  anchor: InlineTagIntelligenceReference;
   top: number;
   left: number;
   activeUsageIndex: number;
 };
 
+type InlineSearchMatch = {
+  lineNumber: number;
+  startColumn: number;
+  endColumn: number;
+  preview: string;
+};
+
+type QuickActionMode = "menu" | "rename" | "remap" | "type";
+
+type QuickActionState = {
+  matchedTagName: string;
+  info: InlineTagIntelligenceEntry;
+  top: number;
+  left: number;
+  activeIndex: number;
+  mode: QuickActionMode;
+  inputValue: string;
+  nextType: string;
+};
+
 const normalizePath = (path: string): string => path.replace(/^\/+/, "").replace(/\\/g, "/").trim();
+
+const IDENTIFIER_TEXT_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function findInlineSearchMatches(content: string, query: string): InlineSearchMatch[] {
+  const trimmedQuery = query.trim();
+  if (!trimmedQuery) {
+    return [];
+  }
+
+  const normalizedQuery = trimmedQuery.toLowerCase();
+  const matches: InlineSearchMatch[] = [];
+  const lines = content.split(/\r?\n/);
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const sourceLine = lines[index] || "";
+    const lowerLine = sourceLine.toLowerCase();
+    let searchIndex = 0;
+
+    while (searchIndex <= lowerLine.length - normalizedQuery.length) {
+      const nextIndex = lowerLine.indexOf(normalizedQuery, searchIndex);
+      if (nextIndex === -1) {
+        break;
+      }
+      matches.push({
+        lineNumber: index + 1,
+        startColumn: nextIndex + 1,
+        endColumn: nextIndex + trimmedQuery.length + 1,
+        preview: sourceLine.trim() || sourceLine,
+      });
+      searchIndex = nextIndex + Math.max(1, trimmedQuery.length);
+    }
+  }
+
+  return matches;
+}
 
 const parseBundledFiles = (bundledCode: string): GeneratedLogicFile[] => {
   if (!bundledCode.trim()) {
@@ -127,6 +203,7 @@ const buildFolderTree = (files: GeneratedLogicFile[]): FolderTree => {
 
 export default function CodeExplorerPanel({
   files,
+  changeBaselineFiles = [],
   bundledCode = "",
   selectedFilePath = null,
   onSelectFile,
@@ -137,19 +214,28 @@ export default function CodeExplorerPanel({
   warningMessage = null,
   diagnosticsByFile = {},
   jumpToLocation = null,
+  tagIntelligenceCommand = null,
+  onRenameTagAction,
+  onChangeTagTypeAction,
+  showChangeHighlights = true,
   className = "",
 }: CodeExplorerPanelProps) {
   const editorWrapRef = useRef<HTMLDivElement | null>(null);
   const editorMountRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
-  const diffEditorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
   const jumpTimerRef = useRef<number | null>(null);
   const highlightTimerRef = useRef<number | null>(null);
   const hoverTimerRef = useRef<number | null>(null);
   const modelByPathRef = useRef<Map<string, monaco.editor.ITextModel>>(new Map());
-  const originalModelByPathRef = useRef<Map<string, monaco.editor.ITextModel>>(new Map());
   const highlightDecorationsRef = useRef<string[]>([]);
+  const changeDecorationsRef = useRef<string[]>([]);
+  const searchDecorationsRef = useRef<string[]>([]);
+  const removedZoneIdsRef = useRef<string[]>([]);
   const pinnedPopoverRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const quickActionButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const quickActionInputRef = useRef<HTMLInputElement | null>(null);
+  const quickActionSelectRef = useRef<HTMLSelectElement | null>(null);
 
   const resolvedFiles = useMemo<GeneratedLogicFile[]>(() => {
     const sourceFiles = files && files.length > 0 ? files : parseBundledFiles(bundledCode);
@@ -174,7 +260,6 @@ export default function CodeExplorerPanel({
     control_loops: true,
   });
   const [selectedPath, setSelectedPath] = useState<string>("");
-  const [isDiffMode, setIsDiffMode] = useState<boolean>(false);
 
   useEffect(() => {
     if (!selectedFilePath) {
@@ -205,13 +290,31 @@ export default function CodeExplorerPanel({
     }
     return resolvedFiles.find((file) => file.path === selectedPath) ?? null;
   }, [resolvedFiles, selectedPath]);
-  const identifierIntelligence = useMemo(
-    () => parseStructuredTextIntelligence(selectedFile?.content || ""),
+  const baselineFile = useMemo(() => {
+    if (!selectedFile) {
+      return null;
+    }
+    const normalizedSelectedPath = normalizePath(selectedFile.path);
+    return changeBaselineFiles.find((file) => normalizePath(file.path) === normalizedSelectedPath) ?? null;
+  }, [changeBaselineFiles, selectedFile]);
+  const tagIntelligenceSource = useMemo(
+    () => getLogicTagIntelligenceSource(selectedFile?.content || ""),
     [selectedFile?.content]
   );
+  const inlineChangeSet = useMemo(() => {
+    if (!showChangeHighlights || !selectedFile || !baselineFile) {
+      return null;
+    }
+    return computeInlineChangeSet(baselineFile.content || "", selectedFile.content || "");
+  }, [baselineFile, selectedFile, showChangeHighlights]);
   const [hoveredIdentifier, setHoveredIdentifier] = useState<IntelligenceOverlayState | null>(null);
   const [pinnedIdentifier, setPinnedIdentifier] = useState<IntelligenceOverlayState | null>(null);
+  const [inlineSearchOpen, setInlineSearchOpen] = useState<boolean>(false);
+  const [inlineSearchQuery, setInlineSearchQuery] = useState<string>("");
+  const [searchActiveIndex, setSearchActiveIndex] = useState<number>(0);
+  const [quickActionState, setQuickActionState] = useState<QuickActionState | null>(null);
   const usageDecorationsRef = useRef<string[]>([]);
+  const inlineSearchMatches = useMemo(() => findInlineSearchMatches(selectedFile?.content || "", inlineSearchQuery), [inlineSearchQuery, selectedFile?.content]);
 
   const normalizedDiagnosticsByFile = useMemo<Record<string, STDiagnosticMarker[]>>(() => {
     const output: Record<string, STDiagnosticMarker[]> = {};
@@ -258,37 +361,43 @@ export default function CodeExplorerPanel({
     return model;
   };
 
-  const getOrCreateOriginalModel = (filePath: string, content: string): monaco.editor.ITextModel => {
-    const normalized = normalizePath(filePath);
-    const existing = originalModelByPathRef.current.get(normalized);
-    if (existing) {
-      if (existing.isDisposed()) {
-        originalModelByPathRef.current.delete(normalized);
-      } else {
-        return existing;
-      }
-    }
-
-    const uri = monaco.Uri.parse(`inmemory://crosslayerx-original/${encodeURIComponent(normalized)}`);
-    const cached = monaco.editor.getModel(uri);
-    if (cached && !cached.isDisposed()) {
-      originalModelByPathRef.current.set(normalized, cached);
-      return cached;
-    }
-
-    const model = monaco.editor.createModel(content, "pascal", uri);
-    originalModelByPathRef.current.set(normalized, model);
-    return model;
-  };
-
   const disposeEditors = (): void => {
     editorRef.current?.dispose();
     editorRef.current = null;
-    diffEditorRef.current?.dispose();
-    diffEditorRef.current = null;
   };
 
-  const getActiveEditorInstance = (): monaco.editor.IStandaloneCodeEditor | null => editorRef.current ?? diffEditorRef.current?.getModifiedEditor() ?? null;
+  const getActiveEditorInstance = (): monaco.editor.IStandaloneCodeEditor | null => editorRef.current;
+
+  const clearChangeHighlights = (): void => {
+    const activeEditor = getActiveEditorInstance();
+    if (!activeEditor) {
+      changeDecorationsRef.current = [];
+      removedZoneIdsRef.current = [];
+      return;
+    }
+    changeDecorationsRef.current = activeEditor.deltaDecorations(changeDecorationsRef.current, []);
+    activeEditor.changeViewZones((accessor) => {
+      for (const zoneId of removedZoneIdsRef.current) {
+        accessor.removeZone(zoneId);
+      }
+    });
+    removedZoneIdsRef.current = [];
+  };
+
+  const createRemovedBlockNode = (editor: monaco.editor.IStandaloneCodeEditor, lines: string[]): HTMLDivElement => {
+    const block = document.createElement("div");
+    block.className = "code-explorer-removed-zone";
+    editor.applyFontInfo(block);
+
+    for (const line of lines) {
+      const row = document.createElement("div");
+      row.className = "code-explorer-removed-zone-line";
+      row.textContent = `- ${line || " "}`;
+      block.appendChild(row);
+    }
+
+    return block;
+  };
 
   const getOverlayCoordinates = (
     editor: monaco.editor.IStandaloneCodeEditor,
@@ -306,10 +415,30 @@ export default function CodeExplorerPanel({
     return { top, left };
   };
 
+  const buildOverlayState = (
+    editor: monaco.editor.IStandaloneCodeEditor,
+    matchedTagName: string,
+    info: InlineTagIntelligenceEntry,
+    anchor: InlineTagIntelligenceReference,
+    activeUsageIndex: number
+  ): IntelligenceOverlayState | null => {
+    const coordinates = getOverlayCoordinates(editor, new monaco.Position(anchor.line, anchor.column));
+    if (!coordinates) {
+      return null;
+    }
+    return {
+      matchedTagName,
+      info,
+      anchor,
+      ...coordinates,
+      activeUsageIndex,
+    };
+  };
+
   const resolveIdentifierAtPosition = (
     editor: monaco.editor.IStandaloneCodeEditor,
     position: monaco.Position
-  ): { info: StructuredTextIdentifierInfo; top: number; left: number; activeUsageIndex: number } | null => {
+  ): IntelligenceOverlayState | null => {
     const model = editor.getModel();
     if (!model) {
       return null;
@@ -318,22 +447,25 @@ export default function CodeExplorerPanel({
     if (!word?.word) {
       return null;
     }
-    const info = identifierIntelligence.byName[word.word];
+    const info = tagIntelligenceSource.getTagByIdentifier(word.word);
     if (!info) {
       return null;
     }
-    const coordinates = getOverlayCoordinates(editor, position);
-    if (!coordinates) {
+    const usageOccurrences = tagIntelligenceSource.getAllUsages(word.word);
+    const anchor = tagIntelligenceSource.getReferenceAtPosition(word.word, position.lineNumber, position.column, word.word);
+    if (!anchor) {
       return null;
     }
-    const usageOccurrences = [...info.writeOccurrences, ...info.readOccurrences].sort((left, right) =>
-      left.line === right.line ? left.column - right.column : left.line - right.line
-    );
     const activeUsageIndex = Math.max(
       0,
-      usageOccurrences.findIndex((occurrence) => occurrence.line === position.lineNumber && occurrence.column === position.column)
+      usageOccurrences.findIndex(
+        (occurrence) =>
+          occurrence.line === position.lineNumber &&
+          position.column >= occurrence.column &&
+          position.column <= occurrence.column + Math.max(1, word.word.length - 1)
+      )
     );
-    return { info, ...coordinates, activeUsageIndex: activeUsageIndex >= 0 ? activeUsageIndex : 0 };
+    return buildOverlayState(editor, word.word, info, anchor, activeUsageIndex >= 0 ? activeUsageIndex : 0);
   };
 
   const clearUsageHighlights = (): void => {
@@ -345,15 +477,24 @@ export default function CodeExplorerPanel({
     usageDecorationsRef.current = activeEditor.deltaDecorations(usageDecorationsRef.current, []);
   };
 
-  const highlightAllUsages = (info: StructuredTextIdentifierInfo): void => {
+  const clearSearchHighlights = (): void => {
+    const activeEditor = getActiveEditorInstance();
+    if (!activeEditor) {
+      searchDecorationsRef.current = [];
+      return;
+    }
+    searchDecorationsRef.current = activeEditor.deltaDecorations(searchDecorationsRef.current, []);
+  };
+
+  const highlightAllUsages = (info: InlineTagIntelligenceEntry): void => {
     const activeEditor = getActiveEditorInstance();
     if (!activeEditor) {
       return;
     }
     usageDecorationsRef.current = activeEditor.deltaDecorations(
       usageDecorationsRef.current,
-      info.occurrences.map((occurrence) => ({
-        range: new monaco.Range(occurrence.line, occurrence.column, occurrence.line, occurrence.column + info.name.length),
+      info.usageContexts.all.map((occurrence) => ({
+        range: new monaco.Range(occurrence.line, occurrence.column, occurrence.line, occurrence.column + info.tagName.length),
         options: {
           inlineClassName: occurrence.role === "write" ? "code-explorer-usage-highlight-write" : "code-explorer-usage-highlight-read",
         },
@@ -361,7 +502,128 @@ export default function CodeExplorerPanel({
     );
   };
 
-  const focusOccurrence = (info: StructuredTextIdentifierInfo, occurrence: StructuredTextIdentifierInfo["occurrences"][number]): void => {
+  const focusSearchMatch = (match: InlineSearchMatch): void => {
+    const activeEditor = getActiveEditorInstance();
+    if (!activeEditor) {
+      return;
+    }
+    activeEditor.revealPositionInCenter({ lineNumber: match.lineNumber, column: match.startColumn });
+    activeEditor.setPosition({ lineNumber: match.lineNumber, column: match.startColumn });
+    activeEditor.focus();
+    activeEditor.setSelection({
+      startLineNumber: match.lineNumber,
+      startColumn: match.startColumn,
+      endLineNumber: match.lineNumber,
+      endColumn: match.endColumn,
+    });
+  };
+
+  const resolveTagAtSelection = (): QuickActionState | null => {
+    const activeEditor = getActiveEditorInstance();
+    const model = activeEditor?.getModel();
+    if (!activeEditor || !model) {
+      return null;
+    }
+
+    const selection = activeEditor.getSelection();
+    const position = selection?.getPosition() ?? activeEditor.getPosition();
+    if (!position) {
+      return null;
+    }
+
+    const selectedText = selection && !selection.isEmpty() ? model.getValueInRange(selection).trim() : "";
+    const identifier = IDENTIFIER_TEXT_PATTERN.test(selectedText)
+      ? selectedText
+      : model.getWordAtPosition(position)?.word ?? "";
+    if (!identifier) {
+      return null;
+    }
+
+    const info = tagIntelligenceSource.getTagByIdentifier(identifier);
+    if (!info) {
+      return null;
+    }
+
+    const reference = tagIntelligenceSource.getReferenceAtPosition(info.tagName, position.lineNumber, position.column, identifier)
+      ?? info.declarationLocation.reference
+      ?? info.usageContexts.all[0]
+      ?? null;
+    if (!reference) {
+      return null;
+    }
+
+    const overlay = buildOverlayState(activeEditor, identifier, info, reference, 0);
+    if (!overlay) {
+      return null;
+    }
+
+    return {
+      matchedTagName: identifier,
+      info,
+      top: overlay.top,
+      left: overlay.left,
+      activeIndex: 0,
+      mode: "menu",
+      inputValue: info.tagName,
+      nextType: info.dataType || ST_TYPE_OPTIONS[0] || "BOOL",
+    };
+  };
+
+  const openQuickActionMenu = (): void => {
+    const quickAction = resolveTagAtSelection();
+    if (!quickAction) {
+      toast("Place the cursor on a tag to open quick actions.", { className: "industrial-toast" });
+      return;
+    }
+    setPinnedIdentifier(null);
+    setHoveredIdentifier(null);
+    setInlineSearchOpen(false);
+    clearUsageHighlights();
+    setQuickActionState(quickAction);
+  };
+
+  const runQuickHighlightAction = (): void => {
+    if (!quickActionState) {
+      return;
+    }
+    highlightAllUsages(quickActionState.info);
+    const reference = quickActionState.info.declarationLocation.reference ?? quickActionState.info.usageContexts.all[0] ?? null;
+    if (reference) {
+      updatePinnedFromReference(quickActionState.info, quickActionState.matchedTagName, reference);
+    }
+    setQuickActionState(null);
+  };
+
+  const applyQuickRenameOrRemap = (mode: "rename" | "remap"): void => {
+    if (!quickActionState || !selectedFile || !onRenameTagAction) {
+      return;
+    }
+    const didApply = onRenameTagAction({
+      filePath: selectedFile.path,
+      from: quickActionState.info.tagName,
+      to: quickActionState.inputValue.trim(),
+      mode,
+    });
+    if (didApply) {
+      setQuickActionState(null);
+    }
+  };
+
+  const applyQuickTypeChange = (): void => {
+    if (!quickActionState || !selectedFile || !onChangeTagTypeAction) {
+      return;
+    }
+    const didApply = onChangeTagTypeAction({
+      filePath: selectedFile.path,
+      tagName: quickActionState.info.tagName,
+      nextType: quickActionState.nextType,
+    });
+    if (didApply) {
+      setQuickActionState(null);
+    }
+  };
+
+  const focusOccurrence = (info: InlineTagIntelligenceEntry, occurrence: InlineTagIntelligenceReference): void => {
     const activeEditor = getActiveEditorInstance();
     if (!activeEditor) {
       return;
@@ -373,7 +635,7 @@ export default function CodeExplorerPanel({
       startLineNumber: occurrence.line,
       startColumn: occurrence.column,
       endLineNumber: occurrence.line,
-      endColumn: occurrence.column + info.name.length,
+      endColumn: occurrence.column + info.tagName.length,
     });
     if (highlightTimerRef.current) {
       window.clearTimeout(highlightTimerRef.current);
@@ -390,16 +652,47 @@ export default function CodeExplorerPanel({
     }, 1800);
   };
 
+  const focusLineReference = (info: InlineTagIntelligenceEntry, lineReference: InlineTagIntelligenceLineReference): InlineTagIntelligenceReference | null => {
+    const definitionReference = tagIntelligenceSource.getDeclaration(info.tagName);
+    const lineMatches = [
+      ...(definitionReference && definitionReference.line === lineReference.line ? [definitionReference] : []),
+      ...tagIntelligenceSource.getAllUsages(info.tagName).filter((occurrence) => occurrence.line === lineReference.line),
+    ];
+    const target = lineMatches[0] ?? null;
+    if (target) {
+      focusOccurrence(info, target);
+    }
+    return target;
+  };
+
   const usageOccurrencesForPinned = pinnedIdentifier
-    ? [...pinnedIdentifier.info.writeOccurrences, ...pinnedIdentifier.info.readOccurrences].sort((left, right) =>
-        left.line === right.line ? left.column - right.column : left.line - right.line
-      )
+    ? tagIntelligenceSource.getAllUsages(pinnedIdentifier.info.tagName)
     : [];
+
+  const updatePinnedFromReference = (info: InlineTagIntelligenceEntry, matchedTagName: string, reference: InlineTagIntelligenceReference): void => {
+    const nextUsageIndex = Math.max(
+      0,
+      tagIntelligenceSource.getAllUsages(info.tagName).findIndex((item) => item.line === reference.line && item.column === reference.column)
+    );
+    setPinnedIdentifier((current) => {
+      const activeEditor = getActiveEditorInstance();
+      if (!activeEditor) {
+        return current;
+      }
+      return buildOverlayState(activeEditor, matchedTagName, info, reference, nextUsageIndex) ?? current;
+    });
+  };
 
   useEffect(() => {
     setHoveredIdentifier(null);
     setPinnedIdentifier(null);
+    setQuickActionState(null);
+    setInlineSearchOpen(false);
+    setInlineSearchQuery("");
+    setSearchActiveIndex(0);
     clearUsageHighlights();
+    clearChangeHighlights();
+    clearSearchHighlights();
     if (hoverTimerRef.current) {
       window.clearTimeout(hoverTimerRef.current);
       hoverTimerRef.current = null;
@@ -414,7 +707,6 @@ export default function CodeExplorerPanel({
 
     const activeFile = selectedFile ?? resolvedFiles[0];
     const activeModel = getOrCreateModel(activeFile.path, activeFile.content || "");
-    const originalModel = getOrCreateOriginalModel(activeFile.path, activeFile.content || "");
 
     const filePathSet = new Set(resolvedFiles.map((file) => normalizePath(file.path)));
     for (const [filePath, model] of modelByPathRef.current.entries()) {
@@ -423,40 +715,6 @@ export default function CodeExplorerPanel({
         modelByPathRef.current.delete(filePath);
       }
     }
-    for (const [filePath, model] of originalModelByPathRef.current.entries()) {
-      if (!filePathSet.has(filePath)) {
-        model.dispose();
-        originalModelByPathRef.current.delete(filePath);
-      }
-    }
-
-    if (isDiffMode) {
-      editorRef.current?.dispose();
-      editorRef.current = null;
-
-      if (!diffEditorRef.current) {
-        diffEditorRef.current = monaco.editor.createDiffEditor(editorMountRef.current, {
-          readOnly: true,
-          automaticLayout: true,
-          minimap: { enabled: false },
-          renderSideBySide: true,
-          originalEditable: false,
-          lineNumbers: "on",
-          fontSize: 12,
-          scrollBeyondLastLine: false,
-          wordWrap: "off",
-          autoIndent: "full",
-          folding: true,
-          bracketPairColorization: { enabled: true },
-        });
-      }
-
-      diffEditorRef.current.setModel({ original: originalModel, modified: activeModel });
-      return;
-    }
-
-    diffEditorRef.current?.dispose();
-    diffEditorRef.current = null;
 
     if (!editorRef.current) {
       editorRef.current = monaco.editor.create(editorMountRef.current, {
@@ -476,7 +734,110 @@ export default function CodeExplorerPanel({
     }
 
     editorRef.current.setModel(activeModel);
-  }, [error, hasFiles, isDiffMode, loading, resolvedFiles, selectedFile]);
+  }, [error, hasFiles, loading, resolvedFiles, selectedFile]);
+
+  useEffect(() => {
+    const activeEditor = getActiveEditorInstance();
+    const model = activeEditor?.getModel();
+    if (!activeEditor || !model) {
+      return;
+    }
+
+    if (!inlineChangeSet || (inlineChangeSet.changedLineNumbers.length === 0 && inlineChangeSet.removedBlocks.length === 0)) {
+      clearChangeHighlights();
+      return;
+    }
+
+    changeDecorationsRef.current = activeEditor.deltaDecorations(
+      changeDecorationsRef.current,
+      inlineChangeSet.changedLineNumbers
+        .filter((lineNumber) => lineNumber >= 1 && lineNumber <= model.getLineCount())
+        .map((lineNumber) => ({
+          range: new monaco.Range(lineNumber, 1, lineNumber, 1),
+          options: {
+            isWholeLine: true,
+            className: "code-explorer-change-line",
+            linesDecorationsClassName: "code-explorer-change-glyph",
+          },
+        }))
+    );
+
+    activeEditor.changeViewZones((accessor) => {
+      for (const zoneId of removedZoneIdsRef.current) {
+        accessor.removeZone(zoneId);
+      }
+
+      removedZoneIdsRef.current = inlineChangeSet.removedBlocks.map((block) => {
+        const safeAnchor = Math.max(0, Math.min(block.anchorLineNumber, model.getLineCount()));
+        return accessor.addZone({
+          afterLineNumber: safeAnchor,
+          heightInLines: Math.max(1, block.lines.length),
+          domNode: createRemovedBlockNode(activeEditor, block.lines),
+        });
+      });
+    });
+
+    return () => {
+      clearChangeHighlights();
+    };
+  }, [inlineChangeSet, selectedFile?.path]);
+
+  useEffect(() => {
+    const activeEditor = getActiveEditorInstance();
+    if (!activeEditor) {
+      return;
+    }
+
+    if (!inlineSearchOpen || inlineSearchMatches.length === 0) {
+      clearSearchHighlights();
+      return;
+    }
+
+    searchDecorationsRef.current = activeEditor.deltaDecorations(
+      searchDecorationsRef.current,
+      inlineSearchMatches.map((match, index) => ({
+        range: new monaco.Range(match.lineNumber, match.startColumn, match.lineNumber, match.endColumn),
+        options: {
+          inlineClassName: index === searchActiveIndex ? "code-explorer-search-match-active" : "code-explorer-search-match",
+        },
+      }))
+    );
+  }, [inlineSearchMatches, inlineSearchOpen, searchActiveIndex]);
+
+  useEffect(() => {
+    if (!inlineSearchOpen || inlineSearchMatches.length === 0) {
+      return;
+    }
+    const clampedIndex = Math.min(searchActiveIndex, inlineSearchMatches.length - 1);
+    if (clampedIndex !== searchActiveIndex) {
+      setSearchActiveIndex(clampedIndex);
+      return;
+    }
+    focusSearchMatch(inlineSearchMatches[clampedIndex]);
+  }, [inlineSearchMatches, inlineSearchOpen, searchActiveIndex]);
+
+  useEffect(() => {
+    if (!quickActionState || quickActionState.mode !== "menu") {
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      quickActionButtonRefs.current[quickActionState.activeIndex]?.focus();
+    });
+  }, [quickActionState]);
+
+  useEffect(() => {
+    if (!quickActionState || quickActionState.mode === "menu") {
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      if (quickActionState.mode === "type") {
+        quickActionSelectRef.current?.focus();
+        return;
+      }
+      quickActionInputRef.current?.focus();
+      quickActionInputRef.current?.select();
+    });
+  }, [quickActionState]);
 
   useEffect(() => {
     const activeEditor = getActiveEditorInstance();
@@ -489,14 +850,21 @@ export default function CodeExplorerPanel({
       if (target && pinnedPopoverRef.current?.contains(target)) {
         return;
       }
+      if (target && editorWrapRef.current?.contains(target) && (target as HTMLElement).closest(".code-explorer-quick-actions")) {
+        return;
+      }
+      setQuickActionState(null);
       setPinnedIdentifier(null);
       clearUsageHighlights();
     };
 
     const handleEscape = (event: KeyboardEvent): void => {
       if (event.key === "Escape") {
+        setInlineSearchOpen(false);
+        setQuickActionState(null);
         setPinnedIdentifier(null);
         clearUsageHighlights();
+        clearSearchHighlights();
       }
     };
 
@@ -505,11 +873,7 @@ export default function CodeExplorerPanel({
         if (!current) {
           return current;
         }
-        const anchor = current.info.occurrences[0];
-        if (!anchor) {
-          return current;
-        }
-        const coordinates = getOverlayCoordinates(activeEditor, new monaco.Position(anchor.line, anchor.column));
+        const coordinates = getOverlayCoordinates(activeEditor, new monaco.Position(current.anchor.line, current.anchor.column));
         if (!coordinates) {
           return current;
         }
@@ -537,7 +901,7 @@ export default function CodeExplorerPanel({
       const position = event.target.position;
       hoverTimerRef.current = window.setTimeout(() => {
         const nextOverlay = resolveIdentifierAtPosition(activeEditor, position);
-        setHoveredIdentifier(nextOverlay ? { info: nextOverlay.info, top: nextOverlay.top, left: nextOverlay.left, activeUsageIndex: nextOverlay.activeUsageIndex } : null);
+        setHoveredIdentifier(nextOverlay);
         hoverTimerRef.current = null;
       }, 90);
     });
@@ -561,26 +925,80 @@ export default function CodeExplorerPanel({
         clearUsageHighlights();
         return;
       }
-      setPinnedIdentifier({ info: nextOverlay.info, top: nextOverlay.top, left: nextOverlay.left, activeUsageIndex: nextOverlay.activeUsageIndex });
+      setPinnedIdentifier(nextOverlay);
       setHoveredIdentifier(null);
     });
 
     const scrollDisposable = activeEditor.onDidScrollChange(() => {
       updatePinnedPosition();
+      setQuickActionState((current) => {
+        if (!current) {
+          return current;
+        }
+        const reference = current.info.declarationLocation.reference ?? current.info.usageContexts.all[0] ?? null;
+        if (!reference) {
+          return current;
+        }
+        const coordinates = getOverlayCoordinates(activeEditor, new monaco.Position(reference.line, reference.column));
+        return coordinates ? { ...current, ...coordinates } : current;
+      });
     });
+
+    const selectionDisposable = activeEditor.onDidChangeCursorSelection(() => {
+      setQuickActionState((current) => {
+        if (!current) {
+          return current;
+        }
+        const nextState = resolveTagAtSelection();
+        if (!nextState || nextState.info.canonicalName !== current.info.canonicalName) {
+          return current;
+        }
+        return { ...current, top: nextState.top, left: nextState.left };
+      });
+    });
+
+    const handleShortcut = (event: KeyboardEvent): void => {
+      const target = event.target as HTMLElement | null;
+      const targetInsideEditor = Boolean(target && editorWrapRef.current?.contains(target));
+      const editorHasFocus = activeEditor.hasTextFocus() || targetInsideEditor;
+      if (!editorHasFocus) {
+        return;
+      }
+      if (target && !activeEditor.hasTextFocus() && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) {
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        setQuickActionState(null);
+        setPinnedIdentifier(null);
+        setInlineSearchOpen(true);
+        window.requestAnimationFrame(() => {
+          searchInputRef.current?.focus();
+          searchInputRef.current?.select();
+        });
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key === ".") {
+        event.preventDefault();
+        openQuickActionMenu();
+      }
+    };
 
     document.addEventListener("mousedown", handleOutsidePointer, true);
     document.addEventListener("keydown", handleEscape);
+    document.addEventListener("keydown", handleShortcut, true);
 
     return () => {
       mouseMoveDisposable.dispose();
       mouseLeaveDisposable.dispose();
       mouseDownDisposable.dispose();
       scrollDisposable.dispose();
+      selectionDisposable.dispose();
       document.removeEventListener("mousedown", handleOutsidePointer, true);
       document.removeEventListener("keydown", handleEscape);
+      document.removeEventListener("keydown", handleShortcut, true);
     };
-  }, [identifierIntelligence.byName, pinnedIdentifier]);
+  }, [inlineSearchOpen, pinnedIdentifier, quickActionState, tagIntelligenceSource]);
 
   useEffect(() => {
     for (const file of resolvedFiles) {
@@ -623,7 +1041,7 @@ export default function CodeExplorerPanel({
     }
 
     jumpTimerRef.current = window.setTimeout(() => {
-      const activeEditor = editorRef.current ?? diffEditorRef.current?.getModifiedEditor();
+      const activeEditor = editorRef.current;
       if (!activeEditor) {
         return;
       }
@@ -672,12 +1090,109 @@ export default function CodeExplorerPanel({
         window.clearTimeout(highlightTimerRef.current);
         highlightTimerRef.current = null;
       }
-      const activeEditor = editorRef.current ?? diffEditorRef.current?.getModifiedEditor();
+      const activeEditor = editorRef.current;
       if (activeEditor) {
         highlightDecorationsRef.current = activeEditor.deltaDecorations(highlightDecorationsRef.current, []);
       }
     };
   }, [jumpToLocation, onSelectFile, resolvedFiles]);
+
+  useEffect(() => {
+    if (!tagIntelligenceCommand) {
+      return;
+    }
+
+    const normalizedPath = normalizePath(tagIntelligenceCommand.file);
+    const targetFile = resolvedFiles.find((file) => normalizePath(file.path) === normalizedPath);
+    if (!targetFile) {
+      return;
+    }
+
+    setSelectedPath(targetFile.path);
+    onSelectFile?.(targetFile.path);
+
+    const timer = window.setTimeout(() => {
+      const activeEditor = getActiveEditorInstance();
+      if (!activeEditor) {
+        return;
+      }
+      const source = getLogicTagIntelligenceSource(targetFile.content || "");
+      const info = source.getTagByIdentifier(tagIntelligenceCommand.tagName);
+      if (!info) {
+        return;
+      }
+      const declaration = source.getDeclaration(info.tagName);
+      const usages = source.getAllUsages(info.tagName);
+      const currentPinned = pinnedIdentifier && normalizePath(targetFile.path) === normalizePath(selectedPath) && pinnedIdentifier.info.canonicalName === info.canonicalName
+        ? pinnedIdentifier
+        : null;
+
+      if (tagIntelligenceCommand.action === "highlight-all-usages") {
+        highlightAllUsages(info);
+        const anchor = declaration ?? usages[0];
+        if (anchor) {
+          const overlay = buildOverlayState(activeEditor, tagIntelligenceCommand.tagName, info, anchor, Math.max(0, usages.findIndex((item) => item.line === anchor.line && item.column === anchor.column)));
+          if (overlay) {
+            setPinnedIdentifier(overlay);
+          }
+        }
+        return;
+      }
+
+      if (tagIntelligenceCommand.action === "jump-to-definition") {
+        const target = declaration ?? usages[0];
+        if (!target) {
+          return;
+        }
+        focusOccurrence(info, target);
+        const overlay = buildOverlayState(activeEditor, tagIntelligenceCommand.tagName, info, target, Math.max(0, usages.findIndex((item) => item.line === target.line && item.column === target.column)));
+        if (overlay) {
+          setPinnedIdentifier(overlay);
+        }
+        return;
+      }
+
+      if (tagIntelligenceCommand.action === "focus-reference") {
+        const target = (declaration && declaration.line === tagIntelligenceCommand.line ? declaration : null)
+          ?? usages.find(
+            (item) =>
+              item.line === tagIntelligenceCommand.line &&
+              (tagIntelligenceCommand.column ? item.column === tagIntelligenceCommand.column : true)
+          )
+          ?? declaration
+          ?? usages[0];
+        if (!target) {
+          return;
+        }
+        focusOccurrence(info, target);
+        const overlay = buildOverlayState(activeEditor, tagIntelligenceCommand.tagName, info, target, Math.max(0, usages.findIndex((item) => item.line === target.line && item.column === target.column)));
+        if (overlay) {
+          setPinnedIdentifier(overlay);
+        }
+        return;
+      }
+
+      if (usages.length === 0) {
+        return;
+      }
+
+      const currentIndex = currentPinned?.activeUsageIndex ?? 0;
+      const nextIndex =
+        tagIntelligenceCommand.action === "previous-usage"
+          ? (currentIndex - 1 + usages.length) % usages.length
+          : (currentIndex + 1) % usages.length;
+      const target = usages[nextIndex];
+      focusOccurrence(info, target);
+      const overlay = buildOverlayState(activeEditor, tagIntelligenceCommand.tagName, info, target, nextIndex);
+      if (overlay) {
+        setPinnedIdentifier(overlay);
+      }
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [onSelectFile, resolvedFiles, tagIntelligenceCommand]);
 
   useEffect(() => {
     return () => {
@@ -694,10 +1209,7 @@ export default function CodeExplorerPanel({
         model.dispose();
       }
       modelByPathRef.current.clear();
-      for (const model of originalModelByPathRef.current.values()) {
-        model.dispose();
-      }
-      originalModelByPathRef.current.clear();
+      clearSearchHighlights();
     };
   }, []);
 
@@ -762,9 +1274,7 @@ export default function CodeExplorerPanel({
         <h3>Generated ST</h3>
         <div className="code-explorer-header-actions">
           <span>{resolvedFiles.length} files</span>
-          <button className="code-explorer-mode-btn" type="button" onClick={() => setIsDiffMode((current) => !current)}>
-            {isDiffMode ? "Standard" : "Diff"}
-          </button>
+          {showChangeHighlights && baselineFile ? <span className="code-explorer-change-indicator">Showing changes</span> : null}
         </div>
       </header>
 
@@ -826,12 +1336,156 @@ export default function CodeExplorerPanel({
 
         <div className="code-explorer-editor-wrap" ref={editorWrapRef}>
           <div className="code-explorer-file-header">{selectedFile?.path || "No file selected"}</div>
+          {inlineSearchOpen ? (
+            <div className="code-explorer-inline-search-shell">
+              <input
+                ref={searchInputRef}
+                className="code-explorer-inline-search-input"
+                type="text"
+                value={inlineSearchQuery}
+                onChange={(event) => {
+                  setInlineSearchQuery(event.target.value);
+                  setSearchActiveIndex(0);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    setInlineSearchOpen(false);
+                    clearSearchHighlights();
+                    window.requestAnimationFrame(() => {
+                      getActiveEditorInstance()?.focus();
+                    });
+                    return;
+                  }
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    if (inlineSearchMatches.length === 0) {
+                      return;
+                    }
+                    setSearchActiveIndex((current) => {
+                      const delta = event.shiftKey ? -1 : 1;
+                      return (current + delta + inlineSearchMatches.length) % inlineSearchMatches.length;
+                    });
+                  }
+                }}
+                placeholder="Search current file"
+                aria-label="Search current logic file"
+              />
+              <span className="code-explorer-inline-search-count">
+                {inlineSearchMatches.length === 0
+                  ? "No matches"
+                  : `${Math.min(searchActiveIndex + 1, inlineSearchMatches.length)} of ${inlineSearchMatches.length}`}
+              </span>
+            </div>
+          ) : null}
           <div ref={editorMountRef} className="code-explorer-editor" />
+          {quickActionState ? (
+            <div className="code-explorer-quick-actions" style={{ top: quickActionState.top, left: quickActionState.left }}>
+              {quickActionState.mode === "menu" ? (
+                <div className="code-explorer-quick-actions-grid" onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    setQuickActionState(null);
+                    return;
+                  }
+                  if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setQuickActionState((current) => current ? { ...current, activeIndex: (current.activeIndex + 1) % 4 } : current);
+                    return;
+                  }
+                  if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setQuickActionState((current) => current ? { ...current, activeIndex: (current.activeIndex - 1 + 4) % 4 } : current);
+                  }
+                }}>
+                  {[
+                    { label: "Rename", action: () => setQuickActionState((current) => current ? { ...current, mode: "rename", inputValue: current.info.tagName } : current) },
+                    { label: "Remap", action: () => setQuickActionState((current) => current ? { ...current, mode: "remap", inputValue: current.info.tagName } : current) },
+                    { label: "Change Type", action: () => setQuickActionState((current) => current ? { ...current, mode: "type", nextType: current.info.dataType || ST_TYPE_OPTIONS[0] || "BOOL" } : current) },
+                    { label: "Highlight Usages", action: () => runQuickHighlightAction() },
+                  ].map((item, index) => (
+                    <button
+                      key={item.label}
+                      ref={(element) => {
+                        quickActionButtonRefs.current[index] = element;
+                      }}
+                      className={`code-explorer-quick-action-btn ${quickActionState.activeIndex === index ? "is-active" : ""}`.trim()}
+                      type="button"
+                      onMouseEnter={() => setQuickActionState((current) => current ? { ...current, activeIndex: index } : current)}
+                      onClick={item.action}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              ) : quickActionState.mode === "type" ? (
+                <div className="code-explorer-quick-actions-form">
+                  <strong>Change type for {quickActionState.info.tagName}</strong>
+                  <select
+                    ref={quickActionSelectRef}
+                    className="code-explorer-quick-actions-select"
+                    value={quickActionState.nextType}
+                    onChange={(event) => setQuickActionState((current) => current ? { ...current, nextType: event.target.value } : current)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        setQuickActionState((current) => current ? { ...current, mode: "menu" } : current);
+                      }
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        applyQuickTypeChange();
+                      }
+                    }}
+                  >
+                    {ST_TYPE_OPTIONS.map((option) => (
+                      <option key={option} value={option}>{option}</option>
+                    ))}
+                  </select>
+                  <div className="code-explorer-quick-actions-row">
+                    <button className="code-explorer-quick-action-btn is-active" type="button" onClick={applyQuickTypeChange}>Apply</button>
+                    <button className="code-explorer-quick-action-btn" type="button" onClick={() => setQuickActionState((current) => current ? { ...current, mode: "menu" } : current)}>Back</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="code-explorer-quick-actions-form">
+                  {(() => {
+                    const renameMode = quickActionState.mode === "remap" ? "remap" : "rename";
+                    return (
+                      <>
+                  <strong>{quickActionState.mode === "remap" ? `Remap ${quickActionState.info.tagName}` : `Rename ${quickActionState.info.tagName}`}</strong>
+                  <input
+                    ref={quickActionInputRef}
+                    className="code-explorer-quick-actions-input"
+                    type="text"
+                    value={quickActionState.inputValue}
+                    onChange={(event) => setQuickActionState((current) => current ? { ...current, inputValue: event.target.value } : current)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        setQuickActionState((current) => current ? { ...current, mode: "menu" } : current);
+                      }
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        applyQuickRenameOrRemap(renameMode);
+                      }
+                    }}
+                  />
+                  <div className="code-explorer-quick-actions-row">
+                    <button className="code-explorer-quick-action-btn is-active" type="button" onClick={() => applyQuickRenameOrRemap(renameMode)}>Apply</button>
+                    <button className="code-explorer-quick-action-btn" type="button" onClick={() => setQuickActionState((current) => current ? { ...current, mode: "menu" } : current)}>Back</button>
+                  </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
+            </div>
+          ) : null}
           {hoveredIdentifier && !pinnedIdentifier ? (
             <div className="code-explorer-intel-tooltip" style={{ top: hoveredIdentifier.top, left: hoveredIdentifier.left }}>
-              <strong>{hoveredIdentifier.info.name}</strong>
+              <strong>{hoveredIdentifier.matchedTagName}</strong>
               <span>
-                {hoveredIdentifier.info.declaredType || "Undeclared"} · {hoveredIdentifier.info.usageCount} use{hoveredIdentifier.info.usageCount === 1 ? "" : "s"}
+                {hoveredIdentifier.info.dataType || "Undeclared"} · {hoveredIdentifier.info.totalUsageCount} use{hoveredIdentifier.info.totalUsageCount === 1 ? "" : "s"}
               </span>
             </div>
           ) : null}
@@ -841,180 +1495,50 @@ export default function CodeExplorerPanel({
               className="code-explorer-intel-popover"
               style={{ top: pinnedIdentifier.top, left: pinnedIdentifier.left }}
             >
-              <div className="code-explorer-intel-popover-header">
-                <strong>{pinnedIdentifier.info.name}</strong>
-                <span>{pinnedIdentifier.info.category}</span>
-              </div>
-              <div className="code-explorer-intel-popover-grid">
-                <div>
-                  <span>Type</span>
-                  <strong>{pinnedIdentifier.info.declaredType || "Undeclared"}</strong>
-                </div>
-                <div>
-                  <span>Occurrences</span>
-                  <strong>{pinnedIdentifier.info.occurrenceCount}</strong>
-                </div>
-                <div>
-                  <span>Reads</span>
-                  <strong>{pinnedIdentifier.info.readCount}</strong>
-                </div>
-                <div>
-                  <span>Writes</span>
-                  <strong>{pinnedIdentifier.info.writeCount}</strong>
-                </div>
-              </div>
-              <div className="code-explorer-intel-popover-section">
-                <span>Definition</span>
-                <strong>
-                  {pinnedIdentifier.info.declarationLine
-                    ? `Line ${pinnedIdentifier.info.declarationLine}`
-                    : pinnedIdentifier.info.firstSeenLine
-                      ? `First seen on line ${pinnedIdentifier.info.firstSeenLine}`
-                      : "No local declaration"}
-                </strong>
-                <code>{pinnedIdentifier.info.declarationSnippet || "Identifier is used in this file without a declaration."}</code>
-              </div>
-              <div className="code-explorer-intel-popover-section">
-                <span>Usage</span>
-                <div className="code-explorer-intel-usage-summary">
-                  <strong>{pinnedIdentifier.info.usageCount} total usage{pinnedIdentifier.info.usageCount === 1 ? "" : "s"}</strong>
-                  <span>All lines: {pinnedIdentifier.info.lineReferences.join(", ") || "None"}</span>
-                </div>
-                <div className="code-explorer-intel-reference-list split">
-                  <div className="code-explorer-intel-usage-group">
-                    <span>Assigned / Written</span>
-                    {pinnedIdentifier.info.writeOccurrences.length > 0 ? (
-                      pinnedIdentifier.info.writeOccurrences.map((occurrence) => (
-                        <button
-                          key={`write-${occurrence.line}-${occurrence.column}`}
-                          className="code-explorer-intel-reference-item"
-                          type="button"
-                          onClick={() => {
-                            focusOccurrence(pinnedIdentifier.info, occurrence);
-                            setPinnedIdentifier((current) =>
-                              current
-                                ? {
-                                    ...current,
-                                    activeUsageIndex: usageOccurrencesForPinned.findIndex(
-                                      (item) => item.line === occurrence.line && item.column === occurrence.column
-                                    ),
-                                  }
-                                : current
-                            );
-                          }}
-                        >
-                          <span>Line {occurrence.line}</span>
-                          <code>{occurrence.snippet}</code>
-                        </button>
-                      ))
-                    ) : (
-                      <p className="code-explorer-intel-empty">No write contexts in this file.</p>
-                    )}
-                  </div>
-                  <div className="code-explorer-intel-usage-group">
-                    <span>Read / Used</span>
-                    {pinnedIdentifier.info.readOccurrences.length > 0 ? (
-                      pinnedIdentifier.info.readOccurrences.map((occurrence) => (
-                        <button
-                          key={`read-${occurrence.line}-${occurrence.column}`}
-                          className="code-explorer-intel-reference-item"
-                          type="button"
-                          onClick={() => {
-                            focusOccurrence(pinnedIdentifier.info, occurrence);
-                            setPinnedIdentifier((current) =>
-                              current
-                                ? {
-                                    ...current,
-                                    activeUsageIndex: usageOccurrencesForPinned.findIndex(
-                                      (item) => item.line === occurrence.line && item.column === occurrence.column
-                                    ),
-                                  }
-                                : current
-                            );
-                          }}
-                        >
-                          <span>Line {occurrence.line}</span>
-                          <code>{occurrence.snippet}</code>
-                        </button>
-                      ))
-                    ) : (
-                      <p className="code-explorer-intel-empty">No read contexts in this file.</p>
-                    )}
-                  </div>
-                </div>
-              </div>
-              <div className="code-explorer-intel-popover-section">
-                <span>Actions</span>
-                <div className="code-explorer-intel-actions">
-                  <button
-                    className="code-explorer-intel-action-btn"
-                    type="button"
-                    onClick={() => {
-                      const definitionOccurrence = pinnedIdentifier.info.occurrences.find((item) => item.role === "declaration") ?? pinnedIdentifier.info.occurrences[0];
-                      if (definitionOccurrence) {
-                        focusOccurrence(pinnedIdentifier.info, definitionOccurrence);
-                      }
-                    }}
-                  >
-                    Jump to Definition
-                  </button>
-                  <button
-                    className="code-explorer-intel-action-btn"
-                    type="button"
-                    onClick={() => {
-                      highlightAllUsages(pinnedIdentifier.info);
-                    }}
-                  >
-                    Highlight All Usages
-                  </button>
-                  <button
-                    className="code-explorer-intel-action-btn"
-                    type="button"
-                    disabled={usageOccurrencesForPinned.length === 0}
-                    onClick={() => {
-                      if (usageOccurrencesForPinned.length === 0) {
-                        return;
-                      }
-                      setPinnedIdentifier((current) => {
-                        if (!current) {
-                          return current;
-                        }
-                        const nextIndex = (current.activeUsageIndex - 1 + usageOccurrencesForPinned.length) % usageOccurrencesForPinned.length;
-                        focusOccurrence(current.info, usageOccurrencesForPinned[nextIndex]);
-                        return { ...current, activeUsageIndex: nextIndex };
-                      });
-                    }}
-                  >
-                    Previous Usage
-                  </button>
-                  <button
-                    className="code-explorer-intel-action-btn"
-                    type="button"
-                    disabled={usageOccurrencesForPinned.length === 0}
-                    onClick={() => {
-                      if (usageOccurrencesForPinned.length === 0) {
-                        return;
-                      }
-                      setPinnedIdentifier((current) => {
-                        if (!current) {
-                          return current;
-                        }
-                        const nextIndex = (current.activeUsageIndex + 1) % usageOccurrencesForPinned.length;
-                        focusOccurrence(current.info, usageOccurrencesForPinned[nextIndex]);
-                        return { ...current, activeUsageIndex: nextIndex };
-                      });
-                    }}
-                  >
-                    Next Usage
-                  </button>
-                </div>
-              </div>
-              {pinnedIdentifier.info.casingVariants.length > 1 ? (
-                <div className="code-explorer-intel-popover-section">
-                  <span>Casing variants</span>
-                  <strong>{pinnedIdentifier.info.casingVariants.join(", ")}</strong>
-                </div>
-              ) : null}
+              <TagIntelligenceDetailView
+                matchedTagName={pinnedIdentifier.matchedTagName}
+                info={pinnedIdentifier.info}
+                activeUsageIndex={pinnedIdentifier.activeUsageIndex}
+                usageOccurrences={usageOccurrencesForPinned}
+                onFocusReference={(reference) => {
+                  focusOccurrence(pinnedIdentifier.info, reference);
+                  updatePinnedFromReference(pinnedIdentifier.info, pinnedIdentifier.matchedTagName, reference);
+                }}
+                onFocusLineReference={(lineReference) => {
+                  const focused = focusLineReference(pinnedIdentifier.info, lineReference);
+                  if (focused) {
+                    updatePinnedFromReference(pinnedIdentifier.info, pinnedIdentifier.matchedTagName, focused);
+                  }
+                }}
+                onJumpToDefinition={() => {
+                  const definitionOccurrence = pinnedIdentifier.info.declarationLocation.reference ?? pinnedIdentifier.info.usageContexts.all[0];
+                  if (definitionOccurrence) {
+                    focusOccurrence(pinnedIdentifier.info, definitionOccurrence);
+                    updatePinnedFromReference(pinnedIdentifier.info, pinnedIdentifier.matchedTagName, definitionOccurrence);
+                  }
+                }}
+                onHighlightAllUsages={() => {
+                  highlightAllUsages(pinnedIdentifier.info);
+                }}
+                onPreviousUsage={() => {
+                  if (usageOccurrencesForPinned.length === 0) {
+                    return;
+                  }
+                  const nextIndex = (pinnedIdentifier.activeUsageIndex - 1 + usageOccurrencesForPinned.length) % usageOccurrencesForPinned.length;
+                  const target = usageOccurrencesForPinned[nextIndex];
+                  focusOccurrence(pinnedIdentifier.info, target);
+                  setPinnedIdentifier((current) => (current ? { ...current, anchor: target, activeUsageIndex: nextIndex } : current));
+                }}
+                onNextUsage={() => {
+                  if (usageOccurrencesForPinned.length === 0) {
+                    return;
+                  }
+                  const nextIndex = (pinnedIdentifier.activeUsageIndex + 1) % usageOccurrencesForPinned.length;
+                  const target = usageOccurrencesForPinned[nextIndex];
+                  focusOccurrence(pinnedIdentifier.info, target);
+                  setPinnedIdentifier((current) => (current ? { ...current, anchor: target, activeUsageIndex: nextIndex } : current));
+                }}
+              />
             </div>
           ) : null}
         </div>

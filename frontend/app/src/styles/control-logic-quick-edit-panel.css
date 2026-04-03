@@ -1,22 +1,67 @@
 .control-logic-workspace {
-  min-height: min(720px, calc(100vh - 180px));
+  --control-logic-workspace-min-height: max(820px, calc(100vh - 180px));
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 0.6rem;
+  min-height: 0;
+  height: auto;
+  overflow: visible;
+}
+
+.control-logic-workspace-row {
+  min-width: 0;
+  min-height: var(--control-logic-workspace-min-height);
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.75rem;
-  align-items: start;
+  align-items: stretch;
+  overflow: visible;
 }
 
 .control-logic-workspace-main {
   min-width: 0;
-  min-height: min(720px, calc(100vh - 180px));
+  min-height: var(--control-logic-workspace-min-height);
+  height: auto;
+  overflow: hidden;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
-  gap: 0.6rem;
 }
 
 .control-logic-workspace-actions {
   display: flex;
   justify-content: flex-end;
+}
+
+.control-logic-workspace-sidebar {
+  --control-logic-utility-expanded-width: 360px;
+  --control-logic-utility-collapsed-width: 46px;
+  width: var(--control-logic-utility-expanded-width);
+  min-width: var(--control-logic-utility-expanded-width);
+  max-width: var(--control-logic-utility-expanded-width);
+  min-height: 0;
+  height: auto;
+  overflow: hidden;
+  transition: width 180ms ease, min-width 180ms ease, max-width 180ms ease, gap 180ms ease;
+}
+
+.control-logic-workspace-sidebar-scroll {
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+  display: grid;
+  gap: 0.75rem;
+  align-content: start;
+  overflow: visible;
+}
+
+.control-logic-workspace-sidebar.is-collapsed {
+  width: var(--control-logic-utility-collapsed-width);
+  min-width: var(--control-logic-utility-collapsed-width);
+  max-width: var(--control-logic-utility-collapsed-width);
+}
+
+.control-logic-workspace-sidebar.is-collapsed .control-logic-workspace-sidebar-scroll {
+  gap: 0;
+  overflow: hidden;
 }
 
 .control-logic-quick-edit-panel {
@@ -25,12 +70,12 @@
   width: var(--quick-edit-expanded-width);
   min-width: var(--quick-edit-expanded-width);
   max-width: 100%;
+  min-height: 0;
   display: grid;
   grid-template-columns: var(--quick-edit-collapsed-width) minmax(0, 1fr);
   gap: 0.55rem;
   align-self: start;
-  position: sticky;
-  top: 0.55rem;
+  transition: width 180ms ease, min-width 180ms ease, grid-template-columns 180ms ease;
 }
 
 .control-logic-quick-edit-panel.is-collapsed {
@@ -98,7 +143,7 @@
 }
 
 .control-logic-quick-edit-card {
-  min-height: min(720px, calc(100vh - 180px));
+  min-height: 0;
   border: 1px solid var(--stroke);
   border-radius: 12px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(242, 246, 250, 0.98));
@@ -362,6 +407,245 @@
   gap: 0.42rem;
 }
 
+.control-logic-tag-table-panel {
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(242, 246, 250, 0.98));
+  box-shadow: 0 14px 28px rgba(24, 36, 52, 0.1);
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  min-width: 0;
+}
+
+.control-logic-tag-table-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.8rem 0.9rem 0.72rem;
+  border-bottom: 1px solid rgba(199, 208, 217, 0.95);
+  background: linear-gradient(180deg, rgba(247, 250, 252, 0.98), rgba(235, 241, 246, 0.98));
+}
+
+.control-logic-tag-table-panel-body {
+  min-height: 0;
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.8rem 0.9rem 0.9rem;
+}
+
+.control-logic-tag-table-search {
+  width: 100%;
+  min-width: 0;
+}
+
+.control-logic-tag-table-shortcuts-btn {
+  width: 100%;
+  border: 1px solid rgba(173, 47, 47, 0.42);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(185, 44, 44, 0.98), rgba(148, 31, 31, 0.98));
+  color: #fff7f7;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.42rem;
+  padding: 0.58rem 0.68rem;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  box-shadow: 0 10px 18px rgba(129, 24, 24, 0.18);
+}
+
+.control-logic-tag-table-shortcuts-btn:hover {
+  background: linear-gradient(180deg, rgba(196, 50, 50, 1), rgba(159, 33, 33, 1));
+}
+
+.control-logic-tag-table-count {
+  font-size: 0.58rem;
+  font-weight: 700;
+  color: #5d7082;
+  white-space: nowrap;
+}
+
+.control-logic-tag-table-list {
+  border: 1px solid rgba(204, 214, 223, 0.95);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.92);
+  max-height: 220px;
+  min-height: 220px;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+}
+
+.control-logic-tag-table-row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.28rem;
+  padding: 0.44rem 0.58rem;
+  border-bottom: 1px solid rgba(227, 233, 239, 0.95);
+  font-size: 0.62rem;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+}
+
+.control-logic-tag-table-row:last-child {
+  border-bottom: 0;
+}
+
+.control-logic-tag-table-entry {
+  border-bottom: 1px solid rgba(227, 233, 239, 0.95);
+}
+
+.control-logic-tag-table-entry:last-child {
+  border-bottom: 0;
+}
+
+.control-logic-tag-table-entry:last-child .control-logic-tag-table-row {
+  border-bottom: 0;
+}
+
+.control-logic-tag-table-detail-shell {
+  border-top: 1px solid rgba(227, 233, 239, 0.95);
+  background: rgba(246, 249, 252, 0.94);
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.7rem 0.75rem 0.8rem;
+}
+
+.control-logic-tag-table-inline-lines {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  color: #526577;
+}
+
+.control-logic-tag-table-inline-line-btn {
+  border: 0;
+  background: transparent;
+  color: #2b5378;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.control-logic-tag-table-inline-line-btn:hover {
+  text-decoration: underline;
+}
+
+.control-logic-tag-table-primary {
+  font-weight: 700;
+  color: #1f3448;
+  overflow-wrap: anywhere;
+}
+
+.control-logic-tag-table-detail {
+  color: #526577;
+  overflow-wrap: anywhere;
+}
+
+.control-logic-tag-table-separator {
+  color: #8da0b2;
+}
+
+.control-logic-tag-table-empty {
+  padding: 0.75rem 0.8rem;
+  font-size: 0.62rem;
+  color: #627588;
+}
+
+.control-logic-shortcuts-modal {
+  width: min(420px, calc(100vw - 2rem));
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+  border-radius: 14px;
+}
+
+.control-logic-shortcuts-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.95rem 1rem 0.8rem;
+  border-bottom: 1px solid rgba(214, 221, 228, 0.95);
+  background: linear-gradient(180deg, rgba(250, 252, 253, 0.98), rgba(239, 244, 248, 0.98));
+}
+
+.control-logic-shortcuts-modal-eyebrow {
+  margin: 0 0 0.18rem;
+  font-size: 0.54rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6e8192;
+}
+
+.control-logic-shortcuts-modal-header h3 {
+  margin: 0;
+  font-size: 0.94rem;
+  color: #183047;
+}
+
+.control-logic-shortcuts-modal-close {
+  border: 1px solid rgba(203, 212, 220, 0.95);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #496073;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.control-logic-shortcuts-list {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.95rem 1rem 1.05rem;
+}
+
+.control-logic-shortcuts-item {
+  display: grid;
+  grid-template-columns: minmax(0, 170px) minmax(0, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.72rem 0.8rem;
+  border: 1px solid rgba(214, 221, 228, 0.95);
+  border-radius: 10px;
+  background: rgba(249, 251, 253, 0.95);
+}
+
+.control-logic-shortcuts-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2rem;
+  border: 1px solid rgba(197, 207, 216, 0.96);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.98);
+  color: #214056;
+  padding: 0.3rem 0.55rem;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.control-logic-shortcuts-item strong {
+  font-size: 0.72rem;
+  color: #1d3348;
+}
+
 .control-logic-quick-edit-form-grid {
   display: grid;
   gap: 0.55rem;
@@ -401,11 +685,35 @@
 
 @media (max-width: 1180px) {
   .control-logic-workspace {
+    height: auto;
+    overflow: visible;
+  }
+
+  .control-logic-workspace-row {
+    min-height: 0;
     grid-template-columns: minmax(0, 1fr);
+    overflow: visible;
+  }
+
+  .control-logic-workspace-sidebar {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    height: auto;
+  }
+
+  .control-logic-workspace-sidebar-scroll {
+    height: auto;
+    overflow: visible;
+  }
+
+  .control-logic-workspace-sidebar.is-collapsed {
+    width: var(--control-logic-utility-collapsed-width);
+    min-width: var(--control-logic-utility-collapsed-width);
+    max-width: var(--control-logic-utility-collapsed-width);
   }
 
   .control-logic-quick-edit-panel {
-    position: static;
     width: 100%;
     min-width: 0;
     grid-template-columns: var(--quick-edit-collapsed-width) minmax(0, 1fr);
@@ -418,9 +726,11 @@
 
 @media (max-width: 760px) {
   .control-logic-workspace,
+  .control-logic-workspace-row,
   .control-logic-workspace-main,
   .control-logic-quick-edit-card {
     min-height: 0;
+    height: auto;
   }
 
   .control-logic-quick-edit-form-grid.compact,

@@ -13,6 +13,7 @@ import {
 import { Toaster, toast } from "react-hot-toast";
 import ActivityBar from "../components/ActivityBar";
 import CodeExplorerPanel, { type GeneratedLogicFile, type STDiagnosticMarker, type STJumpLocation } from "../components/CodeExplorerPanel";
+import { type TagIntelligenceEditorCommand } from "../components/CodeExplorerPanel";
 import CommandBar, { type ToolbarAction } from "../components/CommandBar";
 import DetailsPanel, { type RightTab } from "../components/DetailsPanel";
 import GraphWorkspace from "../components/GraphWorkspace";
@@ -23,6 +24,9 @@ import PlantGenieConnectorSettings from "../components/PlantGenieConnectorSettin
 import PlantGenieWorkspace from "../components/PlantGenieWorkspace";
 import SettingsGeneralPanel from "../components/SettingsGeneralPanel";
 import ControlLogicQuickEditPanel from "../components/ControlLogicQuickEditPanel";
+import ControlLogicTagTablePanel from "../components/ControlLogicTagTablePanel";
+import LogicHistoryDropdown from "../components/LogicHistoryDropdown";
+import LogicEditorCommandPalette from "../components/LogicEditorCommandPalette";
 import EngineeringDeterministicTable from "../components/plant/EngineeringDeterministicTable";
 import RightControlLoopsTab from "../components/rightTabs/RightControlLoopsTab";
 import RightDiagnosticsTab from "../components/rightTabs/RightDiagnosticsTab";
@@ -53,6 +57,18 @@ import { useWorkspaceContext } from "../context/WorkspaceContext";
 import { mapSystemContextToPanelView } from "../intelligence/mapSystemContextToPanelView";
 import { buildBehavior, buildImpact, buildSystemContext, type SystemContext, type SystemImpact } from "../intelligence/systemContext";
 import { normalizeLogicPath } from "../utils/controlLogicTransforms";
+import { renameIdentifierInLogic, updateDeclarationTypeInLogic } from "../utils/controlLogicTransforms";
+import { VALIDATION_ISSUE_LABELS, validateStructuredTextIssues } from "../utils/controlLogicValidation";
+import {
+  buildLogicSnapshot,
+  buildLogicSnapshotSignature,
+  cloneGeneratedLogicFiles,
+  describeLogicSnapshotSource,
+  formatRelativeSavedTime,
+  insertLogicSnapshot,
+  type LogicSnapshot,
+  type LogicSnapshotSource,
+} from "../utils/logicSnapshots";
 import {
   createSnapshot,
   diffVersions,
@@ -770,9 +786,242 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
   const [selectedSTFilePath, setSelectedSTFilePath] = useState<string | null>(null);
   const [stDiagnosticsByFile, setSTDiagnosticsByFile] = useState<Record<string, STDiagnosticMarker[]>>({});
   const [stJumpLocation, setSTJumpLocation] = useState<STJumpLocation | null>(null);
+  const [tagIntelligenceCommand, setTagIntelligenceCommand] = useState<TagIntelligenceEditorCommand | null>(null);
+  const [logicSnapshotsByProject, setLogicSnapshotsByProject] = useState<Record<string, LogicSnapshot[]>>({});
+  const [showLogicChanges, setShowLogicChanges] = useState<boolean>(true);
+  const [isControlLogicUtilityRailCollapsed, setIsControlLogicUtilityRailCollapsed] = useState<boolean>(true);
+  const [isLogicCommandPaletteOpen, setIsLogicCommandPaletteOpen] = useState<boolean>(false);
+  const [logicPreviewState, setLogicPreviewState] = useState<{
+    projectKey: string;
+    snapshotId: string;
+    baseFiles: GeneratedLogicFile[];
+    baseGeneratedLogic: string;
+    baseSelectedFilePath: string | null;
+    baseDiagnosticsByFile: Record<string, STDiagnosticMarker[]>;
+  } | null>(null);
+  const [historyNow, setHistoryNow] = useState<number>(() => Date.now());
+
+  const logicAutosaveTimerRef = useRef<number | null>(null);
+  const logicLastSnapshotSignatureRef = useRef<Record<string, string>>({});
+  const logicPendingChangeSourceRef = useRef<LogicSnapshotSource | null>(null);
+
+  const logicHistoryProjectKey = selectedProjectId || (isSandboxMode ? SANDBOX_DEMO_PROJECT.id : "workspace");
+  const logicSnapshots = logicSnapshotsByProject[logicHistoryProjectKey] ?? [];
+  const lastLogicSnapshot = logicSnapshots[0] ?? null;
+  const logicLastSavedLabel = lastLogicSnapshot ? formatRelativeSavedTime(lastLogicSnapshot.createdAt, historyNow) : "not saved yet";
+  const logicFilesSignature = useMemo(() => buildLogicSnapshotSignature(generatedSTFiles), [generatedSTFiles]);
+  const activeLogicFile = useMemo<GeneratedLogicFile | null>(() => {
+    if (!generatedSTFiles.length) {
+      return null;
+    }
+    const normalizedSelectedPath = selectedSTFilePath ? normalizeLogicPath(selectedSTFilePath) : "";
+    return generatedSTFiles.find((file) => normalizeLogicPath(file.path) === normalizedSelectedPath) ?? generatedSTFiles[0] ?? null;
+  }, [generatedSTFiles, selectedSTFilePath]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setHistoryNow(Date.now());
+    }, 1000);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isLogicCommandPaletteOpen) {
+      return;
+    }
+    if (activeMainView !== "logic" || panelState.activeModule !== "control_logic" || !activeLogicFile) {
+      setIsLogicCommandPaletteOpen(false);
+    }
+  }, [activeLogicFile, activeMainView, isLogicCommandPaletteOpen, panelState.activeModule]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") {
+        return;
+      }
+      if (activeMainView !== "logic" || panelState.activeModule !== "control_logic" || !activeLogicFile) {
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        return;
+      }
+      event.preventDefault();
+      setIsLogicCommandPaletteOpen(true);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [activeLogicFile, activeMainView, panelState.activeModule]);
+
+  const applyLogicEditorFiles = useCallback(
+    (
+      files: GeneratedLogicFile[],
+      options?: {
+        selectedFilePath?: string | null;
+        diagnosticsByFile?: Record<string, STDiagnosticMarker[]>;
+        clearJumpLocation?: boolean;
+        clearTagCommand?: boolean;
+      }
+    ): void => {
+      const nextFiles = cloneGeneratedLogicFiles(files);
+      setGeneratedSTFiles(nextFiles);
+      setGeneratedLogic(serializeGeneratedLogicFiles(nextFiles));
+      if (typeof options?.selectedFilePath !== "undefined") {
+        setSelectedSTFilePath(options.selectedFilePath ?? nextFiles[0]?.path ?? null);
+      }
+      if (typeof options?.diagnosticsByFile !== "undefined") {
+        setSTDiagnosticsByFile(options.diagnosticsByFile);
+      }
+      if (options?.clearJumpLocation !== false) {
+        setSTJumpLocation(null);
+      }
+      if (options?.clearTagCommand !== false) {
+        setTagIntelligenceCommand(null);
+      }
+    },
+    []
+  );
+
+  const commitLogicSnapshot = useCallback(
+    (source: LogicSnapshotSource, options?: { files?: GeneratedLogicFile[]; generatedLogic?: string; selectedFilePath?: string | null; label?: string }): LogicSnapshot | null => {
+      const files = options?.files ?? generatedSTFiles;
+      if (files.length === 0) {
+        return null;
+      }
+      const snapshot = buildLogicSnapshot({
+        files,
+        generatedLogic: options?.generatedLogic ?? serializeGeneratedLogicFiles(files),
+        selectedFilePath: typeof options?.selectedFilePath === "undefined" ? selectedSTFilePath : options.selectedFilePath,
+        source,
+        label: options?.label,
+      });
+      setLogicSnapshotsByProject((previous) => {
+        const current = previous[logicHistoryProjectKey] ?? [];
+        const next = insertLogicSnapshot(current, snapshot);
+        if (next === current) {
+          return previous;
+        }
+        return {
+          ...previous,
+          [logicHistoryProjectKey]: next,
+        };
+      });
+      logicLastSnapshotSignatureRef.current[logicHistoryProjectKey] = snapshot.signature;
+      return snapshot;
+    },
+    [generatedSTFiles, logicHistoryProjectKey, selectedSTFilePath]
+  );
+
+  const handlePreviewLogicSnapshot = useCallback(
+    (snapshot: LogicSnapshot): void => {
+      if (!snapshot.files.length) {
+        return;
+      }
+      setLogicPreviewState((current) => {
+        if (current && current.projectKey === logicHistoryProjectKey) {
+          return { ...current, snapshotId: snapshot.id };
+        }
+        return {
+          projectKey: logicHistoryProjectKey,
+          snapshotId: snapshot.id,
+          baseFiles: cloneGeneratedLogicFiles(generatedSTFiles),
+          baseGeneratedLogic: generatedLogic,
+          baseSelectedFilePath: selectedSTFilePath,
+          baseDiagnosticsByFile: { ...stDiagnosticsByFile },
+        };
+      });
+      applyLogicEditorFiles(snapshot.files, {
+        selectedFilePath: snapshot.selectedFilePath,
+        diagnosticsByFile: {},
+      });
+    },
+    [applyLogicEditorFiles, generatedLogic, generatedSTFiles, logicHistoryProjectKey, selectedSTFilePath, stDiagnosticsByFile]
+  );
+
+  const handleExitLogicSnapshotPreview = useCallback((): void => {
+    if (!logicPreviewState || logicPreviewState.projectKey !== logicHistoryProjectKey) {
+      return;
+    }
+    applyLogicEditorFiles(logicPreviewState.baseFiles, {
+      selectedFilePath: logicPreviewState.baseSelectedFilePath,
+      diagnosticsByFile: logicPreviewState.baseDiagnosticsByFile,
+    });
+    setLogicPreviewState(null);
+  }, [applyLogicEditorFiles, logicHistoryProjectKey, logicPreviewState]);
+
+  const handleRestoreLogicSnapshot = useCallback(
+    (snapshot: LogicSnapshot): void => {
+      const restoreBase =
+        logicPreviewState && logicPreviewState.projectKey === logicHistoryProjectKey
+          ? {
+              files: logicPreviewState.baseFiles,
+              generatedLogic: logicPreviewState.baseGeneratedLogic,
+              selectedFilePath: logicPreviewState.baseSelectedFilePath,
+            }
+          : {
+              files: generatedSTFiles,
+              generatedLogic,
+              selectedFilePath: selectedSTFilePath,
+            };
+
+      if (restoreBase.files.length > 0) {
+        commitLogicSnapshot("restore-backup", {
+          files: restoreBase.files,
+          generatedLogic: restoreBase.generatedLogic,
+          selectedFilePath: restoreBase.selectedFilePath,
+          label: `Before restore · ${describeLogicSnapshotSource(snapshot.source)}`,
+        });
+      }
+
+      logicPendingChangeSourceRef.current = "restore";
+      setLogicPreviewState(null);
+      applyLogicEditorFiles(snapshot.files, {
+        selectedFilePath: snapshot.selectedFilePath,
+        diagnosticsByFile: {},
+      });
+      setStatusText(`Restored logic snapshot from ${new Date(snapshot.createdAt).toLocaleTimeString()}.`);
+    },
+    [applyLogicEditorFiles, commitLogicSnapshot, generatedLogic, generatedSTFiles, logicHistoryProjectKey, logicPreviewState, selectedSTFilePath]
+  );
+
+  useEffect(() => {
+    if (logicAutosaveTimerRef.current) {
+      window.clearTimeout(logicAutosaveTimerRef.current);
+      logicAutosaveTimerRef.current = null;
+    }
+    if (generatedSTFiles.length === 0) {
+      return;
+    }
+    if (logicPreviewState && logicPreviewState.projectKey === logicHistoryProjectKey) {
+      return;
+    }
+    if (logicLastSnapshotSignatureRef.current[logicHistoryProjectKey] === logicFilesSignature) {
+      logicPendingChangeSourceRef.current = null;
+      return;
+    }
+
+    const snapshotSource = logicPendingChangeSourceRef.current ?? (logicLastSnapshotSignatureRef.current[logicHistoryProjectKey] ? "manual-edit" : "generated");
+    logicAutosaveTimerRef.current = window.setTimeout(() => {
+      commitLogicSnapshot(snapshotSource);
+      logicPendingChangeSourceRef.current = null;
+      logicAutosaveTimerRef.current = null;
+    }, 1200);
+
+    return () => {
+      if (logicAutosaveTimerRef.current) {
+        window.clearTimeout(logicAutosaveTimerRef.current);
+        logicAutosaveTimerRef.current = null;
+      }
+    };
+  }, [commitLogicSnapshot, generatedSTFiles, logicFilesSignature, logicHistoryProjectKey, logicPreviewState]);
 
   const handleUpdateSelectedSTFileContent = useCallback(
-    (nextContent: string): void => {
+    (nextContent: string, options?: { source?: LogicSnapshotSource }): void => {
       setGeneratedSTFiles((previous) => {
         if (previous.length === 0) {
           return previous;
@@ -797,6 +1046,7 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
           return previous;
         }
 
+        logicPendingChangeSourceRef.current = options?.source ?? "manual-edit";
         setGeneratedLogic(serializeGeneratedLogicFiles(nextFiles));
         setSTDiagnosticsByFile((current) => {
           const nextDiagnostics = { ...current };
@@ -809,6 +1059,157 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
     },
     [selectedSTFilePath]
   );
+
+  const handleLogicPaletteJumpToLine = useCallback(
+    (lineNumber: number): void => {
+      if (!activeLogicFile) {
+        return;
+      }
+      setSTJumpLocation({
+        file: activeLogicFile.path,
+        line: Math.max(1, lineNumber),
+        column: 1,
+        nonce: Date.now(),
+      });
+    },
+    [activeLogicFile]
+  );
+
+  const handleLogicPaletteJumpToDefinition = useCallback(
+    (tagName: string): void => {
+      if (!activeLogicFile) {
+        return;
+      }
+      setTagIntelligenceCommand({
+        file: activeLogicFile.path,
+        tagName,
+        action: "jump-to-definition",
+        nonce: Date.now(),
+      });
+    },
+    [activeLogicFile]
+  );
+
+  const handleLogicPaletteHighlightUsages = useCallback(
+    (tagName: string): void => {
+      if (!activeLogicFile) {
+        return;
+      }
+      setTagIntelligenceCommand({
+        file: activeLogicFile.path,
+        tagName,
+        action: "highlight-all-usages",
+        nonce: Date.now(),
+      });
+    },
+    [activeLogicFile]
+  );
+
+  const handleLogicPaletteRenameTag = useCallback(
+    (from: string, to: string): boolean => {
+      if (!activeLogicFile) {
+        toast.error("No active logic file is available.", { className: "industrial-toast industrial-toast-error" });
+        return false;
+      }
+
+      const renameResult = renameIdentifierInLogic(activeLogicFile.content || "", from, to);
+      if (!renameResult.changed || renameResult.error) {
+        toast.error(renameResult.error || "Rename could not be applied.", { className: "industrial-toast industrial-toast-error" });
+        return false;
+      }
+
+      handleUpdateSelectedSTFileContent(renameResult.content, { source: "quick-edit" });
+      if (renameResult.changedLines[0]) {
+        setSTJumpLocation({
+          file: activeLogicFile.path,
+          line: renameResult.changedLines[0],
+          column: 1,
+          nonce: Date.now(),
+        });
+      }
+      toast.success(`Tag updated across ${renameResult.changeCount} instance${renameResult.changeCount === 1 ? "" : "s"}.`, {
+        className: "industrial-toast",
+      });
+      return true;
+    },
+    [activeLogicFile, handleUpdateSelectedSTFileContent]
+  );
+
+  const handleLogicTagRenameOrRemap = useCallback(
+    (params: { filePath: string; from: string; to: string; mode: "rename" | "remap" }): boolean => {
+      const normalizedPath = normalizeLogicPath(params.filePath);
+      const targetFile = generatedSTFiles.find((file) => normalizeLogicPath(file.path) === normalizedPath) ?? null;
+      if (!targetFile) {
+        toast.error("No active logic file is available.", { className: "industrial-toast industrial-toast-error" });
+        return false;
+      }
+
+      const renameResult = renameIdentifierInLogic(targetFile.content || "", params.from, params.to);
+      if (!renameResult.changed || renameResult.error) {
+        toast.error(renameResult.error || `${params.mode === "remap" ? "Remap" : "Rename"} could not be applied.`, {
+          className: "industrial-toast industrial-toast-error",
+        });
+        return false;
+      }
+
+      if (normalizeLogicPath(selectedSTFilePath || targetFile.path) !== normalizedPath) {
+        setSelectedSTFilePath(targetFile.path);
+      }
+      handleUpdateSelectedSTFileContent(renameResult.content, { source: "quick-edit" });
+      if (renameResult.changedLines[0]) {
+        setSTJumpLocation({
+          file: targetFile.path,
+          line: renameResult.changedLines[0],
+          column: 1,
+          nonce: Date.now(),
+        });
+      }
+      toast.success(
+        `${params.mode === "remap" ? "Tag remapped" : "Tag updated"} across ${renameResult.changeCount} instance${renameResult.changeCount === 1 ? "" : "s"}.`,
+        { className: "industrial-toast" }
+      );
+      return true;
+    },
+    [generatedSTFiles, handleUpdateSelectedSTFileContent, selectedSTFilePath]
+  );
+
+  const handleLogicTagTypeChange = useCallback(
+    (params: { filePath: string; tagName: string; nextType: string }): boolean => {
+      const normalizedPath = normalizeLogicPath(params.filePath);
+      const targetFile = generatedSTFiles.find((file) => normalizeLogicPath(file.path) === normalizedPath) ?? null;
+      if (!targetFile) {
+        toast.error("No active logic file is available.", { className: "industrial-toast industrial-toast-error" });
+        return false;
+      }
+
+      const updateResult = updateDeclarationTypeInLogic(targetFile.content || "", params.tagName, params.nextType);
+      if (!updateResult.changed || updateResult.error) {
+        toast.error(updateResult.error || "Type change could not be applied.", {
+          className: "industrial-toast industrial-toast-error",
+        });
+        return false;
+      }
+
+      if (normalizeLogicPath(selectedSTFilePath || targetFile.path) !== normalizedPath) {
+        setSelectedSTFilePath(targetFile.path);
+      }
+      handleUpdateSelectedSTFileContent(updateResult.content, { source: "quick-edit" });
+      if (updateResult.changedLines[0]) {
+        setSTJumpLocation({
+          file: targetFile.path,
+          line: updateResult.changedLines[0],
+          column: 1,
+          nonce: Date.now(),
+        });
+      }
+      toast.success(`Type updated on ${updateResult.changeCount} declaration${updateResult.changeCount === 1 ? "" : "s"}.`, {
+        className: "industrial-toast",
+      });
+      return true;
+    },
+    [generatedSTFiles, handleUpdateSelectedSTFileContent, selectedSTFilePath]
+  );
+
   const [, setLogicWarnings] = useState<string[]>([]);
   const [, setLogicValidationIssues] = useState<string[]>([]);
   const [, setSTVerificationData] = useState<STWorkspaceVerificationResponse | null>(null);
@@ -894,6 +1295,54 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
   const [simulationIssues, setSimulationIssues] = useState<SimulationTraceIssue[]>([]);
   const [selectedReplayTag, setSelectedReplayTag] = useState<string>("");
   const [statusText, setStatusText] = useState<string>("Loading projects...");
+  const handleLogicPaletteValidateCurrentFile = useCallback((): void => {
+    if (!activeLogicFile) {
+      toast.error("No active logic file is available.", { className: "industrial-toast industrial-toast-error" });
+      return;
+    }
+
+    const validationResult = validateStructuredTextIssues(activeLogicFile.content || "");
+    const normalizedPath = normalizeLogicPath(activeLogicFile.path);
+    const nextMarkers = validationResult.issues.map((issue) => ({
+      line: issue.line,
+      column: issue.column,
+      severity: issue.type === "unused_variable" || issue.type === "inconsistent_naming" ? "warning" : "error",
+      code: issue.type,
+      message: `${VALIDATION_ISSUE_LABELS[issue.type]}: ${issue.name}`,
+    })) satisfies STDiagnosticMarker[];
+
+    setSTDiagnosticsByFile((current) => {
+      const next = { ...current };
+      if (nextMarkers.length > 0) {
+        next[normalizedPath] = nextMarkers;
+        next[`control_logic/${normalizedPath}`] = nextMarkers;
+      } else {
+        delete next[normalizedPath];
+        delete next[`control_logic/${normalizedPath}`];
+      }
+      return next;
+    });
+    setLogicValidationIssues(
+      validationResult.issues.map((issue) => `${VALIDATION_ISSUE_LABELS[issue.type]} at line ${issue.line}: ${issue.name}`)
+    );
+
+    if (validationResult.issues[0]) {
+      setSTJumpLocation({
+        file: activeLogicFile.path,
+        line: validationResult.issues[0].line,
+        column: validationResult.issues[0].column,
+        nonce: Date.now(),
+      });
+      setStatusText(`Validation found ${validationResult.issues.length} issue(s) in ${activeLogicFile.path}.`);
+      toast.error(`Validation found ${validationResult.issues.length} issue(s).`, {
+        className: "industrial-toast industrial-toast-error",
+      });
+      return;
+    }
+
+    setStatusText(`Validation passed for ${activeLogicFile.path}.`);
+    toast.success("Validation passed.", { className: "industrial-toast" });
+  }, [activeLogicFile, setLogicValidationIssues, setStatusText]);
   const [selectedUploadFiles, setSelectedUploadFiles] = useState<string[]>([]);
   const [projectDocumentsById, setProjectDocumentsById] = useState<Record<string, ProjectDocument[]>>({});
   const [isParsing, setIsParsing] = useState<boolean>(false);
@@ -1824,6 +2273,8 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
           setSelectedSTFilePath((current) => current || SANDBOX_DEMO_ST_FILES[0]?.path || null);
           setSTDiagnosticsByFile({});
           setSTJumpLocation(null);
+          setTagIntelligenceCommand(null);
+          setLogicPreviewState(null);
           setShowLogic(true);
           setLogicWarnings([]);
           setLogicValidationIssues([]);
@@ -1917,6 +2368,8 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
       setSelectedSTFilePath(null);
       setSTDiagnosticsByFile({});
       setSTJumpLocation(null);
+      setTagIntelligenceCommand(null);
+      setLogicPreviewState(null);
       setLogicWarnings([]);
       setLogicValidationIssues([]);
       setSTVerificationData(null);
@@ -2179,6 +2632,8 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
           setGeneratedSTFiles(files);
           const mainFile = files.find((item) => item.path.toLowerCase() === "main.st");
           setSelectedSTFilePath((current) => current || mainFile?.path || files[0]?.path || null);
+          setTagIntelligenceCommand(null);
+          setLogicPreviewState(null);
           setShowLogic(true);
           queuePipelineToastCopy("st_generation", { success: "Saved logic loaded" });
           queuePipelineToastCopy("st_verification", { running: "Refreshing saved ST verification..." });
@@ -2198,6 +2653,8 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
           setSelectedSTFilePath(null);
           setSTDiagnosticsByFile({});
           setSTJumpLocation(null);
+          setTagIntelligenceCommand(null);
+          setLogicPreviewState(null);
           setLogicWarnings([]);
           setLogicValidationIssues([]);
           setSTVerificationData(null);
@@ -2211,6 +2668,8 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
         setSelectedSTFilePath(null);
         setSTDiagnosticsByFile({});
         setSTJumpLocation(null);
+        setTagIntelligenceCommand(null);
+        setLogicPreviewState(null);
         setLogicWarnings([]);
         setLogicValidationIssues([]);
         setSTVerificationData(null);
@@ -4151,6 +4610,27 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
             ? "Parse the plant model before generating control logic."
             : "Generate or refresh ST logic for the active project using the same endpoint that was previously on the top bar."
         }
+        secondaryActions={
+          hasGeneratedLogic ? (
+            <>
+              <button
+                className={`command-btn ${showLogicChanges ? "active" : ""}`.trim()}
+                type="button"
+                onClick={() => setShowLogicChanges((current) => !current)}
+              >
+                Show Changes
+              </button>
+              <LogicHistoryDropdown
+                snapshots={logicSnapshots}
+                lastSavedLabel={logicLastSavedLabel}
+                previewSnapshotId={logicPreviewState?.projectKey === logicHistoryProjectKey ? logicPreviewState.snapshotId : null}
+                onPreviewSnapshot={handlePreviewLogicSnapshot}
+                onRestoreSnapshot={handleRestoreLogicSnapshot}
+                onExitPreview={handleExitLogicSnapshotPreview}
+              />
+            </>
+          ) : null
+        }
         actionLabel={!hasParsedPlantModel ? "Parse Plant Model" : "Generate Logic"}
         onAction={() => {
           void handleToolbarAction(!hasParsedPlantModel ? "parse_plant_model" : "generate_logic");
@@ -4162,40 +4642,70 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
 
       {generatedSTFiles.length > 0 || generatedLogic.trim().length > 0 ? (
         <div className="control-logic-workspace">
-          <div className="control-logic-workspace-main">
-            <CodeExplorerPanel
-              files={generatedSTFiles}
-              bundledCode={generatedLogic}
-              selectedFilePath={selectedSTFilePath}
-              onSelectFile={setSelectedSTFilePath}
-              diagnosticsByFile={stDiagnosticsByFile}
-              jumpToLocation={stJumpLocation}
-              loading={pipelineStatuses.st_generation === "running"}
-              requiredPreviousStep="Generate ST"
-            />
-            <div className="control-logic-workspace-actions">
-              <button
-                className="command-btn primary"
-                type="button"
-                disabled={isSandboxMode ? exportLimitReached : !selectedProjectId}
-                onClick={() => {
-                  void handleToolbarAction("export_logic");
-                }}
-              >
-                {isSandboxMode ? "Export Logic (Sandbox)" : "Export Logic"}
-              </button>
+          <LogicEditorCommandPalette
+            isOpen={isLogicCommandPaletteOpen}
+            activeFile={activeLogicFile}
+            onClose={() => setIsLogicCommandPaletteOpen(false)}
+            onJumpToLine={handleLogicPaletteJumpToLine}
+            onJumpToDefinition={handleLogicPaletteJumpToDefinition}
+            onHighlightUsages={handleLogicPaletteHighlightUsages}
+            onRenameTag={handleLogicPaletteRenameTag}
+            onValidateCurrentFile={handleLogicPaletteValidateCurrentFile}
+          />
+          <div className="control-logic-workspace-row">
+            <div className="control-logic-workspace-main">
+              <CodeExplorerPanel
+                files={generatedSTFiles}
+                changeBaselineFiles={lastLogicSnapshot?.files ?? []}
+                bundledCode={generatedLogic}
+                selectedFilePath={selectedSTFilePath}
+                onSelectFile={setSelectedSTFilePath}
+                diagnosticsByFile={stDiagnosticsByFile}
+                jumpToLocation={stJumpLocation}
+                tagIntelligenceCommand={tagIntelligenceCommand}
+                onRenameTagAction={handleLogicTagRenameOrRemap}
+                onChangeTagTypeAction={handleLogicTagTypeChange}
+                showChangeHighlights={showLogicChanges}
+                loading={pipelineStatuses.st_generation === "running"}
+                requiredPreviousStep="Generate ST"
+              />
+            </div>
+            <div className={`control-logic-workspace-sidebar ${isControlLogicUtilityRailCollapsed ? "is-collapsed" : "is-expanded"}`.trim()}>
+              <div className="control-logic-workspace-sidebar-scroll">
+                <ControlLogicQuickEditPanel
+                  files={generatedSTFiles}
+                  selectedFilePath={selectedSTFilePath}
+                  diagnosticsByFile={stDiagnosticsByFile}
+                  loading={pipelineStatuses.st_generation === "running"}
+                  collapsed={isControlLogicUtilityRailCollapsed}
+                  onCollapsedChange={setIsControlLogicUtilityRailCollapsed}
+                  onUpdateSelectedFileContent={handleUpdateSelectedSTFileContent}
+                  onJumpToLocation={(location) => {
+                    setSTJumpLocation({ ...location, nonce: Date.now() });
+                  }}
+                />
+                {!isControlLogicUtilityRailCollapsed ? (
+                  <ControlLogicTagTablePanel
+                    files={generatedSTFiles}
+                    selectedFilePath={selectedSTFilePath}
+                    onDispatchEditorCommand={setTagIntelligenceCommand}
+                  />
+                ) : null}
+              </div>
             </div>
           </div>
-          <ControlLogicQuickEditPanel
-            files={generatedSTFiles}
-            selectedFilePath={selectedSTFilePath}
-            diagnosticsByFile={stDiagnosticsByFile}
-            loading={pipelineStatuses.st_generation === "running"}
-            onUpdateSelectedFileContent={handleUpdateSelectedSTFileContent}
-            onJumpToLocation={(location) => {
-              setSTJumpLocation({ ...location, nonce: Date.now() });
-            }}
-          />
+          <div className="control-logic-workspace-actions">
+            <button
+              className="command-btn primary"
+              type="button"
+              disabled={isSandboxMode ? exportLimitReached : !selectedProjectId}
+              onClick={() => {
+                void handleToolbarAction("export_logic");
+              }}
+            >
+              {isSandboxMode ? "Export Logic (Sandbox)" : "Export Logic"}
+            </button>
+          </div>
         </div>
       ) : (
         <div className="workspace-placeholder-panel">
@@ -4391,11 +4901,13 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
 
       <CommandBar
         rightActions={
-          isSandboxMode ? (
-            <a href={sandboxUpgradeUrl} className="command-btn primary" style={{ textDecoration: "none" }}>
-              Upgrade Now
-            </a>
-          ) : null
+          <>
+            {isSandboxMode ? (
+              <a href={sandboxUpgradeUrl} className="command-btn primary" style={{ textDecoration: "none" }}>
+                Upgrade Now
+              </a>
+            ) : null}
+          </>
         }
       />
 

@@ -4,6 +4,7 @@ type WorkspaceActionPanelProps = {
   eyebrow?: string;
   title: string;
   description: string;
+  secondaryActions?: ReactNode;
   actionLabel?: string;
   onAction?: () => void;
   actionDisabled?: boolean;
@@ -16,6 +17,7 @@ export default function WorkspaceActionPanel({
   eyebrow,
   title,
   description,
+  secondaryActions,
   actionLabel,
   onAction,
   actionDisabled = false,
@@ -30,11 +32,16 @@ export default function WorkspaceActionPanel({
           {eyebrow ? <p className="workspace-action-panel-eyebrow">{eyebrow}</p> : null}
           <h3>{title}</h3>
         </div>
-        {actionLabel && onAction ? (
-          <button className="command-btn primary workspace-action-panel-trigger" type="button" onClick={onAction} disabled={actionDisabled || actionLoading}>
-            {actionLoading ? <span className="btn-loader" aria-hidden="true" /> : null}
-            {actionLabel}
-          </button>
+        {secondaryActions || (actionLabel && onAction) ? (
+          <div className="workspace-action-panel-actions">
+            {secondaryActions ? <div className="workspace-action-panel-secondary-actions">{secondaryActions}</div> : null}
+            {actionLabel && onAction ? (
+              <button className="command-btn primary workspace-action-panel-trigger" type="button" onClick={onAction} disabled={actionDisabled || actionLoading}>
+                {actionLoading ? <span className="btn-loader" aria-hidden="true" /> : null}
+                {actionLabel}
+              </button>
+            ) : null}
+          </div>
         ) : null}
       </div>
       <p className="workspace-action-panel-description">{description}</p>
