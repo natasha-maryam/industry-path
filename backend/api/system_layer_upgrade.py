@@ -7,101 +7,15 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from services.auto_tag_mapper import auto_tag_mapper
-from services.live_connectors import live_connector_manager
 from services.relational_query_engine import relational_query_engine
 
 
 router = APIRouter(tags=["system-layer-upgrade"])
 
 
-class OPCUAConnectRequest(BaseModel):
-    endpoint: str
-    security_policy: str | None = None
-    auth_mode: str | None = None
-    username: str | None = None
-
-
-class MQTTConnectRequest(BaseModel):
-    host: str
-    port: int = 1883
-    client_id: str | None = None
-    topic: str | None = None
-
-
-class APIConnectRequest(BaseModel):
-    endpoint: str
-    method: str = "GET"
-    headers: dict[str, str] = Field(default_factory=dict)
-
-
 class AutoMapRequest(BaseModel):
     external_tags: list[str] = Field(default_factory=list)
     threshold: float | None = None
-
-
-@router.post("/system-layer/connect/opcua")
-def connect_opcua(payload: OPCUAConnectRequest) -> dict[str, Any]:
-    if not payload.endpoint.strip():
-        raise HTTPException(status_code=400, detail="OPC UA endpoint is required")
-    try:
-        data = live_connector_manager.configure_opcua(
-            endpoint=payload.endpoint,
-            security_policy=payload.security_policy,
-            auth_mode=payload.auth_mode,
-            username=payload.username,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    return {
-        "success": True,
-        "message": "OPC UA connector configured.",
-        "data": data,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-
-
-@router.post("/system-layer/connect/mqtt")
-def connect_mqtt(payload: MQTTConnectRequest) -> dict[str, Any]:
-    if not payload.host.strip():
-        raise HTTPException(status_code=400, detail="MQTT host is required")
-    try:
-        data = live_connector_manager.configure_mqtt(
-            host=payload.host,
-            port=payload.port,
-            client_id=payload.client_id,
-            topic=payload.topic,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    return {
-        "success": True,
-        "message": "MQTT connector configured.",
-        "data": data,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-
-
-@router.post("/system-layer/connect/api")
-def connect_api(payload: APIConnectRequest) -> dict[str, Any]:
-    if not payload.endpoint.strip():
-        raise HTTPException(status_code=400, detail="API endpoint is required")
-    try:
-        data = live_connector_manager.configure_api(
-            endpoint=payload.endpoint,
-            method=payload.method,
-            headers=payload.headers,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    return {
-        "success": True,
-        "message": "API connector configured.",
-        "data": data,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
 
 
 @router.post("/system-layer/auto-map")

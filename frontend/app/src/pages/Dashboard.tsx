@@ -20,7 +20,7 @@ import GraphWorkspace from "../components/GraphWorkspace";
 import IOMappingTablePanel from "../components/IOMappingTablePanel";
 import BillingSettingsPanel from "../components/BillingSettingsPanel";
 import MainWorkspaceRouter from "../components/MainWorkspaceRouter";
-import PlantGenieConnectorSettings from "../components/PlantGenieConnectorSettings";
+import DataConnectorSettings from "../components/DataConnectorSettings";
 import PlantGenieWorkspace from "../components/PlantGenieWorkspace";
 import SettingsGeneralPanel from "../components/SettingsGeneralPanel";
 import ControlLogicQuickEditPanel from "../components/ControlLogicQuickEditPanel";
@@ -34,7 +34,6 @@ import RuntimeValidationPanel from "../components/RuntimeValidationPanel";
 import SidebarModeProjects from "../components/SidebarModeProjects";
 import SidebarModeSettings from "../components/SidebarModeSettings";
 import type { SettingsNavItemId } from "../components/SettingsSidebar";
-import SimulationValidationPanel from "../components/SimulationValidationPanel";
 import VersionsWorkspace, { type VersionsWorkspaceSection } from "../components/versioning/VersionsWorkspace";
 import WorkspaceActionPanel from "../components/WorkspaceActionPanel";
 import type { RuntimeValidationPanelData } from "../components/RuntimeValidationPanel";
@@ -49,7 +48,6 @@ import {
   SANDBOX_DEMO_ST_FILES,
   SANDBOX_DEMO_SIMULATION_TRACE,
   SANDBOX_DEMO_SIMULATION_ISSUES,
-  SANDBOX_DEMO_SIMULATION_VALIDATION,
   buildSandboxExportPaywallReadiness,
 } from "../sandbox/demoState";
 import { getSandboxEmailFromLocation, isSandboxAppUrl } from "../sandbox/isSandboxAppUrl";
@@ -78,6 +76,7 @@ import {
   getVersionById,
 } from "../services/versioningApi";
 import type { VersionDiffResponse, VersionRecord } from "../types/versioning";
+import SimulationWorkspace from "../simulation/SimulationWorkspace";
 import {
   applySnapshotTrigger,
   applyRuntimeInputForce,
@@ -137,7 +136,6 @@ import {
   type RuntimeSignalType,
   type SimulationTraceIssue,
   type SimulationTracePoint,
-  type SimulationValidationPanelResponse,
   type ControlLoopRecord,
   type DirectPLCProtocol,
   type DirectPLCTargetRuntime,
@@ -655,7 +653,6 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
     activeRightTab: "Details",
   });
   const [activeSettingsItem, setActiveSettingsItem] = useState<SettingsNavItemId>("general");
-  const [plantGenieSeedTag, setPlantGenieSeedTag] = useState<string | null>(null);
   useEffect(() => {
     if (isSandboxMode && activeSettingsItem === "billing") {
       setActiveSettingsItem("general");
@@ -721,10 +718,9 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
     setUIShell((previous) => ({ ...previous, activeMainView: view }));
   };
 
-  const openPlantGenie = (seedTag?: string | null): void => {
+  const openPlantGenie = (): void => {
     setActiveProjectFeature(null);
     setActiveSidebarMode("plant_genie");
-    setPlantGenieSeedTag(typeof seedTag === "string" && seedTag.trim().length > 0 ? seedTag : null);
     setIsLeftPanelCollapsed(false);
   };
 
@@ -751,7 +747,7 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
       setActiveProjectFeature(null);
       return;
     }
-    if (item === "ai_connectors") {
+    if (item === "data_connectors") {
       setActiveProjectFeature(null);
       return;
     }
@@ -778,6 +774,7 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
 
 
   const [tracePath, setTracePath] = useState<string[]>([]);
+
   const [replayPoint, setReplayPoint] = useState<number>(64);
   const [, setShowLogic] = useState<boolean>(false);
   const [controlLogicCode, setControlLogicCode] = useState<string>("");
@@ -1289,10 +1286,9 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
   const [faultAnalysisInputMessage, setFaultAnalysisInputMessage] = useState<string | null>(null);
   const [isFaultAnalysisLoading, setIsFaultAnalysisLoading] = useState<boolean>(false);
   const [faultAnalysisError, setFaultAnalysisError] = useState<string | null>(null);
-  const [simulationValidationData, setSimulationValidationData] = useState<SimulationValidationPanelResponse | null>(null);
-  const [simulationFailedMessage, setSimulationFailedMessage] = useState<string | null>(null);
   const [simulationTrace, setSimulationTrace] = useState<SimulationTracePoint[]>([]);
   const [simulationIssues, setSimulationIssues] = useState<SimulationTraceIssue[]>([]);
+
   const [selectedReplayTag, setSelectedReplayTag] = useState<string>("");
   const [statusText, setStatusText] = useState<string>("Loading projects...");
   const handleLogicPaletteValidateCurrentFile = useCallback((): void => {
@@ -1532,6 +1528,7 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
     }
     if (stage === "runtime_validation") {
       setMonitoringPanelMode("runtime");
+      setActiveModule("diagnostics");
       setActiveBottomView("monitoring");
       setActiveTab("Diagnostics");
       return;
@@ -2170,7 +2167,6 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
   const refreshSimulationTraceData = useCallback(async (projectId?: string): Promise<void> => {
     const activeProjectId = projectId || selectedProjectId;
     if (!activeProjectId) {
-      setSimulationValidationData(null);
       setSimulationTrace([]);
       setSimulationIssues([]);
       setSelectedReplayTag("");
@@ -2188,16 +2184,13 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
           ? (monitoringSummary.simulation as Record<string, unknown>)
           : null;
       const issues = monitoringSimulation ? toSimulationIssueList(monitoringSimulation.issues) : analysisPayload?.issues ?? [];
-      const panelData = mapSimulationMetricsToPanelData(activeProjectId, monitoringSimulation ?? { issues });
 
-      setSimulationValidationData(panelData);
       setSimulationTrace(traceRows);
       setSimulationIssues(issues);
       if (traceRows.length === 0) {
         setSelectedReplayTag("");
       }
     } catch {
-      setSimulationValidationData(null);
       setSimulationTrace([]);
       setSimulationIssues([]);
       setSelectedReplayTag("");
@@ -2288,8 +2281,6 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
           setForcedTagNames([]);
           setRuntimeDiagnostics(null);
 
-          setSimulationValidationData(SANDBOX_DEMO_SIMULATION_VALIDATION);
-          setSimulationFailedMessage(null);
           setSimulationTrace(SANDBOX_DEMO_SIMULATION_TRACE);
           setSimulationIssues(SANDBOX_DEMO_SIMULATION_ISSUES);
           setSelectedReplayTag(SANDBOX_DEMO_SIMULATION_TRACE[0]?.tag ?? "");
@@ -2392,8 +2383,6 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
       setFaultAnalysisInputMessage(null);
       setIsFaultAnalysisLoading(false);
       setFaultAnalysisError(null);
-      setSimulationValidationData(null);
-      setSimulationFailedMessage(null);
       setSimulationTrace([]);
       setSimulationIssues([]);
       setControlLoops([]);
@@ -2412,7 +2401,6 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
       setSelectedSystemContextPayload(null);
       setSystemContextLoading(false);
       setSystemContextError(null);
-      setPlantGenieSeedTag(null);
       setPipelineStatuses(createInitialPipelineStatuses());
       setShowLogic(false);
       setUIShell((previous) => ({
@@ -2901,7 +2889,7 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
         setModuleState("monitoring", { state: "running", message: "Starting monitoring", updatedAt: new Date().toISOString() });
         const monitoringSummary = await getMonitoring(selectedProjectId);
         setModuleState("monitoring", { state: "success", message: "Monitoring started", updatedAt: new Date().toISOString() });
-        setActiveModule("monitoring");
+        setActiveModule("diagnostics");
         setMonitoringPanelMode("runtime");
         setActiveBottomView("monitoring");
         setStatusText(`Monitoring started (${Object.keys(monitoringSummary).length} signals summarized).`);
@@ -3684,11 +3672,6 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
 
   const currentProject = projects.find((project) => project.id === selectedProjectId);
   const selectedControlLoop = selectedControlLoopTag ? controlLoops.find((item) => item.loop_tag === selectedControlLoopTag) ?? null : null;
-  const plantGenieActiveTag =
-    (typeof plantGenieSeedTag === "string" && plantGenieSeedTag.trim().length > 0 ? plantGenieSeedTag : null) ??
-    selectedEngineeringTag ??
-    selectedControlLoopTag ??
-    (selectedNode || null);
   const resolvedEngineeringRowsForWorkspace =
     liveEngineeringRows.length > 0 ? liveEngineeringRows : unsTableRowsOverride ?? engineeringTableData?.rows ?? [];
   const resolvedEngineeringRowsSource = liveEngineeringRows.length > 0 ? "deterministic_behavior" : unsTableRowsOverride ? "uns_override" : "engineering_table_response";
@@ -3699,8 +3682,6 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
   const hasParsedPlantModel = graphNodes.length > 0 || resolvedEngineeringRowsForWorkspace.length > 0;
   const hasGeneratedLogic = generatedSTFiles.length > 0 || generatedLogic.trim().length > 0;
   const hasIOMapping = ioMappingRows.length > 0;
-  const hasSimulationResults = simulationTrace.length > 0 || Boolean(simulationValidationData);
-
   useEffect(() => {
     if (selectedEngineeringTag && !resolvedEngineeringRowsForWorkspace.some((row) => row.tag === selectedEngineeringTag)) {
       setSelectedEngineeringTag(null);
@@ -3709,7 +3690,6 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
 
   useEffect(() => {
     setSelectedEngineeringTag(null);
-    setPlantGenieSeedTag(null);
   }, [selectedProjectId]);
 
   useEffect(() => {
@@ -3822,19 +3802,11 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
       setActiveMainView("simulation");
       return;
     }
-    if (moduleId === "runtime") {
+    if (moduleId === "runtime" || moduleId === "monitoring" || moduleId === "diagnostics") {
       setMonitoringPanelMode("runtime");
       setActiveBottomView("monitoring");
       setActiveMainView("monitoring");
       return;
-    }
-    if (moduleId === "monitoring") {
-      setMonitoringPanelMode("runtime");
-      setActiveBottomView("monitoring");
-      setActiveMainView("monitoring");
-      return;
-      return;
-    setActiveMainView("monitoring");
     }
   };
 
@@ -4065,102 +4037,6 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
     });
   };
 
-  const toSimulationScenarioStatus = (value: unknown): "idle" | "running" | "success" | "failed" | "warning" => {
-    if (value === "running" || value === "success" || value === "failed" || value === "warning") {
-      return value;
-    }
-    if (value === "completed" || value === "passed" || value === "pass") {
-      return "success";
-    }
-    if (value === "error" || value === "fail") {
-      return "failed";
-    }
-    return "idle";
-  };
-
-  const mapSimulationMetricsToPanelData = (
-    projectId: string,
-    metricsSource: unknown,
-    validatedAt?: string
-  ): SimulationValidationPanelResponse | null => {
-    if (!metricsSource || typeof metricsSource !== "object") {
-      return null;
-    }
-
-    const metrics = metricsSource as Record<string, unknown>;
-    const issues = toSimulationIssueList(metrics.issues);
-    const rawScenarios = Array.isArray(metrics.scenarios) ? metrics.scenarios : [];
-
-    const scenarios = rawScenarios.flatMap((scenario, index) => {
-      if (!scenario || typeof scenario !== "object") {
-        return [];
-      }
-
-      const row = scenario as Record<string, unknown>;
-      const scenarioId = typeof row.scenario_id === "string" && row.scenario_id.trim().length > 0 ? row.scenario_id : `simulation-scenario-${index + 1}`;
-      const scenarioName =
-        typeof row.scenario_name === "string" && row.scenario_name.trim().length > 0 ? row.scenario_name : `Scenario ${index + 1}`;
-
-      return [{
-        scenario_id: scenarioId,
-        scenario_name: scenarioName,
-        status: toSimulationScenarioStatus(row.status),
-        cycle_time_ms: typeof row.cycle_time_ms === "number" ? row.cycle_time_ms : 0,
-        duration_s: typeof row.duration_s === "number" ? row.duration_s : 0,
-        alarms_triggered: typeof row.alarms_triggered === "number" ? row.alarms_triggered : issues.length,
-        message:
-          typeof row.message === "string" && row.message.trim().length > 0
-            ? row.message
-            : issues.length > 0
-              ? `Trace analysis found ${issues.length} issue(s).`
-              : "Trace analysis completed.",
-      }];
-    });
-
-    const normalizedScenarios =
-      scenarios.length > 0
-        ? scenarios
-        : issues.length > 0
-          ? [{
-              scenario_id: "trace_stability",
-              scenario_name: "Signal Stability Check",
-              status: "warning" as const,
-              cycle_time_ms: 100,
-              duration_s: 3,
-              alarms_triggered: issues.length,
-              message: `Trace analysis found ${issues.length} issue(s).`,
-            }]
-          : [];
-
-    if (normalizedScenarios.length === 0) {
-      return null;
-    }
-
-    const scenariosPassed = normalizedScenarios.filter((scenario) => scenario.status === "success").length;
-    const scenariosFailed = normalizedScenarios.filter((scenario) => scenario.status === "failed").length;
-    const scenariosWarning = normalizedScenarios.filter((scenario) => scenario.status === "warning").length;
-
-    const overallStatus: "idle" | "running" | "success" | "failed" | "warning" =
-      scenariosFailed > 0
-        ? "failed"
-        : normalizedScenarios.some((scenario) => scenario.status === "running")
-          ? "running"
-          : scenariosWarning > 0 || issues.length > 0
-            ? "warning"
-            : "success";
-
-    return {
-      project_id: projectId,
-      simulation_run_id: `simulation-${Date.now()}`,
-      validated_at: validatedAt || new Date().toISOString(),
-      overall_status: overallStatus,
-      scenarios_passed: scenariosPassed,
-      scenarios_failed: scenariosFailed,
-      scenarios_warning: scenariosWarning,
-      scenarios: normalizedScenarios,
-    };
-  };
-
   const refreshRuntimeTags = async (): Promise<void> => {
     try {
       const tags = await getRuntimeTags();
@@ -4239,6 +4115,7 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
     setIsRuntimeActionBusy(true);
     setRuntimeFailedMessage(null);
     updatePipelineStage("runtime_validation", "running");
+    setActiveModule("diagnostics");
     setMonitoringPanelMode("runtime");
     setActiveBottomView("monitoring");
 
@@ -4717,51 +4594,78 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
   );
 
   const simulationWorkspaceView = (
-    <div className="workspace-module-stack">
+    <SimulationWorkspace
+      runPanel={{
+        title: "Run simulation",
+        description: "Run the active simulation while the live and historical data views below remain driven only by the selected Data Connector profile and the unified tag/state store.",
+        actionLabel: "Run Simulation",
+        onAction: () => {
+          void handleToolbarAction("run_simulation");
+        },
+        actionDisabled: Boolean(disabledActions.run_simulation),
+        actionLoading: loadingAction === "run_simulation",
+        progressLines: getProgressLinesForModules("simulation"),
+      }}
+    />
+  );
+
+  const runtimeAction = activeModule === "monitoring" ? "start_monitoring" : "deploy_runtime";
+  const runtimeDeploymentPanel = (
+    <>
       <WorkspaceActionPanel
-        eyebrow="Simulation"
-        title={!hasParsedPlantModel ? "Plant model required" : "Run simulation"}
+        eyebrow={activeModule === "monitoring" ? "Monitoring" : "Runtime"}
+        title={!hasIOMapping ? "IO mapping required" : activeModule === "monitoring" ? "Start monitoring" : "Deploy runtime"}
         description={
-          !hasParsedPlantModel
-            ? "Parse the plant model before running the simulation flow."
-            : "Run the existing simulation endpoint for the active project from here instead of the removed top bar button."
+          !hasIOMapping
+            ? "Generate IO mapping before deploying or starting runtime monitoring."
+            : activeModule === "monitoring"
+              ? "Start monitoring using the same endpoint previously exposed in the top bar."
+              : "Deploy runtime for the active project from this middle-panel trigger."
         }
-        actionLabel={!hasParsedPlantModel ? "Parse Plant Model" : "Run Simulation"}
+        actionLabel={!hasIOMapping ? "Generate IO Mapping" : activeModule === "monitoring" ? "Start Monitoring" : "Deploy Runtime"}
         onAction={() => {
-          void handleToolbarAction(!hasParsedPlantModel ? "parse_plant_model" : "run_simulation");
+          void handleToolbarAction(!hasIOMapping ? "generate_io_mapping" : runtimeAction);
         }}
-        actionDisabled={Boolean(disabledActions[!hasParsedPlantModel ? "parse_plant_model" : "run_simulation"])}
-        actionLoading={loadingAction === (!hasParsedPlantModel ? "parse_plant_model" : "run_simulation")}
-        progressLines={getProgressLinesForModules("plant_model", "simulation")}
+        actionDisabled={Boolean(disabledActions[!hasIOMapping ? "generate_io_mapping" : runtimeAction])}
+        actionLoading={loadingAction === (!hasIOMapping ? "generate_io_mapping" : runtimeAction)}
+        progressLines={getProgressLinesForModules("io_mapping", "runtime", "monitoring")}
       />
 
-      {hasSimulationResults ? (
-        <SimulationValidationPanel
-          data={simulationValidationData}
+      {runtimeValidationData || runtimeFailedMessage ? (
+        <RuntimeValidationPanel
+          data={runtimeValidationData}
+          loading={isRuntimeStateLoading}
           actionLoading={isRuntimeActionBusy}
-          failedMessage={simulationFailedMessage}
+          failedMessage={runtimeFailedMessage}
+          onDeploy={() => {
+            void handleConfirmRuntimeDeploy();
+          }}
+          onStart={() => {
+            void handleRuntimeStart();
+          }}
+          onStop={() => {
+            void handleRuntimeStop();
+          }}
           forceableInputs={runtimeForceableInputs}
           onApplyInputForce={handleApplyRuntimeInputForce}
           onClearInputForce={handleClearRuntimeInputForce}
           onRefreshInputForceState={refreshRuntimeForceState}
           onRunEvaluationCycle={handleRunRuntimeEvaluationCycle}
-          onRetry={() => {
-            void handleToolbarAction("run_simulation");
-          }}
-          requiredPreviousStep="Runtime Check"
+          requiredPreviousStep="IO Mapping"
         />
       ) : (
         <div className="workspace-placeholder-panel">
-          <h3>No simulation run yet</h3>
-          <p>Run a simulation from the trigger above to populate this workspace.</p>
+          <h3>Runtime has not been started yet</h3>
+          <p>Deploy runtime or start monitoring from the trigger above once IO mapping is available.</p>
         </div>
       )}
-    </div>
+    </>
   );
 
-  const runtimeAction = activeModule === "monitoring" ? "start_monitoring" : "deploy_runtime";
   const diagnosticsWorkspaceView = (
     <div className="workspace-module-stack">
+      {runtimeDeploymentPanel}
+
       <section className="workspace-documents-list-panel">
         <div className="workspace-documents-list-header">
           <h3>Diagnostics</h3>
@@ -4833,53 +4737,7 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
 
   const runtimeWorkspaceView = (
     <div className="workspace-module-stack">
-      <WorkspaceActionPanel
-        eyebrow={activeModule === "monitoring" ? "Monitoring" : "Runtime"}
-        title={!hasIOMapping ? "IO mapping required" : activeModule === "monitoring" ? "Start monitoring" : "Deploy runtime"}
-        description={
-          !hasIOMapping
-            ? "Generate IO mapping before deploying or starting runtime monitoring."
-            : activeModule === "monitoring"
-              ? "Start monitoring using the same endpoint previously exposed in the top bar."
-              : "Deploy runtime for the active project from this middle-panel trigger."
-        }
-        actionLabel={!hasIOMapping ? "Generate IO Mapping" : activeModule === "monitoring" ? "Start Monitoring" : "Deploy Runtime"}
-        onAction={() => {
-          void handleToolbarAction(!hasIOMapping ? "generate_io_mapping" : runtimeAction);
-        }}
-        actionDisabled={Boolean(disabledActions[!hasIOMapping ? "generate_io_mapping" : runtimeAction])}
-        actionLoading={loadingAction === (!hasIOMapping ? "generate_io_mapping" : runtimeAction)}
-        progressLines={getProgressLinesForModules("io_mapping", "runtime", "monitoring")}
-      />
-
-      {runtimeValidationData || runtimeFailedMessage ? (
-        <RuntimeValidationPanel
-          data={runtimeValidationData}
-          loading={isRuntimeStateLoading}
-          actionLoading={isRuntimeActionBusy}
-          failedMessage={runtimeFailedMessage}
-          onDeploy={() => {
-            void handleConfirmRuntimeDeploy();
-          }}
-          onStart={() => {
-            void handleRuntimeStart();
-          }}
-          onStop={() => {
-            void handleRuntimeStop();
-          }}
-          forceableInputs={runtimeForceableInputs}
-          onApplyInputForce={handleApplyRuntimeInputForce}
-          onClearInputForce={handleClearRuntimeInputForce}
-          onRefreshInputForceState={refreshRuntimeForceState}
-          onRunEvaluationCycle={handleRunRuntimeEvaluationCycle}
-          requiredPreviousStep="IO Mapping"
-        />
-      ) : (
-        <div className="workspace-placeholder-panel">
-          <h3>Runtime has not been started yet</h3>
-          <p>Deploy runtime or start monitoring from the trigger above once IO mapping is available.</p>
-        </div>
-      )}
+      {runtimeDeploymentPanel}
     </div>
   );
 
@@ -5612,12 +5470,11 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
                   <PlantGenieWorkspace
                     hasProject={Boolean(selectedProjectId)}
                     projectName={currentProject?.name ?? null}
-                    selectedTag={plantGenieActiveTag}
                   />
                 ) : activeActivity === "settings" && activeSettingsItem === "general" ? (
                   <SettingsGeneralPanel />
-                ) : activeActivity === "settings" && activeSettingsItem === "ai_connectors" ? (
-                  <PlantGenieConnectorSettings />
+                ) : activeActivity === "settings" && activeSettingsItem === "data_connectors" ? (
+                  <DataConnectorSettings />
                 ) : activeActivity === "settings" && activeSettingsItem === "export_integrations" ? (
                   <section className="graph-shell">
                     <div className="main-workspace-view billing-settings-view plant-genie-connectors-view">

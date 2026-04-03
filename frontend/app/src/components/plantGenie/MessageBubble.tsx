@@ -1,4 +1,3 @@
-import PlantGenieIcon from "../icons/PlantGenieIcon";
 import UserAvatar from "../icons/UserAvatar";
 
 export type PlantGenieMessage = {
@@ -18,7 +17,7 @@ export default function MessageBubble({ message, isThinking = false }: MessageBu
   return (
     <div className={`plant-genie-message-row ${isAssistant ? "is-assistant" : "is-user"}`}>
       <div className={`plant-genie-message-avatar ${isAssistant ? "is-assistant" : "is-user"}`} aria-hidden="true">
-        {isAssistant ? <PlantGenieIcon size={34} /> : <UserAvatar size={34} />}
+        {isAssistant ? <img className="plant-genie-message-avatar-image" src="/industrypath.jpeg" alt="" /> : <UserAvatar size={34} />}
       </div>
 
       <div className={`plant-genie-message-bubble-wrap ${isAssistant ? "is-assistant" : "is-user"}`}>

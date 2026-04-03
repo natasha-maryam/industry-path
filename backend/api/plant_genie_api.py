@@ -6,6 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from core.security import AuthContext, get_auth_context
 from models.plant_genie import (
+    PlantGenieAIBindingConnectResponse,
+    PlantGenieAIBindingRequest,
+    PlantGenieAIBindingResponse,
     PlantGenieAIConnectorCreateRequest,
     PlantGenieAIConnectorDeleteResponse,
     PlantGenieAIConnectorListResponse,
@@ -15,12 +18,28 @@ from models.plant_genie import (
     PlantGeniePlantDataConnectorCreateRequest,
     PlantGeniePlantDataConnectorDeleteResponse,
     PlantGeniePlantDataConnectorListResponse,
+    PlantGeniePlantDataOPCUABrowseRequest,
+    PlantGeniePlantDataOPCUABrowseResponse,
     PlantGeniePlantDataConnectorResponse,
     PlantGeniePlantDataConnectorTestResponse,
+    PlantGeniePlantDataHistorianBrowseRequest,
+    PlantGeniePlantDataHistorianBrowseResponse,
+    PlantGeniePlantDataHistorianBrowseItemResponse,
+    PlantGeniePlantDataHistorianPreviewRequest,
+    PlantGeniePlantDataHistorianPreviewResponse,
+    PlantGeniePlantDataModbusPreviewRequest,
+    PlantGeniePlantDataModbusPreviewResponse,
+    PlantGeniePlantDataSQLColumnResponse,
+    PlantGeniePlantDataSQLPreviewRequest,
+    PlantGeniePlantDataSQLPreviewResponse,
+    PlantGeniePlantDataSQLSchemaRequest,
+    PlantGeniePlantDataSQLSchemaResponse,
+    PlantGeniePlantDataSQLTableResponse,
     PlantGeniePlantDataConnectorUpdateRequest,
     PlantGenieQueryRequest,
     PlantGenieQueryResponse,
 )
+from services.plant_genie_ai_binding_service import plant_genie_ai_binding_service
 from services.plant_genie_connector_service import (
     PlantGenieConnectorInvocationError,
     PlantGenieConnectorNotConfiguredError,
@@ -127,6 +146,31 @@ def activate_ai_connector(
         raise HTTPException(status_code=404, detail="Connector not found") from exc
 
 
+@router.get("/connectors/ai-binding", response_model=PlantGenieAIBindingResponse)
+def get_ai_binding(
+    context: AuthContext = Depends(get_auth_context),
+) -> PlantGenieAIBindingResponse:
+    return plant_genie_ai_binding_service.get_binding(context.user_id)
+
+
+@router.put("/connectors/ai-binding", response_model=PlantGenieAIBindingConnectResponse)
+def upsert_ai_binding(
+    payload: PlantGenieAIBindingRequest,
+    context: AuthContext = Depends(get_auth_context),
+) -> PlantGenieAIBindingConnectResponse:
+    try:
+        binding = plant_genie_ai_binding_service.upsert_binding(context.user_id, payload)
+        connector_name = binding.data_source_connector_name or "selected data source"
+        return PlantGenieAIBindingConnectResponse(
+            message=f"AI binding connected to {connector_name}.",
+            binding=binding,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Plant data connector not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/connectors/plant-data", response_model=PlantGeniePlantDataConnectorListResponse)
 def list_plant_data_connectors(context: AuthContext = Depends(get_auth_context)) -> PlantGeniePlantDataConnectorListResponse:
     connectors = plant_genie_plant_data_connector_service.list_connectors(context.user_id)
@@ -205,6 +249,106 @@ def test_plant_data_connector(
         raise HTTPException(status_code=404, detail="Plant data connector not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/connectors/plant-data/opcua/browse", response_model=PlantGeniePlantDataOPCUABrowseResponse)
+def browse_plant_data_opcua(
+    payload: PlantGeniePlantDataOPCUABrowseRequest,
+    context: AuthContext = Depends(get_auth_context),
+) -> PlantGeniePlantDataOPCUABrowseResponse:
+    _ = context
+    try:
+        result = plant_genie_plant_data_runtime.browse_opcua(payload.config, payload.secrets, payload.node_id)
+        return PlantGeniePlantDataOPCUABrowseResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/connectors/plant-data/sql/schema", response_model=PlantGeniePlantDataSQLSchemaResponse)
+def plant_data_sql_schema(
+    payload: PlantGeniePlantDataSQLSchemaRequest,
+    context: AuthContext = Depends(get_auth_context),
+) -> PlantGeniePlantDataSQLSchemaResponse:
+    _ = context
+    try:
+        result = plant_genie_plant_data_runtime.sql_schema(
+            payload.config,
+            payload.secrets,
+            table_name=payload.table_name,
+            table_schema=payload.table_schema,
+        )
+        return PlantGeniePlantDataSQLSchemaResponse(
+            tables=[PlantGeniePlantDataSQLTableResponse(**table) for table in result.get("tables", [])],
+            columns=[PlantGeniePlantDataSQLColumnResponse(**column) for column in result.get("columns", [])],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/connectors/plant-data/sql/preview", response_model=PlantGeniePlantDataSQLPreviewResponse)
+def preview_plant_data_sql(
+    payload: PlantGeniePlantDataSQLPreviewRequest,
+    context: AuthContext = Depends(get_auth_context),
+) -> PlantGeniePlantDataSQLPreviewResponse:
+    _ = context
+    try:
+        result = plant_genie_plant_data_runtime.preview_sql(payload.config, payload.secrets, limit=payload.limit)
+        return PlantGeniePlantDataSQLPreviewResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/connectors/plant-data/modbus/preview", response_model=PlantGeniePlantDataModbusPreviewResponse)
+def preview_plant_data_modbus(
+    payload: PlantGeniePlantDataModbusPreviewRequest,
+    context: AuthContext = Depends(get_auth_context),
+) -> PlantGeniePlantDataModbusPreviewResponse:
+    _ = context
+    try:
+        result = plant_genie_plant_data_runtime.preview_modbus(payload.config, payload.secrets)
+        return PlantGeniePlantDataModbusPreviewResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/connectors/plant-data/historian/browse", response_model=PlantGeniePlantDataHistorianBrowseResponse)
+def browse_plant_data_historian(
+    payload: PlantGeniePlantDataHistorianBrowseRequest,
+    context: AuthContext = Depends(get_auth_context),
+) -> PlantGeniePlantDataHistorianBrowseResponse:
+    _ = context
+    try:
+        result = plant_genie_plant_data_runtime.browse_historian(payload.config, payload.secrets, query=payload.query, limit=payload.limit)
+        return PlantGeniePlantDataHistorianBrowseResponse(
+            items=[PlantGeniePlantDataHistorianBrowseItemResponse(**item) for item in result.get("items", [])]
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/connectors/plant-data/historian/preview", response_model=PlantGeniePlantDataHistorianPreviewResponse)
+def preview_plant_data_historian(
+    payload: PlantGeniePlantDataHistorianPreviewRequest,
+    context: AuthContext = Depends(get_auth_context),
+) -> PlantGeniePlantDataHistorianPreviewResponse:
+    _ = context
+    try:
+        result = plant_genie_plant_data_runtime.preview_historian(payload.config, payload.secrets)
+        return PlantGeniePlantDataHistorianPreviewResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/connectors/plant-data/{connector_id}/enable", response_model=PlantGeniePlantDataConnectorResponse)

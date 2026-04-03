@@ -29,17 +29,17 @@ export default function CopilotPanelProduction({
   const handleRun = async (): Promise<void> => {
     const trimmedCommand = command.trim();
     if (!trimmedCommand) {
-      setNotice("Connect AI to use Automation Copilot.");
+      setNotice("Enter a prompt to use Automation Copilot with the active connector setup.");
       return;
     }
 
-    setNotice("Connect AI to use Automation Copilot.");
+    setNotice("Automation Copilot is not wired to execute prompts from this panel yet.");
   };
 
   return (
     <div className="flex min-w-0 flex-col gap-2.5 pb-1 text-[11px]">
       <div className="text-[10px] text-slate-500">
-        Connect an AI provider to enable Automation Copilot responses.
+        This panel uses the active AI connector configured in Settings &gt; Data Connectors.
       </div>
 
       <form
@@ -52,7 +52,7 @@ export default function CopilotPanelProduction({
         <input
           value={command}
           onChange={(event) => setCommand(event.target.value)}
-          placeholder="Enter a prompt after connecting AI"
+          placeholder="Enter a prompt"
           className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-[11px] text-slate-900 outline-none ring-0 transition focus:border-slate-500"
         />
         <button type="submit" className="command-btn primary min-w-[5.5rem] px-3 py-1.5 text-[11px]">
@@ -69,7 +69,7 @@ export default function CopilotPanelProduction({
 
       <div className="min-w-0 rounded-xl border border-slate-200 bg-slate-50 p-2.5">
         <div className="flex min-h-[96px] items-center justify-center text-[11px] text-slate-400">
-          No response available. Connect AI to use Automation Copilot.
+          No response available in this panel.
         </div>
       </div>
     </div>

@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
+from db.influx import influx_client
 from services.uns_core import uns_core
 
 
@@ -39,6 +40,11 @@ class UNSScriptRequest(BaseModel):
 class UNSConnectorRequest(BaseModel):
     connector_type: str
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class UNSHistoryRequest(BaseModel):
+    tags: list[str] = Field(default_factory=list)
+    points: int = Field(default=12, ge=1, le=240)
 
 
 class UNSWebSocketHub:
@@ -136,6 +142,21 @@ def uns_rows() -> dict[str, Any]:
     return {
         "success": True,
         "message": "UNS rows fetched.",
+        "data": {
+            "rows": rows,
+            "count": len(rows),
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.post("/uns/history")
+def uns_history(payload: UNSHistoryRequest) -> dict[str, Any]:
+    normalized_tags = [str(tag).strip() for tag in payload.tags if str(tag).strip()]
+    rows = influx_client.get_signal_history(normalized_tags, points=payload.points)
+    return {
+        "success": True,
+        "message": "UNS history fetched.",
         "data": {
             "rows": rows,
             "count": len(rows),

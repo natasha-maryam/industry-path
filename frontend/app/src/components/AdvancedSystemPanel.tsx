@@ -1,8 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
 import {
-  connectAdvancedAPI,
-  connectAdvancedMQTT,
-  connectAdvancedOPCUA,
   getAdvancedBottlenecks,
   getAdvancedLoops,
   getAdvancedTrace,
@@ -24,16 +21,12 @@ const toLines = (value: string): string[] => {
 };
 
 export default function AdvancedSystemPanel({ projectId, onSelectTag, onTracePath }: AdvancedSystemPanelProps) {
-  const [opcEndpoint, setOpcEndpoint] = useState<string>("");
-  const [mqttHost, setMqttHost] = useState<string>("");
-  const [mqttPort, setMqttPort] = useState<number>(1883);
-  const [apiEndpoint, setApiEndpoint] = useState<string>("");
   const [externalTagsInput, setExternalTagsInput] = useState<string>("");
   const [traceTagInput, setTraceTagInput] = useState<string>("");
 
   const [bottlenecks, setBottlenecks] = useState<SystemBottleneck[]>([]);
   const [loopsCount, setLoopsCount] = useState<number | null>(null);
-  const [statusText, setStatusText] = useState<string>("Advanced system layer idle.");
+  const [statusText, setStatusText] = useState<string>("Advanced system analysis idle.");
   const [errorText, setErrorText] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [lastPayload, setLastPayload] = useState<Record<string, unknown> | null>(null);
@@ -49,39 +42,6 @@ export default function AdvancedSystemPanel({ projectId, onSelectTag, onTracePat
       setBusyAction(null);
     }
   }, []);
-
-  const handleOPCUAConnect = useCallback(() => {
-    void withBusy("OPC UA connect", async () => {
-      if (!opcEndpoint.trim()) {
-        throw new Error("OPC UA endpoint is required.");
-      }
-      const data = await connectAdvancedOPCUA({ endpoint: opcEndpoint });
-      setStatusText(String(data.message ?? "OPC UA connector configured."));
-      setLastPayload({ action: "opcua", data });
-    });
-  }, [opcEndpoint, withBusy]);
-
-  const handleMQTTConnect = useCallback(() => {
-    void withBusy("MQTT connect", async () => {
-      if (!mqttHost.trim()) {
-        throw new Error("MQTT host is required.");
-      }
-      const data = await connectAdvancedMQTT({ host: mqttHost, port: mqttPort });
-      setStatusText(String(data.message ?? "MQTT connector configured."));
-      setLastPayload({ action: "mqtt", data });
-    });
-  }, [mqttHost, mqttPort, withBusy]);
-
-  const handleAPIConnect = useCallback(() => {
-    void withBusy("API connect", async () => {
-      if (!apiEndpoint.trim()) {
-        throw new Error("API endpoint is required.");
-      }
-      const data = await connectAdvancedAPI({ endpoint: apiEndpoint });
-      setStatusText(String(data.message ?? "API connector configured."));
-      setLastPayload({ action: "api", data });
-    });
-  }, [apiEndpoint, withBusy]);
 
   const handleAutoMap = useCallback(() => {
     void withBusy("Auto-map", async () => {
@@ -141,53 +101,6 @@ export default function AdvancedSystemPanel({ projectId, onSelectTag, onTracePat
       <div className="mb-2 flex items-center justify-between gap-2">
         <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-700">Advanced System Layer</h4>
         <span className="text-[11px] text-slate-500">{busyAction ? `${busyAction}...` : statusText}</span>
-      </div>
-
-      <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-        <div className="space-y-1 rounded border border-slate-200 bg-slate-50 p-2">
-          <p className="text-[11px] font-semibold text-slate-700">OPC UA</p>
-          <input
-            value={opcEndpoint}
-            onChange={(event) => setOpcEndpoint(event.target.value)}
-            placeholder="opc.tcp://localhost:4840"
-            className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-[11px]"
-          />
-          <button type="button" className="command-btn" onClick={handleOPCUAConnect}>
-            {busyAction === "OPC UA connect" ? "Connecting..." : "Connect OPC UA"}
-          </button>
-        </div>
-
-        <div className="space-y-1 rounded border border-slate-200 bg-slate-50 p-2">
-          <p className="text-[11px] font-semibold text-slate-700">MQTT</p>
-          <input
-            value={mqttHost}
-            onChange={(event) => setMqttHost(event.target.value)}
-            placeholder="localhost"
-            className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-[11px]"
-          />
-          <input
-            value={String(mqttPort)}
-            onChange={(event) => setMqttPort(Number(event.target.value) || 1883)}
-            placeholder="1883"
-            className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-[11px]"
-          />
-          <button type="button" className="command-btn" onClick={handleMQTTConnect}>
-            {busyAction === "MQTT connect" ? "Connecting..." : "Connect MQTT"}
-          </button>
-        </div>
-
-        <div className="space-y-1 rounded border border-slate-200 bg-slate-50 p-2">
-          <p className="text-[11px] font-semibold text-slate-700">API</p>
-          <input
-            value={apiEndpoint}
-            onChange={(event) => setApiEndpoint(event.target.value)}
-            placeholder="https://example/api"
-            className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-[11px]"
-          />
-          <button type="button" className="command-btn" onClick={handleAPIConnect}>
-            {busyAction === "API connect" ? "Connecting..." : "Connect API"}
-          </button>
-        </div>
       </div>
 
       <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">

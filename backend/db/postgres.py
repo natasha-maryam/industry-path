@@ -648,6 +648,27 @@ class PostgresClient:
           ON plant_genie_plant_data_connectors(enabled, updated_at DESC);
         """
 
+        create_plant_genie_ai_bindings_sql = """
+        CREATE TABLE IF NOT EXISTS plant_genie_ai_bindings (
+          id UUID PRIMARY KEY,
+          user_id VARCHAR NOT NULL,
+          data_source_connector_id UUID NOT NULL,
+          config_json TEXT NOT NULL,
+          created_at TIMESTAMP NOT NULL,
+          updated_at TIMESTAMP NOT NULL
+        );
+        """
+
+        create_plant_genie_ai_bindings_user_unique_sql = """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_plant_genie_ai_bindings_user_unique
+          ON plant_genie_ai_bindings(user_id);
+        """
+
+        create_plant_genie_ai_bindings_connector_idx_sql = """
+        CREATE INDEX IF NOT EXISTS idx_plant_genie_ai_bindings_connector
+          ON plant_genie_ai_bindings(data_source_connector_id, updated_at DESC);
+        """
+
         statements: list[tuple[str, str]] = [
             ("create projects table", create_projects_sql),
             ("alter projects industry column", alter_projects_industry_sql),
@@ -769,6 +790,9 @@ class PostgresClient:
             ),
             ("create plant_genie_plant_data_connectors user index", create_plant_genie_plant_data_connectors_user_idx_sql),
             ("create plant_genie_plant_data_connectors enabled index", create_plant_genie_plant_data_connectors_enabled_idx_sql),
+            ("create plant_genie_ai_bindings table", create_plant_genie_ai_bindings_sql),
+            ("create plant_genie_ai_bindings user unique index", create_plant_genie_ai_bindings_user_unique_sql),
+            ("create plant_genie_ai_bindings connector index", create_plant_genie_ai_bindings_connector_idx_sql),
         ]
 
         try:

@@ -41,6 +41,7 @@ from api.routes.versions import router as versions_router
 from core.metrics import RequestMetricsMiddleware
 from db.postgres import postgres_client
 from services.deterministic_behavior_service import deterministic_behavior_service
+from services.plant_genie_plant_data_runtime import plant_genie_plant_data_runtime
 
 
 logger = logging.getLogger(__name__)
@@ -107,6 +108,7 @@ def startup() -> None:
     logger.info("backend startup complete")
     logger.info("system router registered prefix=/api")
     logger.info("behavior rows currently loaded count=%s", deterministic_behavior_service.get_rows_loaded_count())
+    plant_genie_plant_data_runtime.start_enabled_connectors()
 
 
 app.include_router(health_router, prefix="/api")

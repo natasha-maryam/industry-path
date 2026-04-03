@@ -58,7 +58,7 @@ export default function BottomPanel({ projectId, selectedTag, selectedRow, engin
         <div className="mb-2.5 flex items-center justify-between gap-3 border-b border-slate-200 pb-2.5">
           <div>
             <div className="text-[10px] font-semibold tracking-[0.18em] text-slate-500">Automation Copilot</div>
-            <div className="text-[11px] text-slate-600">Connect AI to enable Automation Copilot for the active workspace.</div>
+            <div className="text-[11px] text-slate-600">Automation Copilot uses the active AI and data connectors configured in Settings &gt; Data Connectors.</div>
           </div>
           <button
             type="button"

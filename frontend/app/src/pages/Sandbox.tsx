@@ -1,7 +1,48 @@
+import { ArrowRight, Boxes, Network, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { ReactNode } from "react";
 import Dashboard from "./Dashboard";
 import { getSandboxEmailFromLocation } from "../sandbox/isSandboxAppUrl";
+
+type SandboxFeature = {
+  title: string;
+  description: string;
+  icon: typeof Network;
+  emphasized?: boolean;
+};
+
+const SANDBOX_FEATURES: SandboxFeature[] = [
+  {
+    title: "System Breakdown",
+    description: "Automatically extract tags, control loops, IO, and logic from your documents.",
+    icon: Network,
+  },
+  {
+    title: "Engineering Workspace",
+    description: "View, edit, simulate, and explore your full system in a structured, interactive workspace.",
+    icon: Boxes,
+  },
+  {
+    title: "Plant Genie (AI)",
+    description: "Ask questions about your system or live plant data and get instant, actionable answers.",
+    icon: Sparkles,
+    emphasized: true,
+  },
+];
+
+const SANDBOX_STEPS = [
+  {
+    title: "Upload your documents",
+    description: "Upload your P&ID and control narrative.",
+  },
+  {
+    title: "Review generated outputs",
+    description: "View your automatically generated control logic and IO mapping.",
+  },
+  {
+    title: "Query with Plant Genie",
+    description: "Ask Plant Genie about your system or live data to uncover insights instantly.",
+  },
+] as const;
 
 export default function Sandbox() {
   const sandboxEmail = useMemo(() => getSandboxEmailFromLocation(), []);
@@ -22,21 +63,6 @@ export default function Sandbox() {
     }
   };
 
-  const Column = ({ title, children }: { title: string; children: ReactNode }) => (
-    <div
-      style={{
-        border: "1px solid var(--stroke)",
-        background: "var(--panel)",
-        borderRadius: 14,
-        padding: "14px 14px",
-        minHeight: 118,
-      }}
-    >
-      <div style={{ fontWeight: 800, color: "var(--text)", marginBottom: 8 }}>{title}</div>
-      <div style={{ color: "var(--muted)", fontSize: 13, lineHeight: 1.35 }}>{children}</div>
-    </div>
-  );
-
   return (
     <>
       {open ? (
@@ -49,29 +75,17 @@ export default function Sandbox() {
           style={{ zIndex: 60 }}
         >
           <div
-            className="modal-card"
+            className="modal-card sandbox-onboarding-modal"
             onClick={(event) => event.stopPropagation()}
-            style={{
-              width: "min(980px, calc(100vw - 2rem))",
-              padding: 0,
-              borderRadius: 10,
-              background: "var(--panel-strong)",
-              color: "var(--text)",
-            }}
           >
-            <div
-              style={{
-                padding: "18px 18px 10px",
-                borderBottom: "1px solid var(--stroke)",
-                display: "flex",
-                alignItems: "flex-start",
-                justifyContent: "space-between",
-                gap: 14,
-              }}
-            >
-              <div>
-                <div style={{ fontSize: 26, fontWeight: 900, lineHeight: 1.1, marginBottom: 6 }}>Welcome to IndustryPath</div>
-                <div style={{ color: "var(--muted)", fontSize: 13 }}>Understand your system instantly. No setup required.</div>
+            <div className="sandbox-onboarding-section sandbox-onboarding-hero">
+              <div className="sandbox-onboarding-hero-copy">
+                <div className="sandbox-onboarding-eyebrow">IndustryPath Sandbox</div>
+                <h1>Turn your system into a live, queryable model in seconds.</h1>
+                <p>
+                  Upload your P&amp;ID and control narrative, generate control logic, simulate your plant data, &amp; interact
+                  with your system using AI.
+                </p>
               </div>
               <button
                 type="button"
@@ -82,37 +96,45 @@ export default function Sandbox() {
               </button>
             </div>
 
-            <div style={{ padding: "14px 18px 12px" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-                <Column title="Left panel">
-                  Access the engineering table, control loops, IO mapping, generated control logic, and Plant Genie.
-                </Column>
-                <Column title="Center">
-                  The main workspace where selected tabs render and users interact with the system.
-                </Column>
-                <Column title="Plant Genie">
-                  Query live plant data and get clear, actionable answers instantly.
-                </Column>
-              </div>
-
-              <div style={{ marginTop: 12, color: "var(--muted)", fontSize: 12, lineHeight: 1.35 }}>
-                Tip: Use the modules from the left to explore the system. Exports are limited to 3 in sandbox.
-              </div>
-              <div style={{ marginTop: 8, color: "var(--text)", fontSize: 12.5, lineHeight: 1.4, fontWeight: 600 }}>
-                To get started, create a new project and upload your P&amp;ID and Control Narrative.
+            <div className="sandbox-onboarding-section sandbox-onboarding-features">
+              <div className="sandbox-onboarding-card-grid">
+                {SANDBOX_FEATURES.map((feature) => {
+                  const Icon = feature.icon;
+                  return (
+                    <article
+                      key={feature.title}
+                      className={`sandbox-onboarding-card ${feature.emphasized ? "is-emphasized" : ""}`}
+                    >
+                      <div className="sandbox-onboarding-card-icon" aria-hidden="true">
+                        <Icon size={18} />
+                      </div>
+                      <h2>{feature.title}</h2>
+                      <p>{feature.description}</p>
+                    </article>
+                  );
+                })}
               </div>
             </div>
 
-            <div
-              style={{
-                padding: "12px 18px 18px",
-                borderTop: "1px solid var(--stroke)",
-                display: "flex",
-                justifyContent: "flex-end",
-              }}
-            >
-              <button type="button" className="command-btn primary" onClick={closeModal}>
-                Start Exploring
+            <div className="sandbox-onboarding-section sandbox-onboarding-actions">
+              <div className="sandbox-onboarding-actions-copy">
+                <h2>Getting Started</h2>
+                <ol className="sandbox-onboarding-steps">
+                  {SANDBOX_STEPS.map((step) => (
+                    <li key={step.title}>
+                      <span className="sandbox-onboarding-step-number" aria-hidden="true" />
+                      <div className="sandbox-onboarding-step-copy">
+                        <strong>{step.title}</strong>
+                        <span>{step.description}</span>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+                <p className="sandbox-onboarding-note">Sandbox includes full access. Limited to 3 exports.</p>
+              </div>
+              <button type="button" className="command-btn primary sandbox-onboarding-cta" onClick={closeModal}>
+                <span>Start Building Your System</span>
+                <ArrowRight size={16} />
               </button>
             </div>
           </div>

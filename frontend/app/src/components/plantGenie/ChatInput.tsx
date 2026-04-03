@@ -6,6 +6,7 @@ type ChatInputProps = {
   onChange: (value: string) => void;
   onSend: (value: string) => void | Promise<void>;
   placeholder: string;
+  tooltip?: string;
   disabled?: boolean;
   isThinking?: boolean;
   helperText?: string;
@@ -16,6 +17,7 @@ export default function ChatInput({
   onChange,
   onSend,
   placeholder,
+  tooltip,
   disabled = false,
   isThinking = false,
   helperText,
@@ -42,6 +44,7 @@ export default function ChatInput({
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
+          title={tooltip}
           className="plant-genie-input"
           disabled={disabled}
         />

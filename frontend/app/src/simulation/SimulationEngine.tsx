@@ -29,7 +29,7 @@ export default function SimulationEngine({ onStatus }: Props) {
     <section className="workspace-documents-list-panel">
       <div className="workspace-documents-list-header">
         <h3>Simulation Overrides</h3>
-        <p>Apply what-if values to live tags.</p>
+        <p>Apply what-if values to tags from the centralized unified store.</p>
       </div>
       <div className="settings-grid">
         <label className="settings-line">

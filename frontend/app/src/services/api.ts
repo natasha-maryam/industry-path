@@ -4,7 +4,6 @@ export * from "./panelContracts";
 import { API_BASE, WS_BASE_URL } from "../config/api";
 import type {
   PlantGenieAsyncRunResponse,
-  PlantGenieConnectorResponse,
   PlantGenieJobStatusResponse,
   PlantGenieRunResponse,
   RuntimeValidationPanelResponse,
@@ -123,7 +122,38 @@ export type PlantGenieAIConnectorTestResponse = {
   connector: PlantGenieAIConnector;
 };
 
-export type PlantGeniePlantDataConnectorType = "opcua" | "mqtt" | "sql";
+export type PlantGenieAIBindingTagScope = "all" | "selected";
+
+export type PlantGenieAIBindingContextMode = "live_only" | "historical" | "hybrid";
+
+export type PlantGenieAIBindingSamplingMode = "stream" | "interval";
+
+export type PlantGenieAIBindingAccessMode = "read_only" | "read_recommend";
+
+export type PlantGenieAIBinding = {
+  configured: boolean;
+  data_source_connector_id: string | null;
+  data_source_connector_name: string | null;
+  tag_scope: PlantGenieAIBindingTagScope;
+  selected_tags: string[];
+  context_mode: PlantGenieAIBindingContextMode;
+  sampling_mode: PlantGenieAIBindingSamplingMode;
+  sampling_interval_ms: number | null;
+  ai_access_mode: PlantGenieAIBindingAccessMode;
+  include_system_structure: boolean;
+  ai_api_input: string | null;
+  source_connector_enabled: boolean;
+  source_connector_healthy: boolean;
+  updated_at: string | null;
+};
+
+export type PlantGenieAIBindingConnectResponse = {
+  success: boolean;
+  message: string;
+  binding: PlantGenieAIBinding;
+};
+
+export type PlantGeniePlantDataConnectorType = "opcua" | "mqtt" | "sql" | "modbus_tcp" | "historian";
 
 export type PlantGeniePlantDataConnectorRuntimeState = {
   enabled: boolean;
@@ -166,6 +196,67 @@ export type PlantGeniePlantDataConnectorTestResponse = {
   success: boolean;
   message: string;
   connector: PlantGeniePlantDataConnector;
+};
+
+export type PlantGeniePlantDataOpcuaBrowseNode = {
+  node_id: string;
+  browse_name: string;
+  display_name: string;
+  node_class: string;
+  has_children: boolean;
+  selectable: boolean;
+};
+
+export type PlantGeniePlantDataOpcuaBrowseResponse = {
+  node_id: string;
+  browse_name: string;
+  display_name: string;
+  nodes: PlantGeniePlantDataOpcuaBrowseNode[];
+};
+
+export type PlantGeniePlantDataSqlTable = {
+  schema: string;
+  name: string;
+  label: string;
+};
+
+export type PlantGeniePlantDataSqlColumn = {
+  name: string;
+  data_type: string;
+};
+
+export type PlantGeniePlantDataSqlSchemaResponse = {
+  tables: PlantGeniePlantDataSqlTable[];
+  columns: PlantGeniePlantDataSqlColumn[];
+};
+
+export type PlantGeniePlantDataSqlPreviewResponse = {
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
+  row_count: number;
+};
+
+export type PlantGeniePlantDataModbusPreviewResponse = {
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
+  row_count: number;
+};
+
+export type PlantGeniePlantDataHistorianBrowseItem = {
+  web_id: string;
+  label: string;
+  path: string;
+  item_type: string;
+};
+
+export type PlantGeniePlantDataHistorianBrowseResponse = {
+  items: PlantGeniePlantDataHistorianBrowseItem[];
+};
+
+export type PlantGeniePlantDataHistorianPreviewResponse = {
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
+  row_count: number;
 };
 
 export type PlantGenieQueryContext = {
@@ -694,6 +785,13 @@ export type UNSRow = {
   upstream?: string[];
   downstream?: string[];
   behavior_card?: string | null;
+};
+
+export type UNSHistoryRow = {
+  tag: string;
+  timestamp: string;
+  value: unknown;
+  source?: string | null;
 };
 
 export type SystemTraceStep = {
@@ -2442,54 +2540,16 @@ export async function getUNSRows(): Promise<UNSRow[]> {
   return unwrapData(response.data, { rows: [] }).rows ?? [];
 }
 
+export async function getUNSHistory(tags: string[], points = 12): Promise<UNSHistoryRow[]> {
+  const response = await api.post<{ data: { rows: UNSHistoryRow[] } }>("/uns/history", {
+    tags,
+    points,
+  });
+  return unwrapData(response.data, { rows: [] }).rows ?? [];
+}
+
 export function createUNSSocket(): WebSocket {
   return new WebSocket(`${WS_BASE_URL}/api/ws/uns`);
-}
-
-export async function connectAdvancedOPCUA(payload: {
-  endpoint: string;
-  security_policy?: string;
-  auth_mode?: string;
-  username?: string;
-}): Promise<Record<string, unknown>> {
-  if (!payload.endpoint.trim()) {
-    throw new Error("OPC UA endpoint is required.");
-  }
-  try {
-    const response = await api.post<{ data: Record<string, unknown> }>("/system-layer/connect/opcua", payload);
-    return unwrapData(response.data, {});
-  } catch (error) {
-    const message = getErrorMessage(error, "OPC UA connector request failed.");
-    if (message.toLowerCase().includes("asyncua is not installed")) {
-      throw new Error("OPC UA connector is unavailable on the server (missing asyncua dependency). Contact backend admin to enable OPC UA support.");
-    }
-    throw new Error(message);
-  }
-}
-
-export async function connectAdvancedMQTT(payload: {
-  host: string;
-  port?: number;
-  client_id?: string;
-  topic?: string;
-}): Promise<Record<string, unknown>> {
-  if (!payload.host.trim()) {
-    throw new Error("MQTT host is required.");
-  }
-  const response = await api.post<{ data: Record<string, unknown> }>("/system-layer/connect/mqtt", payload);
-  return unwrapData(response.data, {});
-}
-
-export async function connectAdvancedAPI(payload: {
-  endpoint: string;
-  method?: string;
-  headers?: Record<string, string>;
-}): Promise<Record<string, unknown>> {
-  if (!payload.endpoint.trim()) {
-    throw new Error("API endpoint is required.");
-  }
-  const response = await api.post<{ data: Record<string, unknown> }>("/system-layer/connect/api", payload);
-  return unwrapData(response.data, {});
 }
 
 export async function runAdvancedAutoMap(payload: { external_tags: string[]; threshold?: number }): Promise<Record<string, unknown>> {
@@ -2989,6 +3049,34 @@ export async function activatePlantGenieAIConnector(connectorId: string): Promis
   }
 }
 
+export async function getPlantGenieAIBinding(): Promise<PlantGenieAIBinding> {
+  try {
+    const response = await api.get<PlantGenieAIBinding>("/plant-genie/connectors/ai-binding");
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie AI binding request failed."));
+  }
+}
+
+export async function connectPlantGenieAIBinding(payload: {
+  data_source_connector_id: string;
+  tag_scope: PlantGenieAIBindingTagScope;
+  selected_tags: string[];
+  context_mode: PlantGenieAIBindingContextMode;
+  sampling_mode: PlantGenieAIBindingSamplingMode;
+  sampling_interval_ms?: number | null;
+  ai_access_mode: PlantGenieAIBindingAccessMode;
+  include_system_structure: boolean;
+  ai_api_input?: string | null;
+}): Promise<PlantGenieAIBindingConnectResponse> {
+  try {
+    const response = await api.put<PlantGenieAIBindingConnectResponse>("/plant-genie/connectors/ai-binding", payload);
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie AI binding save failed."));
+  }
+}
+
 export async function getPlantGeniePlantDataConnectors(): Promise<PlantGeniePlantDataConnector[]> {
   try {
     const response = await api.get<PlantGeniePlantDataConnectorListResponse>("/plant-genie/connectors/plant-data");
@@ -3067,6 +3155,84 @@ export async function deactivatePlantGeniePlantDataConnector(connectorId: string
   }
 }
 
+export async function browsePlantGeniePlantDataOpcua(payload: {
+  config: Record<string, unknown>;
+  secrets?: Record<string, unknown>;
+  node_id?: string | null;
+}): Promise<PlantGeniePlantDataOpcuaBrowseResponse> {
+  try {
+    const response = await api.post<PlantGeniePlantDataOpcuaBrowseResponse>("/plant-genie/connectors/plant-data/opcua/browse", payload);
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie OPC UA browse failed."));
+  }
+}
+
+export async function getPlantGeniePlantDataSqlSchema(payload: {
+  config: Record<string, unknown>;
+  secrets?: Record<string, unknown>;
+  table_name?: string | null;
+  table_schema?: string | null;
+}): Promise<PlantGeniePlantDataSqlSchemaResponse> {
+  try {
+    const response = await api.post<PlantGeniePlantDataSqlSchemaResponse>("/plant-genie/connectors/plant-data/sql/schema", payload);
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie SQL schema request failed."));
+  }
+}
+
+export async function previewPlantGeniePlantDataSql(payload: {
+  config: Record<string, unknown>;
+  secrets?: Record<string, unknown>;
+  limit?: number;
+}): Promise<PlantGeniePlantDataSqlPreviewResponse> {
+  try {
+    const response = await api.post<PlantGeniePlantDataSqlPreviewResponse>("/plant-genie/connectors/plant-data/sql/preview", payload);
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie SQL preview failed."));
+  }
+}
+
+export async function previewPlantGeniePlantDataModbus(payload: {
+  config: Record<string, unknown>;
+  secrets?: Record<string, unknown>;
+}): Promise<PlantGeniePlantDataModbusPreviewResponse> {
+  try {
+    const response = await api.post<PlantGeniePlantDataModbusPreviewResponse>("/plant-genie/connectors/plant-data/modbus/preview", payload);
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie Modbus preview failed."));
+  }
+}
+
+export async function browsePlantGeniePlantDataHistorian(payload: {
+  config: Record<string, unknown>;
+  secrets?: Record<string, unknown>;
+  query?: string | null;
+  limit?: number;
+}): Promise<PlantGeniePlantDataHistorianBrowseResponse> {
+  try {
+    const response = await api.post<PlantGeniePlantDataHistorianBrowseResponse>("/plant-genie/connectors/plant-data/historian/browse", payload);
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie historian browse failed."));
+  }
+}
+
+export async function previewPlantGeniePlantDataHistorian(payload: {
+  config: Record<string, unknown>;
+  secrets?: Record<string, unknown>;
+}): Promise<PlantGeniePlantDataHistorianPreviewResponse> {
+  try {
+    const response = await api.post<PlantGeniePlantDataHistorianPreviewResponse>("/plant-genie/connectors/plant-data/historian/preview", payload);
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Plant Genie historian preview failed."));
+  }
+}
+
 export async function queryPlantGenie(payload: {
   prompt: string;
   context: PlantGenieQueryContext;
@@ -3077,7 +3243,7 @@ export async function queryPlantGenie(payload: {
       context: {
         has_project: payload.context.hasProject,
         project_name: payload.context.projectName ?? null,
-        selected_tag: payload.context.selectedTag ?? null,
+        selected_tag: null,
       },
     });
     return response.data;
@@ -3180,22 +3346,5 @@ export async function getPlantGenieJobStatus(jobId: string): Promise<PlantGenieJ
     return response.data;
   } catch (error) {
     throw new Error(getErrorMessage(error, "Plant Genie job status request failed."));
-  }
-}
-
-export async function registerPlantGenieConnector(payload: {
-  name: string;
-  mockResponse?: string;
-  metadata?: Record<string, unknown>;
-}): Promise<PlantGenieConnectorResponse> {
-  try {
-    const response = await api.post<PlantGenieConnectorResponse>("/copilot/provider", {
-      name: payload.name,
-      mock_response: payload.mockResponse,
-      metadata: payload.metadata ?? {},
-    });
-    return response.data;
-  } catch (error) {
-    throw new Error(getErrorMessage(error, "Plant Genie connector registration failed."));
   }
 }

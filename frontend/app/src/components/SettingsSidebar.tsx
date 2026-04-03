@@ -2,7 +2,7 @@ import { Bot, Cog, CreditCard, PlugZap } from "lucide-react";
 
 export type SettingsNavItemId =
   | "general"
-  | "ai_connectors"
+  | "data_connectors"
   | "export_integrations"
   | "billing";
 
@@ -15,7 +15,7 @@ type SettingsSidebarProps = {
 
 const SETTINGS_ITEMS_BASE: Array<{ id: SettingsNavItemId; label: string; Icon: typeof Cog }> = [
   { id: "general", label: "General", Icon: Cog },
-  { id: "ai_connectors", label: "AI Connectors", Icon: Bot },
+  { id: "data_connectors", label: "Data Connectors", Icon: Bot },
   { id: "export_integrations", label: "Export / Integration Settings", Icon: PlugZap },
   { id: "billing", label: "Billing", Icon: CreditCard },
 ];

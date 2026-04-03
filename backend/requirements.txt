@@ -5,6 +5,10 @@ pydantic==2.12.5
 python-multipart==0.0.22
 
 psycopg2-binary==2.9.11
+SQLAlchemy==2.0.48
+PyMySQL==1.1.2
+python-tds==1.17.1
+pymodbus==3.8.6
 neo4j==6.1.0
 cryptography==46.0.5
 requests==2.32.5

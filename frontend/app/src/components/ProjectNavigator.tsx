@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ComponentType } from "react";
-import { Activity, AlertTriangle, Boxes, ChevronDown, ChevronRight, CircleDot, Cpu, Database, FileText, Folder, FolderOpen, Gauge, Network, Radar, Plus, SlidersHorizontal, Trash2 } from "lucide-react";
+import { Activity, Boxes, ChevronDown, ChevronRight, CircleDot, Cpu, Database, FileText, Folder, FolderOpen, Gauge, Network, Plus, SlidersHorizontal, Trash2 } from "lucide-react";
 import type { WorkspaceModuleId } from "../types/workspace";
 
 type ProjectFeatureId = "versions" | "pid";
@@ -44,9 +44,6 @@ const WORKSPACE_MODULES: Array<{ id: WorkspaceModuleId; label: string; icon: Com
   { id: "control_logic", label: "Control Logic", icon: Cpu },
   { id: "io_mapping", label: "IO Mapping", icon: SlidersHorizontal },
   { id: "simulation", label: "Simulation", icon: Activity },
-  { id: "runtime", label: "Runtime", icon: Radar },
-  { id: "monitoring", label: "Monitoring", icon: Radar },
-  { id: "diagnostics", label: "Diagnostics", icon: AlertTriangle },
 ];
 
 const PROJECT_FEATURES: Array<{

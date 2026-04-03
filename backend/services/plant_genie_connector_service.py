@@ -24,6 +24,7 @@ from services.plant_genie_config import (
     resolve_default_plant_genie_ai_provider,
     resolve_plant_genie_ai_provider_config,
 )
+from services.plant_genie_ai_binding_service import plant_genie_ai_binding_service
 from services.plant_genie_plant_data_runtime import plant_genie_plant_data_runtime
 from services.plant_genie_secret_store import plant_genie_secret_store
 
@@ -427,7 +428,12 @@ class PlantGenieConnectorService:
         connector = self.get_active_connector(user_id)
         request_context = dict(context or {})
         selected_tag = request_context.get("selected_tag") if isinstance(request_context.get("selected_tag"), str) else None
-        request_context["live_plant_data"] = plant_genie_plant_data_runtime.build_query_context(user_id, selected_tag=selected_tag)
+        binding_config = plant_genie_ai_binding_service.get_binding_config(user_id)
+        request_context["live_plant_data"] = plant_genie_plant_data_runtime.build_query_context(
+            user_id,
+            selected_tag=selected_tag,
+            binding_config=binding_config,
+        )
         response_payload = self._invoke_connector(connector, normalized_prompt, request_context)
         answer = self._extract_answer_text(response_payload)
         timestamp = _utc_now()

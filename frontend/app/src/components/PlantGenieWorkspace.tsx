@@ -1,30 +1,49 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import PlantGenieConnectorSettings from "./PlantGenieConnectorSettings";
-import PlantGenieIndustrialConnectionsModal from "./PlantGenieIndustrialConnectionsModal";
 import ChatInput from "./plantGenie/ChatInput";
+import DataSourceSelector from "./DataSourceSelector";
 import MessageList from "./plantGenie/MessageList";
 import type { PlantGenieMessage } from "./plantGenie/MessageBubble";
 import PlantGenieHeader from "./plantGenie/PlantGenieHeader";
 import {
+  connectPlantGenieAIBinding,
+  getPlantGenieAIBinding,
   getPlantGenieAIConnectors,
   getPlantGeniePlantDataConnectors,
   queryPlantGenie,
+  type PlantGenieAIBinding,
+  type PlantGenieAIBindingContextMode,
   type PlantGenieAIConnector,
   type PlantGeniePlantDataConnector,
 } from "../services/api";
+import type { DataSourceSelectorValue } from "./dataSourceSelectorModel";
 import "../styles/plant-genie.css";
 
 type PlantGenieWorkspaceProps = {
   hasProject: boolean;
   projectName?: string | null;
-  selectedTag?: string | null;
 };
 
 export type PlantGenieChatContext = {
   hasProject: boolean;
   projectName?: string | null;
-  selectedTag?: string | null;
+};
+
+const DEFAULT_BINDING: PlantGenieAIBinding = {
+  configured: false,
+  data_source_connector_id: null,
+  data_source_connector_name: null,
+  tag_scope: "all",
+  selected_tags: [],
+  context_mode: "live_only",
+  sampling_mode: "stream",
+  sampling_interval_ms: 5000,
+  ai_access_mode: "read_only",
+  include_system_structure: true,
+  ai_api_input: null,
+  source_connector_enabled: false,
+  source_connector_healthy: false,
+  updated_at: null,
 };
 
 const createMessageId = (): string => {
@@ -35,89 +54,74 @@ const createMessageId = (): string => {
   return `plant-genie-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 };
 
-const buildSeedPrompt = (selectedTag?: string | null): string => {
-  if (selectedTag) {
-    return `Ask about ${selectedTag}`;
-  }
-
-  return "Ask a question...";
+const buildSeedPrompt = (): string => {
+  return "";
 };
 
-const buildWelcomeMessage = (context: PlantGenieChatContext): PlantGenieMessage => {
-  if (!context.hasProject) {
-    return {
-      id: createMessageId(),
-      role: "assistant",
-      content:
-        "Select a project, then connect an external AI service to use Plant Genie. This product no longer generates native answers from local workspace data.",
-    };
-  }
-
+const buildWelcomeMessage = (): PlantGenieMessage => {
   return {
     id: createMessageId(),
     role: "assistant",
-    content: context.selectedTag
-      ? `Plant Genie is ready for ${context.projectName ?? "the active project"}. The current focus is ${context.selectedTag}, but responses only come from a connected external AI service.`
-      : `Plant Genie is ready for ${context.projectName ?? "the active project"}. Connect an external AI service to begin the session.`,
+    content: "Hi! Im your Plant Genie, ask me anything about your plant.",
   };
 };
 
-export default function PlantGenieWorkspace({ hasProject, projectName, selectedTag }: PlantGenieWorkspaceProps) {
+export default function PlantGenieWorkspace({ hasProject, projectName }: PlantGenieWorkspaceProps) {
   const context = useMemo<PlantGenieChatContext>(
     () => ({
       hasProject,
       projectName,
-      selectedTag,
     }),
-    [hasProject, projectName, selectedTag]
+    [hasProject, projectName]
   );
 
-  const [messages, setMessages] = useState<PlantGenieMessage[]>(() => [buildWelcomeMessage(context)]);
-  const [draft, setDraft] = useState<string>(selectedTag ? buildSeedPrompt(selectedTag) : "");
+  const [messages, setMessages] = useState<PlantGenieMessage[]>(() => [buildWelcomeMessage()]);
+  const [draft, setDraft] = useState<string>(buildSeedPrompt());
   const [isThinking, setIsThinking] = useState<boolean>(false);
   const [aiConnectors, setAiConnectors] = useState<PlantGenieAIConnector[]>([]);
   const [plantDataConnectors, setPlantDataConnectors] = useState<PlantGeniePlantDataConnector[]>([]);
-  const [aiModalKey, setAiModalKey] = useState<number>(0);
-  const [plantDataModalKey, setPlantDataModalKey] = useState<number>(0);
+  const [binding, setBinding] = useState<PlantGenieAIBinding>(DEFAULT_BINDING);
+  const [isBindingLoading, setIsBindingLoading] = useState<boolean>(true);
+  const [selectorError, setSelectorError] = useState<string | null>(null);
+  const [isSelectorSaving, setIsSelectorSaving] = useState<boolean>(false);
+  const saveSequenceRef = useRef(0);
 
   const activeAIConnector = useMemo(
     () => aiConnectors.find((connector) => connector.is_active) ?? null,
     [aiConnectors]
   );
-  const activePlantDataConnector = useMemo(
-    () => plantDataConnectors.find((connector) => connector.runtime.enabled) ?? null,
-    [plantDataConnectors]
+  const selectedPlantDataConnector = useMemo(
+    () => plantDataConnectors.find((connector) => connector.id === binding.data_source_connector_id) ?? null,
+    [binding.data_source_connector_id, plantDataConnectors]
   );
-  const canChat = Boolean(hasProject && activeAIConnector && activePlantDataConnector);
-  const missingDependencies = useMemo(
-    () => [
-      activeAIConnector
-        ? null
-        : {
-            title: "No AI connected",
-            body: "Connect your own AI provider and API key before Plant Genie can respond.",
-          },
-      activePlantDataConnector
-        ? null
-        : {
-            title: "No plant data connected",
-            body: "Connect your live plant data source before Plant Genie can use real operational context.",
-          },
-    ].filter(Boolean) as Array<{ title: string; body: string }>,
-    [activeAIConnector, activePlantDataConnector]
+  const selectorValue = useMemo<DataSourceSelectorValue<PlantGenieAIBindingContextMode>>(
+    () => ({
+      dataSourceConnectorId: binding.data_source_connector_id ?? "",
+      tagScope: binding.tag_scope,
+      selectedTags: binding.selected_tags,
+      mode: binding.context_mode,
+    }),
+    [binding.context_mode, binding.data_source_connector_id, binding.selected_tags, binding.tag_scope]
   );
+  const canChat = Boolean(hasProject && activeAIConnector && binding.configured && binding.source_connector_enabled);
 
   useEffect(() => {
     const loadSetupState = async (): Promise<void> => {
+      setIsBindingLoading(true);
       try {
-        const [nextAIConnectors, nextPlantDataConnectors] = await Promise.all([
+        const [nextAIConnectors, nextPlantDataConnectors, nextBinding] = await Promise.all([
           getPlantGenieAIConnectors(),
           getPlantGeniePlantDataConnectors(),
+          getPlantGenieAIBinding(),
         ]);
         setAiConnectors(nextAIConnectors);
         setPlantDataConnectors(nextPlantDataConnectors);
-      } catch {
-        // Individual modal and query flows surface their own errors; keep the setup shell quiet here.
+        setBinding(nextBinding);
+        setSelectorError(null);
+      } catch (error) {
+        setSelectorError(error instanceof Error ? error.message : "Failed to load the Plant Genie data source selector.");
+      } finally {
+        setIsBindingLoading(false);
       }
     };
 
@@ -125,10 +129,81 @@ export default function PlantGenieWorkspace({ hasProject, projectName, selectedT
   }, []);
 
   useEffect(() => {
-    setMessages([buildWelcomeMessage(context)]);
-    setDraft(selectedTag ? buildSeedPrompt(selectedTag) : "");
+    setMessages([buildWelcomeMessage()]);
+    setDraft(buildSeedPrompt());
     setIsThinking(false);
-  }, [canChat, hasProject, projectName, selectedTag]);
+  }, [canChat, hasProject, projectName]);
+
+  const persistBinding = async (
+    updater: (current: PlantGenieAIBinding) => PlantGenieAIBinding,
+    errorMessage: string
+  ): Promise<void> => {
+    const baseBinding = binding ?? DEFAULT_BINDING;
+    const nextBinding = updater(baseBinding);
+    const sequence = saveSequenceRef.current + 1;
+    saveSequenceRef.current = sequence;
+
+    setBinding(nextBinding);
+    setSelectorError(null);
+
+    if (!nextBinding.data_source_connector_id) {
+      return;
+    }
+
+    setIsSelectorSaving(true);
+    try {
+      const response = await connectPlantGenieAIBinding({
+        data_source_connector_id: nextBinding.data_source_connector_id,
+        tag_scope: nextBinding.tag_scope,
+        selected_tags: nextBinding.selected_tags,
+        context_mode: nextBinding.context_mode,
+        sampling_mode: nextBinding.sampling_mode,
+        sampling_interval_ms: nextBinding.sampling_mode === "interval" ? nextBinding.sampling_interval_ms : null,
+        ai_access_mode: nextBinding.ai_access_mode,
+        include_system_structure: nextBinding.include_system_structure,
+        ai_api_input: nextBinding.ai_api_input,
+      });
+
+      if (saveSequenceRef.current === sequence) {
+        setBinding(response.binding);
+      }
+    } catch (error) {
+      if (saveSequenceRef.current === sequence) {
+        setSelectorError(error instanceof Error ? error.message : errorMessage);
+      }
+    } finally {
+      if (saveSequenceRef.current === sequence) {
+        setIsSelectorSaving(false);
+      }
+    }
+  };
+
+  const handleSelectorChange = async (nextValue: DataSourceSelectorValue<PlantGenieAIBindingContextMode>): Promise<void> => {
+    const nextConnector = plantDataConnectors.find((connector) => connector.id === nextValue.dataSourceConnectorId) ?? null;
+    await persistBinding(
+      (baseBinding) => ({
+        ...baseBinding,
+        configured: Boolean(nextValue.dataSourceConnectorId),
+        data_source_connector_id: nextValue.dataSourceConnectorId || null,
+        data_source_connector_name: nextConnector?.name ?? null,
+        tag_scope: nextValue.tagScope,
+        selected_tags: nextValue.selectedTags,
+        source_connector_enabled: nextConnector?.runtime.enabled ?? false,
+        source_connector_healthy: nextConnector?.health.healthy ?? false,
+      }),
+      "Failed to update the Plant Genie data source."
+    );
+  };
+
+  const handleSystemStructureToggle = async (enabled: boolean): Promise<void> => {
+    await persistBinding(
+      (baseBinding) => ({
+        ...baseBinding,
+        include_system_structure: enabled,
+      }),
+      "Failed to update the Plant Genie context toggle."
+    );
+  };
 
   const submitPrompt = async (prompt: string): Promise<void> => {
     const trimmedPrompt = prompt.trim();
@@ -180,64 +255,71 @@ export default function PlantGenieWorkspace({ hasProject, projectName, selectedT
   return (
     <section className="plant-genie-chat-screen" aria-label="Plant Genie chat workspace">
       <PlantGenieHeader
-        projectName={projectName}
-        selectedTag={selectedTag}
+        description="Plant Genie uses the active AI connector and the saved data source selected below."
         statuses={[
           { label: activeAIConnector ? "AI Connected" : "AI Not Connected", connected: Boolean(activeAIConnector) },
-          ...(activePlantDataConnector
-            ? [{ label: "Plant Data Connected", connected: true }]
-            : []),
-        ]}
-        actions={[
-          ...(!activeAIConnector ? [{ label: "Connect your AI", onClick: () => setAiModalKey((current) => current + 1) }] : []),
-          ...(!activePlantDataConnector
-            ? [{ label: "Connect plant data", onClick: () => setPlantDataModalKey((current) => current + 1) }]
-            : []),
+          { label: binding.configured ? "Data Source Selected" : "No Data Source", connected: binding.configured && binding.source_connector_enabled },
         ]}
       />
 
-      {missingDependencies.length > 0 ? (
-        <div className="plant-genie-empty-state-shell">
-          <div className="plant-genie-empty-state-stack">
-            {missingDependencies.map((item) => (
-              <article key={item.title} className="plant-genie-empty-state-card">
-                <h2>{item.title}</h2>
-                <p>{item.body}</p>
-              </article>
-            ))}
-            <p className="plant-genie-setup-helper">
-              Plant Genie stays read-only until your own AI and live plant data are connected.
-            </p>
+      <div className="plant-genie-selector-shell">
+        <DataSourceSelector
+          title="Active Data Source"
+          description="Reference only existing centralized data source and AI binding configuration for Plant Genie."
+          subtext="Select the data source the AI will use to analyze and answer questions about your system."
+          connectors={plantDataConnectors}
+          isLoading={isBindingLoading}
+          value={selectorValue}
+          onChange={(nextValue) => {
+            void handleSelectorChange(nextValue);
+          }}
+          layout="topbar"
+          notice={
+            selectorError
+              ? { tone: "error", text: selectorError }
+              : isSelectorSaving
+                ? { text: "Updating Plant Genie source..." }
+                : selectedPlantDataConnector
+                  ? { text: `Using: ${selectedPlantDataConnector.name}` }
+                  : undefined
+          }
+        />
+        <div className="plant-genie-selector-toolbar">
+          <div className="plant-genie-selector-indicator" aria-live="polite">
+            <span className="plant-genie-selector-indicator-label">Using:</span>
+            <span className="plant-genie-selector-indicator-value">{selectedPlantDataConnector?.name ?? "No active data source selected"}</span>
           </div>
+          <label className="plant-genie-selector-toggle">
+            <input
+              type="checkbox"
+              checked={binding.include_system_structure}
+              onChange={(event) => {
+                void handleSystemStructureToggle(event.target.checked);
+              }}
+              disabled={isBindingLoading || isSelectorSaving || !binding.configured}
+            />
+            <span>Include system structure</span>
+          </label>
         </div>
-      ) : (
-        <MessageList messages={messages} isThinking={isThinking} />
-      )}
+      </div>
+
+      <MessageList messages={messages} isThinking={isThinking} />
 
       <ChatInput
         value={draft}
         onChange={setDraft}
         onSend={submitPrompt}
-        placeholder={canChat ? "Ask a question..." : "Connect your AI and plant data to start chatting"}
+        placeholder="Ask me about your system :)"
+        tooltip="Ask me about your system :)"
         disabled={!canChat}
         isThinking={isThinking}
         helperText={
           canChat
-            ? activePlantDataConnector
-              ? `Using ${activeAIConnector?.name ?? "your AI connector"} and ${activePlantDataConnector.name}.`
+            ? selectedPlantDataConnector
+              ? `Using ${activeAIConnector?.name ?? "your AI connector"} and ${selectedPlantDataConnector.name}.`
               : undefined
-            : "Plant Genie uses only your connected AI provider and live plant data."
+            : "Plant Genie uses only saved sources from Settings > Data Connectors."
         }
-      />
-
-      <PlantGenieConnectorSettings
-        modalOnly
-        openCreateModalKey={aiModalKey}
-        onConnectorsChange={setAiConnectors}
-      />
-      <PlantGenieIndustrialConnectionsModal
-        openCreateModalKey={plantDataModalKey}
-        onConnectorsChange={setPlantDataConnectors}
       />
     </section>
   );

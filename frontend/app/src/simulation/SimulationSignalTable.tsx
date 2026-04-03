@@ -1,23 +1,60 @@
 import { useEffect, useMemo, useState } from "react";
-import { createSimulationEventSource, getSimulationState } from "./simulationApi";
+
+import { createUNSSocket, getUNSHistory, getUNSRows, type UNSHistoryRow, type UNSRow } from "../services/api";
+import type { SimulationStreamRequest } from "./useSimulationWorkspaceState";
 
 type SignalRow = {
   id: string;
   value: unknown;
-  timestamp?: number;
-  source?: string;
-  simulated?: boolean;
+  state?: string | null;
+  mode?: string | null;
+  equipment?: string | null;
+  timestamp?: string | null;
 };
 
-export default function SimulationSignalTable() {
+const toSignalRow = (row: UNSRow): SignalRow => ({
+  id: row.tag,
+  value: row.current_value ?? "",
+  state: row.state ?? null,
+  mode: row.mode ?? null,
+  equipment: row.equipment ?? null,
+});
+
+const toHistoryRow = (row: UNSHistoryRow): SignalRow => ({
+  id: row.tag,
+  value: row.value ?? "",
+  state: "historical",
+  mode: "replay",
+  equipment: row.source ?? null,
+  timestamp: row.timestamp,
+});
+
+type SimulationSignalTableProps = {
+  request: SimulationStreamRequest;
+  sourceName?: string | null;
+  emptyMessage?: string;
+};
+
+export default function SimulationSignalTable({ request, sourceName = null, emptyMessage }: SimulationSignalTableProps) {
   const [signals, setSignals] = useState<Record<string, SignalRow>>({});
+  const selectedTagsKey = request.selectedTags.join("|");
+  const allowedTags = useMemo(() => new Set(request.selectedTags), [selectedTagsKey]);
 
   useEffect(() => {
-    void getSimulationState()
-      .then((snapshot) => {
-        const initial = Object.entries(snapshot).reduce<Record<string, SignalRow>>((acc, [id, raw]) => {
-          if (raw && typeof raw === "object") {
-            acc[id] = { id, ...(raw as Omit<SignalRow, "id">) };
+    if (request.mode !== "live") {
+      return;
+    }
+
+    if (!request.dataSourceId || request.selectedTags.length === 0) {
+      setSignals({});
+      return;
+    }
+
+    void getUNSRows()
+      .then((rows) => {
+        const initial = rows.reduce<Record<string, SignalRow>>((acc, row) => {
+          if (allowedTags.has(row.tag)) {
+            acc[row.tag] = toSignalRow(row);
           }
           return acc;
         }, {});
@@ -25,45 +62,118 @@ export default function SimulationSignalTable() {
       })
       .catch(() => null);
 
-    const source = createSimulationEventSource();
-    source.onmessage = (event) => {
-      const payload = JSON.parse(event.data) as SignalRow;
-      if (!payload.id) return;
-      setSignals((previous) => ({ ...previous, [payload.id]: payload }));
-    };
-    return () => source.close();
-  }, []);
+    const socket = createUNSSocket();
+    socket.onmessage = (event) => {
+      const payload = JSON.parse(event.data) as {
+        event?: string;
+        rows?: UNSRow[];
+        updated_rows?: UNSRow[];
+      };
 
-  const rows = useMemo(() => Object.values(signals).sort((left, right) => String(left.id).localeCompare(String(right.id))), [signals]);
+      if (payload.event === "uns_snapshot_full" && Array.isArray(payload.rows)) {
+        setSignals(
+          payload.rows.reduce<Record<string, SignalRow>>((acc, row) => {
+            if (allowedTags.has(row.tag)) {
+              acc[row.tag] = toSignalRow(row);
+            }
+            return acc;
+          }, {})
+        );
+        return;
+      }
+
+      if (payload.event === "uns_snapshot_partial" && Array.isArray(payload.updated_rows)) {
+        setSignals((previous) => {
+          const next = { ...previous };
+          payload.updated_rows?.forEach((row) => {
+            if (allowedTags.has(row.tag)) {
+              next[row.tag] = toSignalRow(row);
+              return;
+            }
+            delete next[row.tag];
+          });
+          return next;
+        });
+      }
+    };
+
+    return () => socket.close();
+  }, [allowedTags, request.dataSourceId, request.mode, selectedTagsKey, request.selectedTags.length]);
+
+  useEffect(() => {
+    if (request.mode !== "historical") {
+      return;
+    }
+
+    const tags = request.selectedTags;
+    if (tags.length === 0) {
+      setSignals({});
+      return;
+    }
+
+    void getUNSHistory(tags, 12)
+      .then((rows) => {
+        const nextSignals = rows.reduce<Record<string, SignalRow>>((acc, row, index) => {
+          acc[`${row.tag}-${row.timestamp}-${index}`] = toHistoryRow(row);
+          return acc;
+        }, {});
+        setSignals(nextSignals);
+      })
+      .catch(() => {
+        setSignals({});
+      });
+  }, [request.mode, selectedTagsKey, request.selectedTags]);
+
+  const rows = useMemo(
+    () =>
+      Object.values(signals)
+        .filter((row) => request.mode === "historical" || allowedTags.has(row.id))
+        .sort((left, right) => String(left.id).localeCompare(String(right.id))),
+    [allowedTags, request.mode, signals]
+  );
 
   return (
     <section className="workspace-documents-list-panel">
       <div className="workspace-documents-list-header">
-        <h3>Live Simulation Signals</h3>
-        <p>Real-time stream from Redis-backed simulation layer.</p>
+        <h3>{request.mode === "historical" ? "Historical Simulation Replay" : "Live Simulation Signals"}</h3>
+        <p>
+          {request.mode === "historical"
+            ? sourceName
+              ? `Historical replay for ${sourceName} from the centralized unified tag/state store.`
+              : "Historical replay from the centralized unified store."
+            : sourceName
+              ? `Real-time plant stream scoped to ${sourceName} through the centralized unified tag/state store.`
+              : "Real-time plant stream from the centralized unified tag/state store."}
+        </p>
       </div>
-      <table className="io-mapping-table">
-        <thead>
-          <tr>
-            <th>Tag</th>
-            <th>Value</th>
-            <th>Source</th>
-            <th>Timestamp</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.id}>
-              <td>{row.id}</td>
-              <td>{String(row.value ?? "")}</td>
-              <td>{row.source ?? "live"}</td>
-              <td>{row.timestamp ? new Date(row.timestamp).toLocaleTimeString() : "N/A"}</td>
-              <td>{row.simulated ? "SIMULATED" : "LIVE"}</td>
+      {rows.length === 0 ? (
+        <div className="workspace-documents-empty">{emptyMessage ?? "No live simulation signals available."}</div>
+      ) : (
+        <table className="io-mapping-table">
+          <thead>
+            <tr>
+              <th>Tag</th>
+              {request.mode === "historical" ? <th>Timestamp</th> : null}
+              <th>Value</th>
+              <th>State</th>
+              <th>Mode</th>
+              <th>Equipment</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.id}>
+                <td>{row.id}</td>
+                {request.mode === "historical" ? <td>{row.timestamp ? new Date(row.timestamp).toLocaleString() : "-"}</td> : null}
+                <td>{String(row.value ?? "")}</td>
+                <td>{row.state ?? "-"}</td>
+                <td>{row.mode ?? "-"}</td>
+                <td>{row.equipment ?? "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </section>
   );
 }

@@ -153,7 +153,8 @@ class PlantGeniePlantDataConnectorService:
     ) -> PlantGeniePlantDataConnectorResponse:
         current = self.get_connector_record(user_id, connector_id)
         config = _validate_plant_data_connector_config(payload.connector_type, payload.config)
-        secrets = current.secrets if not payload.secrets else _validate_plant_data_connector_secrets(payload.connector_type, payload.secrets)
+        validated_secrets = _validate_plant_data_connector_secrets(payload.connector_type, payload.secrets)
+        secrets = {**current.secrets, **validated_secrets}
         timestamp = _utc_now()
         row = postgres_client.fetch_one(
             """
