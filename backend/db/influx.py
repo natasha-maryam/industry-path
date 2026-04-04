@@ -133,7 +133,11 @@ class InfluxClient:
         self._ensure_client()
         if self._client is None:
             return []
-        escaped_tags = " or ".join([f'r.tag == "{tag.replace(chr(34), r"\"")}"' for tag in tags])
+        escaped_tag_filters = []
+        for tag in tags:
+            escaped_tag = str(tag).replace('"', '\\"')
+            escaped_tag_filters.append(f'r.tag == "{escaped_tag}"')
+        escaped_tags = " or ".join(escaped_tag_filters)
         query = f'''
 from(bucket: "{self.config.bucket}")
   |> range(start: -30d)
