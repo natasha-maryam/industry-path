@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getRbacState, setTeamMemberRole } from "../services/api";
 
-const ROLES = ["admin", "editor", "viewer"] as const;
+const ROLES = ["admin", "member"] as const;
 type Role = (typeof ROLES)[number];
 
 export default function RBACSettingsPanel() {

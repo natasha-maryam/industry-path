@@ -153,6 +153,7 @@ import {
   type EngineeringTableResponseRow,
   type ProjectDocument,
   type Project,
+  type AccessUser,
 } from "../services/api";
 import "../styles/dashboard.css";
 import type { MainWorkspaceViewId, ModuleState, WorkspaceModuleId, WorkspacePanelState } from "../types/workspace";
@@ -608,9 +609,18 @@ type PipelineToastCopy = {
 type DashboardProps = {
   mode?: "app" | "sandbox";
   sandboxEmail?: string;
+  authenticatedUser?: AccessUser | null;
+  onLogout?: () => Promise<void>;
+  onAcknowledgeTeamSetup?: () => Promise<void>;
 };
 
-export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: DashboardProps) {
+export default function Dashboard({
+  mode = "app",
+  sandboxEmail = "free-user",
+  authenticatedUser = null,
+  onLogout,
+  onAcknowledgeTeamSetup,
+}: DashboardProps) {
   const { activeProjectId: selectedProjectId, setActiveProjectId: setSelectedProjectId, plantGraph, setPlantGraph } = useWorkspaceContext();
   const graphNodes = plantGraph.nodes;
   // URL-based sandbox (e.g. ?plan=sandbox from landing) even if App once rendered the wrong branch.
@@ -653,11 +663,17 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
     activeRightTab: "Details",
   });
   const [activeSettingsItem, setActiveSettingsItem] = useState<SettingsNavItemId>("general");
+  const [showTeamSetupPrompt, setShowTeamSetupPrompt] = useState<boolean>(false);
   useEffect(() => {
     if (isSandboxMode && activeSettingsItem === "billing") {
       setActiveSettingsItem("general");
     }
   }, [isSandboxMode, activeSettingsItem]);
+  useEffect(() => {
+    if (!isSandboxMode && authenticatedUser?.team_setup_prompt_pending) {
+      setShowTeamSetupPrompt(true);
+    }
+  }, [authenticatedUser?.team_setup_prompt_pending, isSandboxMode]);
   const [activeProjectFeature, setActiveProjectFeature] = useState<ProjectFeatureId | null>(null);
   const [navigatorSelection, setNavigatorSelection] = useState<NavigatorSelection | null>({ type: "module", id: "plant_model" });
   const [panelState, setPanelState] = useState<WorkspacePanelState>({
@@ -759,6 +775,23 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
     setActiveTab("Details");
     setActiveModule("plant_model");
     setActiveMainView("graph");
+  };
+
+  const handleOpenBillingSettings = async (): Promise<void> => {
+    setShowTeamSetupPrompt(false);
+    setActiveSidebarMode("settings");
+    setActiveSettingsItem("billing");
+    setIsLeftPanelCollapsed(false);
+    if (onAcknowledgeTeamSetup) {
+      await onAcknowledgeTeamSetup();
+    }
+  };
+
+  const handleDismissTeamSetupPrompt = async (): Promise<void> => {
+    setShowTeamSetupPrompt(false);
+    if (onAcknowledgeTeamSetup) {
+      await onAcknowledgeTeamSetup();
+    }
   };
 
   const handleProjectFeatureSelect = (feature: ProjectFeatureId): void => {
@@ -5472,7 +5505,7 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
                     projectName={currentProject?.name ?? null}
                   />
                 ) : activeActivity === "settings" && activeSettingsItem === "general" ? (
-                  <SettingsGeneralPanel />
+                  <SettingsGeneralPanel accountEmail={authenticatedUser?.email ?? null} onLogout={onLogout} />
                 ) : activeActivity === "settings" && activeSettingsItem === "data_connectors" ? (
                   <DataConnectorSettings />
                 ) : activeActivity === "settings" && activeSettingsItem === "export_integrations" ? (
@@ -5517,6 +5550,26 @@ export default function Dashboard({ mode = "app", sandboxEmail = "free-user" }: 
                     monitoringView={monitoringWorkspaceView}
                   />
                 )}
+
+                {showTeamSetupPrompt ? (
+                  <div className="modal-backdrop" onClick={() => void handleDismissTeamSetupPrompt()}>
+                    <div className="modal-card team-setup-modal" onClick={(event) => event.stopPropagation()}>
+                      <div className="team-setup-kicker">Teams Workspace Ready</div>
+                      <h3>Manage your shared access from Billing</h3>
+                      <p className="modal-help-text">
+                        Your Teams workspace is active. Open Settings and go to Billing to add teammates, manage up to 10 member seats, and confirm the shared workspace setup.
+                      </p>
+                      <div className="modal-actions">
+                        <button className="command-btn" type="button" onClick={() => void handleDismissTeamSetupPrompt()}>
+                          Later
+                        </button>
+                        <button className="command-btn primary" type="button" onClick={() => void handleOpenBillingSettings()}>
+                          Open Billing
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               </div>
 
               <div

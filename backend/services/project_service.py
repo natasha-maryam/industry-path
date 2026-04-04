@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from db.postgres import postgres_client
 from models.file import WorkspacePaths
 from models.project import Project, ProjectCreate, ProjectUpdate
+from services.access_control_service import access_control_service
 
 
 class ProjectService:
@@ -18,25 +19,44 @@ class ProjectService:
         self.workspace_root = workspace_root or default_root
         self.workspace_root.mkdir(parents=True, exist_ok=True)
 
-    def list_projects(self) -> list[Project]:
-        rows = postgres_client.fetch_all(
-            """
-            SELECT id, name, industry, description, plc_runtime, owner, status, active_version, created_at, updated_at
-            FROM projects
-            ORDER BY created_at DESC
-            """
-        )
+    def _workspace_owner(self, actor_email: str | None) -> str | None:
+        normalized = (actor_email or "").strip().lower()
+        if not normalized:
+            return None
+        return access_control_service.workspace_id_for_email(normalized)
+
+    def list_projects(self, actor_email: str | None = None) -> list[Project]:
+        workspace_owner = self._workspace_owner(actor_email)
+        if workspace_owner:
+            rows = postgres_client.fetch_all(
+                """
+                SELECT id, name, industry, description, plc_runtime, owner, status, active_version, created_at, updated_at
+                FROM projects
+                WHERE owner = %s
+                ORDER BY created_at DESC
+                """,
+                (workspace_owner,),
+            )
+        else:
+            rows = postgres_client.fetch_all(
+                """
+                SELECT id, name, industry, description, plc_runtime, owner, status, active_version, created_at, updated_at
+                FROM projects
+                ORDER BY created_at DESC
+                """
+            )
         return [Project.model_validate(row) for row in rows]
 
-    def create_project(self, payload: ProjectCreate) -> Project:
+    def create_project(self, payload: ProjectCreate, actor_email: str | None = None) -> Project:
         now = datetime.now(timezone.utc)
+        workspace_owner = self._workspace_owner(actor_email)
         project = Project(
             id=uuid4(),
             name=payload.name,
             industry=payload.industry,
             description=payload.description,
             plc_runtime=payload.plc_runtime,
-            owner=payload.owner or "system",
+            owner=workspace_owner or payload.owner or "system",
             status=payload.status,
             active_version=payload.active_version,
             created_at=now,
@@ -63,21 +83,33 @@ class ProjectService:
         self._ensure_workspace(str(project.id))
         return project
 
-    def get_project(self, project_id: str) -> Project:
-        row = postgres_client.fetch_one(
-            """
-            SELECT id, name, industry, description, plc_runtime, owner, status, active_version, created_at, updated_at
-            FROM projects
-            WHERE id = %s
-            """,
-            (project_id,),
-        )
+    def get_project(self, project_id: str, actor_email: str | None = None) -> Project:
+        workspace_owner = self._workspace_owner(actor_email)
+        if workspace_owner:
+            row = postgres_client.fetch_one(
+                """
+                SELECT id, name, industry, description, plc_runtime, owner, status, active_version, created_at, updated_at
+                FROM projects
+                WHERE id = %s
+                  AND owner = %s
+                """,
+                (project_id, workspace_owner),
+            )
+        else:
+            row = postgres_client.fetch_one(
+                """
+                SELECT id, name, industry, description, plc_runtime, owner, status, active_version, created_at, updated_at
+                FROM projects
+                WHERE id = %s
+                """,
+                (project_id,),
+            )
         if row is None:
             raise HTTPException(status_code=404, detail=f"Project not found: {project_id}")
         return Project.model_validate(row)
 
-    def update_project(self, project_id: str, payload: ProjectUpdate) -> Project:
-        current = self.get_project(project_id)
+    def update_project(self, project_id: str, payload: ProjectUpdate, actor_email: str | None = None) -> Project:
+        current = self.get_project(project_id, actor_email=actor_email)
         update_data = payload.model_dump(exclude_none=True)
         if not update_data:
             return current
@@ -119,29 +151,43 @@ class ProjectService:
             summary="Project configuration metadata updated.",
         )
 
-        return self.get_project(project_id)
+        return self.get_project(project_id, actor_email=actor_email)
 
-    def delete_project(self, project_id: str) -> None:
-        self.get_project(project_id)
+    def delete_project(self, project_id: str, actor_email: str | None = None) -> None:
+        self.get_project(project_id, actor_email=actor_email)
         postgres_client.execute("DELETE FROM projects WHERE id = %s", (project_id,))
 
-    def ensure_project(self, project_id: str) -> Project:
-        return self.get_project(project_id)
+    def ensure_project(self, project_id: str, actor_email: str | None = None) -> Project:
+        return self.get_project(project_id, actor_email=actor_email)
 
-    def get_active_project(self) -> Project | None:
-        row = postgres_client.fetch_one(
-            """
-            SELECT id, name, industry, description, plc_runtime, owner, status, active_version, created_at, updated_at
-            FROM projects
-            WHERE status = 'active'
-            ORDER BY updated_at DESC
-            LIMIT 1
-            """
-        )
+    def get_active_project(self, actor_email: str | None = None) -> Project | None:
+        workspace_owner = self._workspace_owner(actor_email)
+        if workspace_owner:
+            row = postgres_client.fetch_one(
+                """
+                SELECT id, name, industry, description, plc_runtime, owner, status, active_version, created_at, updated_at
+                FROM projects
+                WHERE status = 'active'
+                  AND owner = %s
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (workspace_owner,),
+            )
+        else:
+            row = postgres_client.fetch_one(
+                """
+                SELECT id, name, industry, description, plc_runtime, owner, status, active_version, created_at, updated_at
+                FROM projects
+                WHERE status = 'active'
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """
+            )
         return Project.model_validate(row) if row else None
 
-    def set_active_project(self, project_id: str) -> Project:
-        active = self.get_project(project_id)
+    def set_active_project(self, project_id: str, actor_email: str | None = None) -> Project:
+        active = self.get_project(project_id, actor_email=actor_email)
         if active.status == "archived":
             raise HTTPException(status_code=400, detail="Archived project cannot be set active")
 
@@ -152,9 +198,10 @@ class ProjectService:
             SET status = 'draft',
                 updated_at = %s
             WHERE id <> %s
+              AND owner = %s
               AND status = 'active'
             """,
-            (now, project_id),
+            (now, project_id, active.owner),
         )
         postgres_client.execute(
             """
@@ -165,7 +212,7 @@ class ProjectService:
             """,
             (now, project_id),
         )
-        return self.get_project(project_id)
+        return self.get_project(project_id, actor_email=actor_email)
 
     def workspace_paths(self, project_id: str) -> WorkspacePaths:
         self.ensure_project(project_id)

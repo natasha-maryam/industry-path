@@ -52,6 +52,12 @@ def session(token: str) -> dict[str, Any]:
     return {"user": user}
 
 
+@router.post("/logout")
+def logout(payload: dict[str, Any]) -> dict[str, Any]:
+    access_control_service.logout(str(payload.get("token") or ""))
+    return {"success": True}
+
+
 @router.get("/sandbox/status")
 def sandbox_status(email: str) -> dict[str, Any]:
     return access_control_service.sandbox_status(email)
@@ -154,6 +160,21 @@ def invite(payload: dict[str, Any], x_user_email: str | None = Header(default=No
         return access_control_service.invite_team_members(admin_email, [str(item) for item in emails])
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/teams/members")
+def remove_team_member(member_email: str, admin_email: str | None = None, x_user_email: str | None = Header(default=None, alias="X-User-Email")) -> dict[str, Any]:
+    resolved_admin = _resolve_email(admin_email, x_user_email)
+    try:
+        return access_control_service.remove_team_member(resolved_admin, member_email)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/teams/setup/acknowledge")
+def acknowledge_team_setup(payload: dict[str, Any], x_user_email: str | None = Header(default=None, alias="X-User-Email")) -> dict[str, Any]:
+    resolved = _resolve_email(payload.get("email"), x_user_email)
+    return {"user": access_control_service.acknowledge_team_setup_prompt(resolved)}
 
 
 @router.get("/rbac")

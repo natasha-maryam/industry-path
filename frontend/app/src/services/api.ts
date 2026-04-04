@@ -37,14 +37,21 @@ export type ProjectDocument = {
 
 export type AccessAccountType = "sandbox" | "paid";
 export type AccessPlan = "solo" | "team";
-export type TeamRole = "admin" | "editor" | "viewer";
+export type TeamRole = "admin" | "member";
 
 export type AccessUser = {
   email: string;
   account_type: AccessAccountType;
   paid_plan?: string | null;
   maintenance_active?: boolean;
+  maintenance_cancel_at_period_end?: boolean;
+  team_id?: string | null;
+  workspace_id?: string | null;
+  role?: TeamRole | "viewer";
   team_members?: string[];
+  member_limit?: number;
+  next_payment_date_iso?: string | null;
+  team_setup_prompt_pending?: boolean;
   invited_members?: string[];
   exports_used?: number;
   export_limit?: number;
@@ -52,8 +59,7 @@ export type AccessUser = {
 
 export type AccessSession = {
   token: string;
-  email: string;
-  account_type: AccessAccountType;
+  user: AccessUser;
 };
 
 export type SandboxStatus = {
@@ -79,6 +85,31 @@ export type RbacState = {
     members: Record<string, TeamRole | string>;
   };
   permissions: Record<string, boolean>;
+};
+
+export type BillingTeamMember = {
+  email: string;
+  role: TeamRole | "viewer";
+  is_admin: boolean;
+  added_at?: string | null;
+};
+
+export type BillingState = {
+  email: string;
+  license_tier: string;
+  product_name: string;
+  maintenance_active: boolean;
+  maintenance_cancel_at_period_end: boolean;
+  maintenance_note?: string | null;
+  paid_plan?: string | null;
+  team_id?: string | null;
+  workspace_id?: string | null;
+  role: TeamRole | "viewer";
+  next_payment_date_iso?: string | null;
+  can_manage_team: boolean;
+  team_setup_prompt_pending?: boolean;
+  member_limit: number;
+  team_members: BillingTeamMember[];
 };
 
 export type PlantGenieAIConnectorHealthStatus = "unknown" | "healthy" | "unhealthy";
@@ -1838,7 +1869,9 @@ const adaptSTVerificationResponse = (payload: STValidationReport): STVerificatio
 };
 
 export async function listProjects(): Promise<Project[]> {
-  const response = await api.get<Project[]>("/projects");
+  const response = await api.get<Project[]>("/projects", {
+    headers: buildAccessUserHeader(),
+  });
   return response.data;
 }
 
@@ -1851,7 +1884,9 @@ export async function createProject(payload: {
   status?: string;
   active_version?: number;
 }): Promise<Project> {
-  const response = await api.post<Project>("/projects", payload);
+  const response = await api.post<Project>("/projects", payload, {
+    headers: buildAccessUserHeader(),
+  });
   return response.data;
 }
 
@@ -1859,22 +1894,30 @@ export async function updateProject(
   projectId: string,
   payload: { name?: string; industry?: string; description?: string; plc_runtime?: string; owner?: string; status?: string; active_version?: number }
 ): Promise<Project> {
-  const response = await api.put<Project>(`/projects/${projectId}`, payload);
+  const response = await api.put<Project>(`/projects/${projectId}`, payload, {
+    headers: buildAccessUserHeader(),
+  });
   return response.data;
 }
 
 export async function getActiveProject(): Promise<Project | null> {
-  const response = await api.get<Project | null>("/projects/active/current");
+  const response = await api.get<Project | null>("/projects/active/current", {
+    headers: buildAccessUserHeader(),
+  });
   return response.data;
 }
 
 export async function setActiveProject(projectId: string): Promise<Project> {
-  const response = await api.put<Project>("/projects/active", { project_id: projectId });
+  const response = await api.put<Project>("/projects/active", { project_id: projectId }, {
+    headers: buildAccessUserHeader(),
+  });
   return response.data;
 }
 
 export async function deleteProject(projectId: string): Promise<void> {
-  await api.delete(`/projects/${projectId}`);
+  await api.delete(`/projects/${projectId}`, {
+    headers: buildAccessUserHeader(),
+  });
 }
 
 export async function getPLCExportReadiness(payload: {
@@ -2691,7 +2734,7 @@ const buildBearerHeader = (token?: string): Record<string, string> | undefined =
 
 const ACCESS_USER_EMAIL_KEY = "industrypath:access:user-email";
 
-const getAccessUserEmail = (): string => {
+export const getAccessUserEmail = (): string => {
   if (typeof window === "undefined") {
     return "";
   }
@@ -2718,6 +2761,14 @@ export function setAccessUserEmail(email: string): void {
     return;
   }
   window.localStorage.setItem(ACCESS_USER_EMAIL_KEY, normalized);
+}
+
+export async function logoutAccessUser(token: string): Promise<void> {
+  try {
+    await api.post("/access/logout", { token: token.trim() });
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Access logout failed."));
+  }
 }
 
 export async function identifyAccessUser(email: string): Promise<AccessIdentifyResponse> {
@@ -2825,6 +2876,76 @@ export async function getRbacState(email?: string): Promise<RbacState> {
     return response.data;
   } catch (error) {
     throw new Error(getErrorMessage(error, "RBAC state request failed."));
+  }
+}
+
+export async function getBillingState(email?: string): Promise<BillingState> {
+  try {
+    const normalizedEmail = (email ?? getAccessUserEmail()).trim().toLowerCase();
+    const response = await api.get<BillingState>("/access/billing", {
+      params: normalizedEmail ? { email: normalizedEmail } : undefined,
+      headers: buildAccessUserHeader(normalizedEmail),
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Billing state request failed."));
+  }
+}
+
+export async function addTeamMembers(emails: string[], adminEmail?: string): Promise<RbacState["roles"]> {
+  try {
+    const resolvedAdminEmail = (adminEmail ?? getAccessUserEmail()).trim().toLowerCase();
+    const response = await api.post<{ team_id: string; members: RbacState["roles"]["members"] }>(
+      "/access/teams/invite",
+      {
+        admin_email: resolvedAdminEmail || null,
+        emails: emails.map((email) => email.trim().toLowerCase()).filter(Boolean),
+      },
+      {
+        headers: buildAccessUserHeader(resolvedAdminEmail),
+      }
+    );
+    return {
+      owner: resolvedAdminEmail,
+      members: response.data.members,
+    };
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Adding team members failed."));
+  }
+}
+
+export async function removeTeamMember(memberEmail: string, adminEmail?: string): Promise<RbacState["roles"]> {
+  try {
+    const resolvedAdminEmail = (adminEmail ?? getAccessUserEmail()).trim().toLowerCase();
+    const response = await api.delete<{ team_id: string; members: RbacState["roles"]["members"] }>("/access/teams/members", {
+      params: {
+        member_email: memberEmail.trim().toLowerCase(),
+        admin_email: resolvedAdminEmail || undefined,
+      },
+      headers: buildAccessUserHeader(resolvedAdminEmail),
+    });
+    return {
+      owner: resolvedAdminEmail,
+      members: response.data.members,
+    };
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Removing team member failed."));
+  }
+}
+
+export async function acknowledgeTeamSetupPrompt(email?: string): Promise<AccessUser> {
+  try {
+    const normalizedEmail = (email ?? getAccessUserEmail()).trim().toLowerCase();
+    const response = await api.post<{ user: AccessUser }>(
+      "/access/teams/setup/acknowledge",
+      { email: normalizedEmail || null },
+      {
+        headers: buildAccessUserHeader(normalizedEmail),
+      }
+    );
+    return response.data.user;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Acknowledging team setup prompt failed."));
   }
 }
 

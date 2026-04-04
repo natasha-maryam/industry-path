@@ -1,4 +1,4 @@
-import { Bot, DatabaseZap, LoaderCircle } from "lucide-react";
+import { Bot, DatabaseZap, LoaderCircle, LogOut } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -19,10 +19,17 @@ const formatTimestamp = (value: string | null): string => {
   return parsed.toLocaleString();
 };
 
-export default function SettingsGeneralPanel() {
+type SettingsGeneralPanelProps = {
+  accountEmail?: string | null;
+  onLogout?: () => Promise<void>;
+};
+
+export default function SettingsGeneralPanel({ accountEmail = null, onLogout }: SettingsGeneralPanelProps) {
   const [aiConnectors, setAiConnectors] = useState<PlantGenieAIConnector[]>([]);
   const [plantDataConnectors, setPlantDataConnectors] = useState<PlantGeniePlantDataConnector[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState<boolean>(false);
+  const [isLoggingOut, setIsLoggingOut] = useState<boolean>(false);
 
   const activeAIConnector = useMemo(
     () => aiConnectors.find((connector) => connector.is_active) ?? null,
@@ -50,6 +57,19 @@ export default function SettingsGeneralPanel() {
 
     void load();
   }, []);
+
+  const handleLogout = async (): Promise<void> => {
+    if (!onLogout) {
+      return;
+    }
+    setIsLoggingOut(true);
+    try {
+      await onLogout();
+    } finally {
+      setIsLoggingOut(false);
+      setShowLogoutConfirm(false);
+    }
+  };
 
   return (
     <section className="graph-shell">
@@ -123,11 +143,48 @@ export default function SettingsGeneralPanel() {
                     </div>
                   </article>
                 </div>
+
+                {onLogout ? (
+                  <article className="plant-genie-connector-item settings-account-card">
+                    <div className="plant-genie-connector-main">
+                      <div className="plant-genie-connector-title-row">
+                        <strong>Main App Session</strong>
+                      </div>
+                      <div className="plant-genie-connector-status-row">
+                        <span>Signed in as {accountEmail || "Current user"}</span>
+                        <span>Protected main IndustryPath workspace</span>
+                      </div>
+                      <div className="settings-account-actions">
+                        <button className="command-btn danger" type="button" onClick={() => setShowLogoutConfirm(true)}>
+                          <LogOut size={12} />
+                          <span>Log Out</span>
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                ) : null}
               </>
             )}
           </div>
         </div>
       </div>
+
+      {showLogoutConfirm ? (
+        <div className="modal-backdrop" onClick={() => (isLoggingOut ? null : setShowLogoutConfirm(false))}>
+          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+            <h3>Log Out</h3>
+            <p className="modal-help-text">Are you sure you want to log out?</p>
+            <div className="modal-actions">
+              <button className="command-btn" type="button" onClick={() => setShowLogoutConfirm(false)} disabled={isLoggingOut}>
+                Cancel
+              </button>
+              <button className="command-btn danger" type="button" onClick={() => void handleLogout()} disabled={isLoggingOut}>
+                {isLoggingOut ? "Logging Out..." : "Log Out"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

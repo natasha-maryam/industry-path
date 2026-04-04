@@ -2106,12 +2106,131 @@
 }
 
 .billing-settings-card {
-  max-width: 32rem;
+  max-width: none;
   width: 100%;
   border: 1px solid var(--stroke);
   border-radius: 5px;
   background: #f8fafc;
   padding: 0.75rem 0.95rem 0.95rem;
+}
+
+.billing-settings-stack {
+  width: min(60rem, 100%);
+  display: grid;
+  gap: 0.9rem;
+}
+
+.billing-settings-inline-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.billing-settings-alert {
+  border-radius: 5px;
+  padding: 0.58rem 0.68rem;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  border: 1px solid transparent;
+}
+
+.billing-settings-alert.is-error {
+  color: #7a2727;
+  background: #fff1f1;
+  border-color: #e7b9b9;
+}
+
+.billing-settings-alert.is-success {
+  color: #1d4f30;
+  background: #eef8f0;
+  border-color: #b7dcbc;
+}
+
+.billing-team-summary {
+  margin-top: 0.8rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.billing-team-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.26rem 0.46rem;
+  border: 1px solid #d0dae4;
+  border-radius: 999px;
+  background: #eef3f7;
+  color: #334250;
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
+.billing-team-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.55rem;
+  margin-bottom: 0.75rem;
+}
+
+.billing-team-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.billing-team-member-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0.7rem;
+  border: 1px solid #d9e2ea;
+  border-radius: 6px;
+  background: #fbfcfd;
+}
+
+.billing-team-member-copy {
+  min-width: 0;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.billing-team-member-copy strong,
+.billing-team-member-copy span {
+  overflow-wrap: anywhere;
+}
+
+.billing-team-member-copy span {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.settings-account-card {
+  margin-top: 0.75rem;
+}
+
+.settings-account-actions {
+  margin-top: 0.75rem;
+  display: flex;
+  justify-content: flex-start;
+}
+
+.settings-account-actions .command-btn {
+  justify-content: center;
+}
+
+.team-setup-modal {
+  width: min(480px, calc(100vw - 2rem));
+}
+
+.team-setup-kicker {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #7b8794;
 }
 
 .billing-settings-lead {
