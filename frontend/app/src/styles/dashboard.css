@@ -2155,6 +2155,12 @@
   gap: 0.45rem;
 }
 
+.billing-settings-actions {
+  margin-top: 0.8rem;
+  display: flex;
+  justify-content: flex-start;
+}
+
 .billing-team-chip {
   display: inline-flex;
   align-items: center;

@@ -2892,6 +2892,22 @@ export async function getBillingState(email?: string): Promise<BillingState> {
   }
 }
 
+export async function cancelMaintenance(email?: string): Promise<AccessUser> {
+  try {
+    const normalizedEmail = (email ?? getAccessUserEmail()).trim().toLowerCase();
+    const response = await api.post<{ user: AccessUser }>(
+      "/access/billing/maintenance/cancel",
+      { email: normalizedEmail || null },
+      {
+        headers: buildAccessUserHeader(normalizedEmail),
+      }
+    );
+    return response.data.user;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, "Cancel maintenance failed."));
+  }
+}
+
 export async function addTeamMembers(emails: string[], adminEmail?: string): Promise<RbacState["roles"]> {
   try {
     const resolvedAdminEmail = (adminEmail ?? getAccessUserEmail()).trim().toLowerCase();

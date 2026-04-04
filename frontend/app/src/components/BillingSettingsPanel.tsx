@@ -2,7 +2,7 @@ import { LoaderCircle, Trash2, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { useAuth } from "../context/AuthContext";
-import { addTeamMembers, getBillingState, removeTeamMember, type BillingState } from "../services/api";
+import { addTeamMembers, cancelMaintenance, getBillingState, removeTeamMember, type BillingState } from "../services/api";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DEMO_TEAM_EMAILS = [
@@ -41,6 +41,7 @@ export default function BillingSettingsPanel() {
   const [inviteEmail, setInviteEmail] = useState<string>("");
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [isUnsubscribing, setIsUnsubscribing] = useState<boolean>(false);
   const [removingEmail, setRemovingEmail] = useState<string>("");
   const [error, setError] = useState<string>("");
   const [successMessage, setSuccessMessage] = useState<string>("");
@@ -67,6 +68,18 @@ export default function BillingSettingsPanel() {
     void refresh();
   }, [user?.email]);
 
+  useEffect(() => {
+    if (!successMessage) {
+      return undefined;
+    }
+    const timeoutId = window.setTimeout(() => {
+      setSuccessMessage("");
+    }, 5000);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [successMessage]);
+
   const isDemoPreview = !billing || billing.paid_plan !== "team";
 
   const effectiveBilling = useMemo<BillingState | null>(() => {
@@ -79,7 +92,7 @@ export default function BillingSettingsPanel() {
       product_name: "Industry Path Pro",
       maintenance_active: true,
       maintenance_cancel_at_period_end: false,
-      maintenance_note: "Demo workspace for client walkthrough.",
+      maintenance_note: "Included with your current subscription term.",
       paid_plan: "team",
       team_id: "team-demo-preview",
       workspace_id: "team-demo-preview",
@@ -125,7 +138,7 @@ export default function BillingSettingsPanel() {
       setDemoTeamMembers((current) => [...current, { email: normalized, role: "member", is_admin: false, added_at: null }]);
       setInviteEmail("");
       setError("");
-      setSuccessMessage(`${normalized} added to the demo Teams workspace.`);
+      setSuccessMessage(`${normalized} added to your Teams workspace.`);
       return;
     }
 
@@ -148,7 +161,7 @@ export default function BillingSettingsPanel() {
     if (isDemoPreview) {
       setDemoTeamMembers((current) => current.filter((member) => member.email !== memberEmail));
       setError("");
-      setSuccessMessage(`${memberEmail} removed from the demo workspace.`);
+      setSuccessMessage(`${memberEmail} removed from the workspace.`);
       return;
     }
 
@@ -163,6 +176,29 @@ export default function BillingSettingsPanel() {
       setError(nextError instanceof Error ? nextError.message : "Could not remove team member.");
     } finally {
       setRemovingEmail("");
+    }
+  };
+
+  const handleUnsubscribe = async (): Promise<void> => {
+    if (isDemoPreview) {
+      setError("");
+      setSuccessMessage("Demo preview only: unsubscribe action is available for live billing accounts.");
+      return;
+    }
+    if (!user?.email) {
+      return;
+    }
+    setIsUnsubscribing(true);
+    setError("");
+    setSuccessMessage("");
+    try {
+      await cancelMaintenance(user.email);
+      setSuccessMessage("Subscription cancellation scheduled. Maintenance will end at the end of the current period.");
+      await refresh();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Could not update subscription status.");
+    } finally {
+      setIsUnsubscribing(false);
     }
   };
 
@@ -219,11 +255,22 @@ export default function BillingSettingsPanel() {
                     </div>
                     {isDemoPreview ? (
                       <div className="billing-team-chip">
-                        <span>Demo preview</span>
+                        <span>Preview mode</span>
                       </div>
                     ) : null}
                   </div>
                 ) : null}
+
+                <div className="billing-settings-actions">
+                  <button
+                    className="command-btn danger"
+                    type="button"
+                    onClick={() => void handleUnsubscribe()}
+                    disabled={isUnsubscribing || effectiveBilling.maintenance_cancel_at_period_end}
+                  >
+                    {isUnsubscribing ? "Unsubscribing..." : effectiveBilling.maintenance_cancel_at_period_end ? "Unsubscribe Scheduled" : "Unsubscribe"}
+                  </button>
+                </div>
               </>
             ) : null}
           </div>
@@ -235,7 +282,7 @@ export default function BillingSettingsPanel() {
                 ? "Admins can add and remove up to 10 team members by email. All team users share the same workspace and project space."
                 : "Upgrade to Teams to manage shared workspace membership from Billing."}
             </p>
-            {isDemoPreview ? <p className="billing-settings-sub">Showing a built-in Teams demo workspace so you can present the member-management flow.</p> : null}
+            {isDemoPreview ? <p className="billing-settings-sub">Showing a preview of the Teams member-management flow.</p> : null}
 
             {error ? <div className="billing-settings-alert is-error">{error}</div> : null}
             {successMessage ? <div className="billing-settings-alert is-success">{successMessage}</div> : null}
