@@ -1,0 +1,66 @@
+{
+  "users": {
+    "jazykhan7@gmail.com": {
+      "email": "jazykhan7@gmail.com",
+      "account_type": "sandbox",
+      "paid_plan": null,
+      "maintenance_active": false,
+      "maintenance_cancel_at_period_end": false,
+      "team_id": null,
+      "workspace_id": null,
+      "role": "viewer",
+      "permissions": {},
+      "next_payment_date_iso": null,
+      "team_setup_prompt_pending": false,
+      "created_at": "2026-04-07T12:26:33.216572+00:00",
+      "updated_at": "2026-04-07T12:26:33.216581+00:00"
+    },
+    "jazykhan3@gmial.com": {
+      "email": "jazykhan3@gmial.com",
+      "account_type": "paid",
+      "paid_plan": "solo",
+      "maintenance_active": false,
+      "maintenance_cancel_at_period_end": false,
+      "team_id": null,
+      "workspace_id": "workspace-jazykhan3-gmial-com",
+      "role": "admin",
+      "permissions": {},
+      "next_payment_date_iso": "2026-05-07",
+      "team_setup_prompt_pending": false,
+      "created_at": "2026-04-07T12:55:18.071025+00:00",
+      "updated_at": "2026-04-07T12:55:18.071472+00:00"
+    }
+  },
+  "sessions": {
+    "OGpWcvJ1IAtEgjUr8gvSKh4x0VBgF3mD": {
+      "email": "jazykhan7@gmail.com",
+      "created_at": "2026-04-07T12:26:34.586276+00:00"
+    },
+    "gp2o-V-Zjy9UkUxSzU5kO3Z3zB_WW29z": {
+      "email": "jazykhan7@gmail.com",
+      "created_at": "2026-04-07T12:31:15.902836+00:00"
+    },
+    "yrrGtOCBe2qX2YZ80qW7zZ1YpBP0wXPF": {
+      "email": "jazykhan7@gmail.com",
+      "created_at": "2026-04-07T12:54:50.003279+00:00"
+    },
+    "OIrQYpG2vajSsRsLJs-INEOIcJNFdOc1": {
+      "email": "jazykhan7@gmail.com",
+      "created_at": "2026-04-07T12:55:04.702230+00:00"
+    },
+    "62PYPlKnzuZwtgqQXHQhcxzxTMrTWUlH": {
+      "email": "jazykhan7@gmail.com",
+      "created_at": "2026-04-07T12:55:04.717336+00:00"
+    },
+    "vinKNvoSj1mGrwusZtL3jj1lZIoxBgnQ": {
+      "email": "jazykhan3@gmial.com",
+      "created_at": "2026-04-07T12:55:18.102863+00:00"
+    },
+    "w4vuYM_6CO_wbDnYfm3Evtwcb9AdBcRA": {
+      "email": "jazykhan3@gmial.com",
+      "created_at": "2026-04-07T12:55:18.102976+00:00"
+    }
+  },
+  "sandbox_exports": {},
+  "teams": {}
+}

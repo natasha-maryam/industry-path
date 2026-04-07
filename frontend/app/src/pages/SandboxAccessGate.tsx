@@ -14,6 +14,7 @@ import { getSandboxEmailFromLocation } from "../sandbox/isSandboxAppUrl";
 import { getStripePaymentLink } from "../services/stripeLinks";
 
 const TOKEN_KEY = "industrypath:access:token";
+const ACCOUNT_TYPE_KEY = "industrypath:access:account_type";
 const LANDING_URL = "https://industrypath.tech";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -39,6 +40,7 @@ export default function SandboxAccessGate() {
           const normalized = user.email;
           await identifyAccessUser(normalized);
           setAccessUserEmail(normalized);
+          window.localStorage.setItem(ACCOUNT_TYPE_KEY, user.account_type);
           if (user.account_type === "paid") {
             window.location.href = "/";
             return;
@@ -56,18 +58,35 @@ export default function SandboxAccessGate() {
         return;
       }
 
-      // If URL carries a valid email, persist it once for access tracking.
+      // If URL carries a valid email, auto-register/login and continue straight into sandbox.
       if (EMAIL_RE.test(hintedEmail)) {
-        const identified = await identifyAccessUser(hintedEmail);
-        if (!identified.exists) {
+        try {
+          // Idempotent on backend: existing users are reused, new users are created.
           await registerAccessUser({ email: hintedEmail, account_type: "sandbox" });
+          const session = await loginAccessUser(hintedEmail);
+          window.localStorage.setItem(TOKEN_KEY, session.token);
+          setAccessUserEmail(hintedEmail);
+          window.localStorage.setItem(ACCOUNT_TYPE_KEY, session.user.account_type);
+          setPhase("sandbox");
+          return;
+        } catch {
+          // If bootstrap calls fail, keep the user in login flow instead of blocking access.
+          setEmail(hintedEmail);
+          setMessage("Could not auto-sign in. Please tap Login to continue.");
+          setPhase("login");
+          return;
         }
-        setPhase("login");
-        return;
       }
       setPhase("blocked");
     };
     void run().catch(() => {
+      // Network/startup hiccups should not hard-block users from the sandbox path.
+      if (EMAIL_RE.test(hintedEmail)) {
+        setEmail(hintedEmail);
+        setMessage("Could not verify access right now. Please tap Login to continue.");
+        setPhase("login");
+        return;
+      }
       setMessage("Could not verify access. Please try again.");
       setPhase("blocked");
     });
@@ -90,11 +109,14 @@ export default function SandboxAccessGate() {
       const session = await loginAccessUser(normalized);
       window.localStorage.setItem(TOKEN_KEY, session.token);
       setAccessUserEmail(normalized);
+      window.localStorage.setItem(ACCOUNT_TYPE_KEY, session.user.account_type);
       const status = await getSandboxStatus(normalized);
       if (status.account_type === "paid") {
+        window.localStorage.setItem(ACCOUNT_TYPE_KEY, "paid");
         window.location.href = "/";
         return;
       }
+      window.localStorage.setItem(ACCOUNT_TYPE_KEY, "sandbox");
       setPhase("sandbox");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Login failed");
@@ -107,16 +129,41 @@ export default function SandboxAccessGate() {
       setMessage("Enter your email first.");
       return;
     }
-    const frontendStripe = getStripePaymentLink(plan, true, normalized);
+    const frontendStripe = getStripePaymentLink(plan, false, normalized);
     if (frontendStripe) {
+      if (frontendStripe.startsWith("price:")) {
+        const returnUrl = new URL(window.location.origin + "/");
+        returnUrl.searchParams.set("checkout", "success");
+        returnUrl.searchParams.set("checkout_plan", plan);
+        returnUrl.searchParams.set("checkout_email", normalized);
+        returnUrl.searchParams.set("maintenance", "0");
+
+        const cancelUrl = new URL(window.location.origin + "/");
+        cancelUrl.searchParams.set("checkout", "canceled");
+
+        const session = await startCheckout({
+          email: normalized,
+          plan,
+          maintenance: false,
+          success_url: returnUrl.toString(),
+          cancel_url: cancelUrl.toString(),
+        });
+        if (!session.url) {
+          setMessage("Could not start checkout.");
+          return;
+        }
+        window.location.href = session.url;
+        return;
+      }
       window.location.href = frontendStripe;
       return;
     }
+    // Frontend link missing: fallback to backend checkout session (price-id flow).
     const returnUrl = new URL(window.location.origin + "/");
     returnUrl.searchParams.set("checkout", "success");
     returnUrl.searchParams.set("checkout_plan", plan);
     returnUrl.searchParams.set("checkout_email", normalized);
-    returnUrl.searchParams.set("maintenance", "1");
+    returnUrl.searchParams.set("maintenance", "0");
 
     const cancelUrl = new URL(window.location.origin + "/");
     cancelUrl.searchParams.set("checkout", "canceled");
@@ -124,7 +171,7 @@ export default function SandboxAccessGate() {
     const session = await startCheckout({
       email: normalized,
       plan,
-      maintenance: true,
+      maintenance: false,
       success_url: returnUrl.toString(),
       cancel_url: cancelUrl.toString(),
     });

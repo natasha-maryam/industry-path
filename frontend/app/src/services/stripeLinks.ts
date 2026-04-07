@@ -28,6 +28,10 @@ export const getStripePaymentLink = (plan: "solo" | "team", maintenance: boolean
   if (!raw) {
     return "";
   }
+  // Support env values as Stripe Price IDs (price_...) by returning a marker.
+  if (raw.startsWith("price_")) {
+    return `price:${raw}`;
+  }
   try {
     const url = new URL(raw);
     if (email.trim()) {

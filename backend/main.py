@@ -51,6 +51,7 @@ def _load_local_env_files() -> None:
     base_dir = Path(__file__).resolve().parent
     candidates = [
         base_dir / ".env",
+        base_dir.parent / "frontend" / ".env",
         base_dir.parent / "frontend" / "app" / ".env",
     ]
     for env_path in candidates:

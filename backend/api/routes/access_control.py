@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException
@@ -8,6 +9,13 @@ from fastapi import APIRouter, Header, HTTPException
 from services.access_control_service import access_control_service
 
 router = APIRouter(prefix="/access", tags=["access"])
+logger = logging.getLogger(__name__)
+DEFAULT_PRICE_LOOKUPS = {
+    "solo_license": "pandaura_solo_license_usd_onetime",
+    "team_license": "pandaura_team_license_usd_onetime",
+    "solo_maintenance": "pandaura_solo_maintenance_usd_monthly",
+    "team_maintenance": "pandaura_team_maintenance_usd_monthly",
+}
 
 
 def _email(value: str | None) -> str:
@@ -96,14 +104,88 @@ def checkout_start(payload: dict[str, Any]) -> dict[str, Any]:
         cancel_url = str(payload.get("cancel_url") or "http://localhost:5173/?checkout=canceled")
         license_env_key = "STRIPE_PRICE_TEAM_LICENSE" if plan == "team" else "STRIPE_PRICE_SOLO_LICENSE"
         maintenance_env_key = "STRIPE_PRICE_TEAM_MAINTENANCE" if plan == "team" else "STRIPE_PRICE_SOLO_MAINTENANCE"
-        license_price_id = (os.getenv(license_env_key) or "").strip()
-        maintenance_price_id = (os.getenv(maintenance_env_key) or "").strip()
+        lookup_license_env_key = (
+            "STRIPE_LOOKUP_KEY_TEAM_LICENSE" if plan == "team" else "STRIPE_LOOKUP_KEY_SOLO_LICENSE"
+        )
+        lookup_maintenance_env_key = (
+            "STRIPE_LOOKUP_KEY_TEAM_MAINTENANCE" if plan == "team" else "STRIPE_LOOKUP_KEY_SOLO_MAINTENANCE"
+        )
+        license_lookup_default = DEFAULT_PRICE_LOOKUPS["team_license" if plan == "team" else "solo_license"]
+        maintenance_lookup_default = DEFAULT_PRICE_LOOKUPS["team_maintenance" if plan == "team" else "solo_maintenance"]
+
+        def _matches_mode(price_obj: Any, *, expect_recurring: bool | None) -> bool:
+            if expect_recurring is None:
+                return True
+            recurring = getattr(price_obj, "recurring", None)
+            is_recurring = recurring is not None
+            return is_recurring if expect_recurring else not is_recurring
+
+        def resolve_active_price(
+            explicit_price_id: str, *, lookup_key: str, expect_recurring: bool | None, keyword_hint: str
+        ) -> str:
+            candidate = (explicit_price_id or "").strip()
+            if candidate:
+                try:
+                    retrieved = stripe.Price.retrieve(candidate)
+                    if bool(getattr(retrieved, "active", False)) and _matches_mode(
+                        retrieved, expect_recurring=expect_recurring
+                    ):
+                        return candidate
+                    logger.warning("stripe price id is inactive: %s", candidate)
+                except Exception:
+                    logger.exception("stripe price retrieve failed for id=%s", candidate)
+            lookup = (lookup_key or "").strip()
+            if not lookup:
+                return ""
+            listed = stripe.Price.list(lookup_keys=[lookup], active=True, limit=10)
+            for item in listed.data:
+                if _matches_mode(item, expect_recurring=expect_recurring):
+                    return str(item.id)
+            # Fallback: discover likely active prices by product/price metadata.
+            # This keeps checkout working if lookup keys drift between repos.
+            try:
+                catalog = stripe.Price.list(active=True, limit=100, expand=["data.product"])
+                hint = keyword_hint.strip().lower()
+                for item in catalog.data:
+                    if not _matches_mode(item, expect_recurring=expect_recurring):
+                        continue
+                    parts = [str(getattr(item, "lookup_key", "") or ""), str(getattr(item, "nickname", "") or "")]
+                    product = getattr(item, "product", None)
+                    if hasattr(product, "get"):
+                        parts.append(str(product.get("name", "") or ""))
+                        metadata = product.get("metadata", {}) or {}
+                        parts.append(" ".join(f"{k}:{v}" for k, v in metadata.items()))
+                    haystack = " ".join(parts).lower()
+                    if hint and hint in haystack:
+                        return str(item.id)
+            except Exception:
+                logger.exception("stripe catalog fallback lookup failed")
+            return ""
+
+        license_price_id = resolve_active_price(
+            os.getenv(license_env_key, ""),
+            lookup_key=os.getenv(lookup_license_env_key, "").strip() or license_lookup_default,
+            expect_recurring=None,
+            keyword_hint="team license" if plan == "team" else "solo license",
+        )
+        maintenance_price_id = resolve_active_price(
+            os.getenv(maintenance_env_key, ""),
+            lookup_key=os.getenv(lookup_maintenance_env_key, "").strip() or maintenance_lookup_default,
+            expect_recurring=True,
+            keyword_hint="team maintenance" if plan == "team" else "solo maintenance",
+        )
 
         if not license_price_id:
             return {"url": fallback}
 
         line_items = [{"price": license_price_id, "quantity": 1}]
         mode = "payment"
+        try:
+            license_price = stripe.Price.retrieve(license_price_id)
+            if getattr(license_price, "recurring", None) is not None:
+                mode = "subscription"
+        except Exception:
+            logger.exception("stripe license price retrieve failed for id=%s", license_price_id)
         if maintenance:
             if not maintenance_price_id:
                 return {"url": fallback}
@@ -122,7 +204,8 @@ def checkout_start(payload: dict[str, Any]) -> dict[str, Any]:
         if not checkout_url and isinstance(session, dict):
             checkout_url = session.get("url")
         return {"url": str(checkout_url or fallback)}
-    except Exception:
+    except Exception as exc:
+        logger.exception("stripe checkout start failed for plan=%s email=%s: %s", plan, email, exc)
         return {"url": fallback}
 
 

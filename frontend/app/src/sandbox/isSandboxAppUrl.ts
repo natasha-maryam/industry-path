@@ -19,6 +19,17 @@ export function isSandboxAppUrl(): boolean {
   if (searchParams.get("plan")?.toLowerCase() === "sandbox") {
     return true;
   }
+  // Landing sandbox handoff can arrive without explicit `plan=sandbox`.
+  if (searchParams.get("from")?.toLowerCase() === "landing" && searchParams.has("email")) {
+    return true;
+  }
+  // Legacy/new upgrade entrypoint coming from sandbox should still load sandbox shell.
+  if (searchParams.get("from")?.toLowerCase() === "sandbox") {
+    return true;
+  }
+  if (searchParams.get("modal")?.toLowerCase() === "pricing-access" && searchParams.has("email")) {
+    return true;
+  }
 
   const hash = window.location.hash ?? "";
   if (!hash || hash.length <= 1) {
@@ -28,7 +39,16 @@ export function isSandboxAppUrl(): boolean {
   const hashQuery =
     hash.includes("?") ? hash.slice(hash.indexOf("?") + 1) : hash.startsWith("#") ? hash.slice(1) : hash;
   const hashParams = new URLSearchParams(hashQuery);
-  return hashParams.get("plan")?.toLowerCase() === "sandbox";
+  if (hashParams.get("plan")?.toLowerCase() === "sandbox") {
+    return true;
+  }
+  if (hashParams.get("from")?.toLowerCase() === "landing" && hashParams.has("email")) {
+    return true;
+  }
+  if (hashParams.get("from")?.toLowerCase() === "sandbox") {
+    return true;
+  }
+  return hashParams.get("modal")?.toLowerCase() === "pricing-access" && hashParams.has("email");
 }
 
 /** Email from ?email= or hash query (pricing funnel). */

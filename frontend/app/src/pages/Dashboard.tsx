@@ -612,6 +612,7 @@ type DashboardProps = {
   authenticatedUser?: AccessUser | null;
   onLogout?: () => Promise<void>;
   onAcknowledgeTeamSetup?: () => Promise<void>;
+  onSandboxUpgradeNow?: () => void;
 };
 
 export default function Dashboard({
@@ -620,6 +621,7 @@ export default function Dashboard({
   authenticatedUser = null,
   onLogout,
   onAcknowledgeTeamSetup,
+  onSandboxUpgradeNow,
 }: DashboardProps) {
   const { activeProjectId: selectedProjectId, setActiveProjectId: setSelectedProjectId, plantGraph, setPlantGraph } = useWorkspaceContext();
   const graphNodes = plantGraph.nodes;
@@ -633,7 +635,6 @@ export default function Dashboard({
     return getSandboxEmailFromLocation(fromProp);
   }, [isSandboxMode, sandboxEmail]);
   const sandboxExportCountKey = `industrypath:sandbox:export_count:${normalizedSandboxEmail}`;
-  const sandboxUpgradeUrl = `https://app.industrypath.tech/?modal=pricing-access&from=sandbox&email=${encodeURIComponent(normalizedSandboxEmail)}`;
 
   const [exportCount, setExportCount] = useState<number>(() => {
     if (!isSandboxMode) {
@@ -4794,9 +4795,11 @@ export default function Dashboard({
         rightActions={
           <>
             {isSandboxMode ? (
-              <a href={sandboxUpgradeUrl} className="command-btn primary" style={{ textDecoration: "none" }}>
-                Upgrade Now
-              </a>
+              onSandboxUpgradeNow ? (
+                <button type="button" className="command-btn primary" onClick={onSandboxUpgradeNow}>
+                  Upgrade Now
+                </button>
+              ) : null
             ) : null}
           </>
         }
@@ -4814,12 +4817,23 @@ export default function Dashboard({
           }}
         >
           <strong>Export limit reached.</strong> Upgrade to continue exporting and have full system access.{" "}
-          <a
-            href={sandboxUpgradeUrl}
-            style={{ color: "#7a2a2a", textDecoration: "underline", fontWeight: 600 }}
-          >
-            Upgrade
-          </a>
+          {onSandboxUpgradeNow ? (
+            <button
+              type="button"
+              onClick={onSandboxUpgradeNow}
+              style={{
+                color: "#7a2a2a",
+                textDecoration: "underline",
+                fontWeight: 600,
+                background: "transparent",
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
+              }}
+            >
+              Upgrade
+            </button>
+          ) : null}
         </div>
       ) : null}
 
