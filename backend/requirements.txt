@@ -12,6 +12,7 @@ pymodbus==3.8.6
 neo4j==6.1.0
 cryptography==46.0.5
 requests==2.32.5
+stripe==15.0.1
 
 pandas==3.0.1
 networkx==3.6.1
@@ -31,8 +32,3 @@ Pillow==12.1.1
 PyMuPDF==1.27.2
 pytesseract==0.3.13
 
-# Optional integrations referenced by the backend but not installed in the
-# current environment can be added here when those features are enabled:
-# redis
-# stripe
-# paho-mqtt
