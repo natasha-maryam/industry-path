@@ -2832,6 +2832,7 @@ export async function startCheckout(payload: {
   email: string;
   plan: AccessPlan;
   maintenance?: boolean;
+  billing_cycle?: "monthly" | "yearly";
   success_url?: string;
   cancel_url?: string;
 }): Promise<CheckoutStartResponse> {
@@ -2840,6 +2841,7 @@ export async function startCheckout(payload: {
       email: payload.email.trim().toLowerCase(),
       plan: payload.plan,
       maintenance: Boolean(payload.maintenance),
+      billing_cycle: payload.billing_cycle,
       success_url: payload.success_url,
       cancel_url: payload.cancel_url,
     });

@@ -23,6 +23,7 @@ export default function SandboxAccessGate() {
   const [email, setEmail] = useState(hintedEmail);
   const [phase, setPhase] = useState<"loading" | "blocked" | "login" | "sandbox">("loading");
   const [message, setMessage] = useState("");
+  const [billingCycle, setBillingCycle] = useState<"monthly" | "yearly">("yearly");
 
   useEffect(() => {
     const run = async (): Promise<void> => {
@@ -123,13 +124,13 @@ export default function SandboxAccessGate() {
     }
   };
 
-  const startPaidCheckout = async (plan: "solo" | "team"): Promise<void> => {
+  const startPaidCheckout = async (plan: "solo" | "team", cycle: "monthly" | "yearly"): Promise<void> => {
     const normalized = email.trim().toLowerCase();
     if (!normalized) {
       setMessage("Enter your email first.");
       return;
     }
-    const frontendStripe = getStripePaymentLink(plan, false, normalized);
+    const frontendStripe = getStripePaymentLink(plan, cycle === "monthly", normalized);
     if (frontendStripe) {
       if (frontendStripe.startsWith("price:")) {
         const returnUrl = new URL(window.location.origin + "/");
@@ -145,6 +146,7 @@ export default function SandboxAccessGate() {
           email: normalized,
           plan,
           maintenance: false,
+          billing_cycle: cycle,
           success_url: returnUrl.toString(),
           cancel_url: cancelUrl.toString(),
         });
@@ -172,6 +174,7 @@ export default function SandboxAccessGate() {
       email: normalized,
       plan,
       maintenance: false,
+      billing_cycle: cycle,
       success_url: returnUrl.toString(),
       cancel_url: cancelUrl.toString(),
     });
@@ -257,6 +260,24 @@ export default function SandboxAccessGate() {
         </button>
         <div style={{ marginTop: 22, borderTop: "1px solid #e2e8f0", paddingTop: 16 }}>
           <div style={{ fontWeight: 800, marginBottom: 10, fontSize: 29, letterSpacing: "-0.02em", color: "#0f172a" }}>Upgrade from sandbox</div>
+          <div style={{ display: "inline-flex", border: "1px solid #cbd5e1", borderRadius: 10, padding: 4, marginBottom: 10 }}>
+            <button
+              type="button"
+              className="command-btn"
+              onClick={() => setBillingCycle("monthly")}
+              style={{ borderRadius: 8, padding: "8px 12px", background: billingCycle === "monthly" ? "#fff" : "transparent" }}
+            >
+              Monthly
+            </button>
+            <button
+              type="button"
+              className="command-btn"
+              onClick={() => setBillingCycle("yearly")}
+              style={{ borderRadius: 8, padding: "8px 12px", background: billingCycle === "yearly" ? "#fff" : "transparent" }}
+            >
+              Yearly
+            </button>
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <button
               type="button"
@@ -268,9 +289,9 @@ export default function SandboxAccessGate() {
                 padding: "11px 12px",
                 fontWeight: 700,
               }}
-              onClick={() => void startPaidCheckout("solo")}
+              onClick={() => void startPaidCheckout("solo", billingCycle)}
             >
-              Buy Solo
+              {billingCycle === "monthly" ? "Buy Solo · $97/mo" : "Buy Solo · $997/yr"}
             </button>
             <button
               type="button"
@@ -283,12 +304,14 @@ export default function SandboxAccessGate() {
                 padding: "11px 12px",
                 fontWeight: 700,
               }}
-              onClick={() => void startPaidCheckout("team")}
+              onClick={() => void startPaidCheckout("team", billingCycle)}
             >
-              Buy Teams
+              {billingCycle === "monthly" ? "Buy Teams · $297/mo" : "Buy Teams · $2,997/yr"}
             </button>
           </div>
-          <p style={{ fontSize: 13, color: "#64748b", marginTop: 10 }}>Maintenance is included yearly by default.</p>
+          {billingCycle === "yearly" ? (
+            <p style={{ fontSize: 13, color: "#047857", marginTop: 10, fontWeight: 600 }}>2 months free</p>
+          ) : null}
         </div>
         {message ? <p style={{ marginTop: 12, color: "#b91c1c", fontWeight: 600 }}>{message}</p> : null}
       </div>

@@ -29,6 +29,21 @@
       "team_setup_prompt_pending": false,
       "created_at": "2026-04-07T12:55:18.071025+00:00",
       "updated_at": "2026-04-07T12:55:18.071472+00:00"
+    },
+    "jazykhan3@gmail.com": {
+      "email": "jazykhan3@gmail.com",
+      "account_type": "sandbox",
+      "paid_plan": null,
+      "maintenance_active": false,
+      "maintenance_cancel_at_period_end": false,
+      "team_id": null,
+      "workspace_id": null,
+      "role": "viewer",
+      "permissions": {},
+      "next_payment_date_iso": null,
+      "team_setup_prompt_pending": false,
+      "created_at": "2026-04-08T14:49:47.891083+00:00",
+      "updated_at": "2026-04-08T14:49:47.891095+00:00"
     }
   },
   "sessions": {
@@ -59,6 +74,14 @@
     "w4vuYM_6CO_wbDnYfm3Evtwcb9AdBcRA": {
       "email": "jazykhan3@gmial.com",
       "created_at": "2026-04-07T12:55:18.102976+00:00"
+    },
+    "zPjr3f21D0rLiGCE7S4r7F14FVX2WGzl": {
+      "email": "jazykhan3@gmail.com",
+      "created_at": "2026-04-08T14:49:47.895748+00:00"
+    },
+    "7pb8an8tQ0ZILs0lLtnX4o2EP7n9rDwe": {
+      "email": "jazykhan3@gmail.com",
+      "created_at": "2026-04-08T14:49:47.903413+00:00"
     }
   },
   "sandbox_exports": {},

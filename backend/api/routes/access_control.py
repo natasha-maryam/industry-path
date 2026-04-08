@@ -11,8 +11,10 @@ from services.access_control_service import access_control_service
 router = APIRouter(prefix="/access", tags=["access"])
 logger = logging.getLogger(__name__)
 DEFAULT_PRICE_LOOKUPS = {
-    "solo_license": "pandaura_solo_license_usd_onetime",
-    "team_license": "pandaura_team_license_usd_onetime",
+    "solo_license_monthly": "pandaura_solo_license_usd_monthly",
+    "solo_license_yearly": "pandaura_solo_license_usd_onetime",
+    "team_license_monthly": "pandaura_team_license_usd_monthly",
+    "team_license_yearly": "pandaura_team_license_usd_onetime",
     "solo_maintenance": "pandaura_solo_maintenance_usd_monthly",
     "team_maintenance": "pandaura_team_maintenance_usd_monthly",
 }
@@ -84,6 +86,9 @@ def checkout_start(payload: dict[str, Any]) -> dict[str, Any]:
     email = _email(str(payload.get("email") or ""))
     plan = str(payload.get("plan") or "").lower()
     maintenance = bool(payload.get("maintenance"))
+    billing_cycle = str(payload.get("billing_cycle") or "yearly").strip().lower()
+    if billing_cycle not in {"monthly", "yearly"}:
+        billing_cycle = "yearly"
     if not email:
         raise HTTPException(status_code=400, detail="email is required")
     if plan not in {"solo", "team"}:
@@ -102,15 +107,37 @@ def checkout_start(payload: dict[str, Any]) -> dict[str, Any]:
         stripe.api_key = secret
         success_url = str(payload.get("success_url") or "http://localhost:5173/?checkout=success")
         cancel_url = str(payload.get("cancel_url") or "http://localhost:5173/?checkout=canceled")
-        license_env_key = "STRIPE_PRICE_TEAM_LICENSE" if plan == "team" else "STRIPE_PRICE_SOLO_LICENSE"
+        license_env_key = (
+            "STRIPE_PRICE_TEAM_LICENSE_MONTHLY"
+            if plan == "team" and billing_cycle == "monthly"
+            else "STRIPE_PRICE_SOLO_LICENSE_MONTHLY"
+            if plan == "solo" and billing_cycle == "monthly"
+            else "STRIPE_PRICE_TEAM_LICENSE"
+            if plan == "team"
+            else "STRIPE_PRICE_SOLO_LICENSE"
+        )
         maintenance_env_key = "STRIPE_PRICE_TEAM_MAINTENANCE" if plan == "team" else "STRIPE_PRICE_SOLO_MAINTENANCE"
         lookup_license_env_key = (
-            "STRIPE_LOOKUP_KEY_TEAM_LICENSE" if plan == "team" else "STRIPE_LOOKUP_KEY_SOLO_LICENSE"
+            "STRIPE_LOOKUP_KEY_TEAM_LICENSE_MONTHLY"
+            if plan == "team" and billing_cycle == "monthly"
+            else "STRIPE_LOOKUP_KEY_SOLO_LICENSE_MONTHLY"
+            if plan == "solo" and billing_cycle == "monthly"
+            else "STRIPE_LOOKUP_KEY_TEAM_LICENSE"
+            if plan == "team"
+            else "STRIPE_LOOKUP_KEY_SOLO_LICENSE"
         )
         lookup_maintenance_env_key = (
             "STRIPE_LOOKUP_KEY_TEAM_MAINTENANCE" if plan == "team" else "STRIPE_LOOKUP_KEY_SOLO_MAINTENANCE"
         )
-        license_lookup_default = DEFAULT_PRICE_LOOKUPS["team_license" if plan == "team" else "solo_license"]
+        license_lookup_default = DEFAULT_PRICE_LOOKUPS[
+            "team_license_monthly"
+            if plan == "team" and billing_cycle == "monthly"
+            else "solo_license_monthly"
+            if plan == "solo" and billing_cycle == "monthly"
+            else "team_license_yearly"
+            if plan == "team"
+            else "solo_license_yearly"
+        ]
         maintenance_lookup_default = DEFAULT_PRICE_LOOKUPS["team_maintenance" if plan == "team" else "solo_maintenance"]
 
         def _matches_mode(price_obj: Any, *, expect_recurring: bool | None) -> bool:
@@ -166,7 +193,7 @@ def checkout_start(payload: dict[str, Any]) -> dict[str, Any]:
             os.getenv(license_env_key, ""),
             lookup_key=os.getenv(lookup_license_env_key, "").strip() or license_lookup_default,
             expect_recurring=None,
-            keyword_hint="team license" if plan == "team" else "solo license",
+            keyword_hint=f"{plan} license {billing_cycle}",
         )
         maintenance_price_id = resolve_active_price(
             os.getenv(maintenance_env_key, ""),
@@ -198,7 +225,12 @@ def checkout_start(payload: dict[str, Any]) -> dict[str, Any]:
             customer_email=email,
             success_url=success_url,
             cancel_url=cancel_url,
-            metadata={"plan": plan, "maintenance": "1" if maintenance else "0", "email": email},
+            metadata={
+                "plan": plan,
+                "billing_cycle": billing_cycle,
+                "maintenance": "1" if maintenance else "0",
+                "email": email,
+            },
         )
         checkout_url = getattr(session, "url", None)
         if not checkout_url and isinstance(session, dict):

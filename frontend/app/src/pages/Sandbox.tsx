@@ -61,6 +61,7 @@ export default function Sandbox() {
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [checkoutMessage, setCheckoutMessage] = useState("");
   const [startingCheckout, setStartingCheckout] = useState<"solo" | "team" | "">("");
+  const [billingCycle, setBillingCycle] = useState<"monthly" | "yearly">("yearly");
   const [checkoutEmail, setCheckoutEmail] = useState(resolvedCheckoutEmail);
   const [open, setOpen] = useState(() => {
     if (typeof window === "undefined") {
@@ -91,7 +92,7 @@ export default function Sandbox() {
     }
   }, [resolvedCheckoutEmail]);
 
-  const startPaidCheckout = async (plan: "solo" | "team"): Promise<void> => {
+  const startPaidCheckout = async (plan: "solo" | "team", cycle: "monthly" | "yearly"): Promise<void> => {
     const normalized = checkoutEmail.trim().toLowerCase();
     if (!EMAIL_RE.test(normalized)) {
       setCheckoutMessage("Enter a valid email to continue to checkout.");
@@ -100,7 +101,7 @@ export default function Sandbox() {
     setCheckoutMessage("");
     setStartingCheckout(plan);
     try {
-      const frontendStripe = getStripePaymentLink(plan, false, normalized);
+      const frontendStripe = getStripePaymentLink(plan, cycle === "monthly", normalized);
       if (frontendStripe) {
         if (frontendStripe.startsWith("price:")) {
           const returnUrl = new URL(window.location.origin + "/");
@@ -117,6 +118,7 @@ export default function Sandbox() {
             email: normalized,
             plan,
             maintenance: false,
+            billing_cycle: cycle,
             success_url: returnUrl.toString(),
             cancel_url: cancelUrl.toString(),
           });
@@ -145,6 +147,7 @@ export default function Sandbox() {
         email: normalized,
         plan,
         maintenance: false,
+        billing_cycle: cycle,
         success_url: returnUrl.toString(),
         cancel_url: cancelUrl.toString(),
       });
@@ -251,6 +254,24 @@ export default function Sandbox() {
             <p style={{ marginTop: 0, color: "#64748b", marginBottom: 14, fontSize: 17 }}>
               Select Solo or Teams to continue to Stripe checkout.
             </p>
+            <div style={{ display: "inline-flex", border: "1px solid #cbd5e1", borderRadius: 10, padding: 4, marginBottom: 14 }}>
+              <button
+                type="button"
+                className="command-btn"
+                onClick={() => setBillingCycle("monthly")}
+                style={{ borderRadius: 8, padding: "8px 12px", background: billingCycle === "monthly" ? "#fff" : "transparent" }}
+              >
+                Monthly
+              </button>
+              <button
+                type="button"
+                className="command-btn"
+                onClick={() => setBillingCycle("yearly")}
+                style={{ borderRadius: 8, padding: "8px 12px", background: billingCycle === "yearly" ? "#fff" : "transparent" }}
+              >
+                Yearly
+              </button>
+            </div>
             <label style={{ display: "block", marginBottom: 8, fontWeight: 700, color: "#1e293b" }}>Billing email</label>
             <input
               type="email"
@@ -271,17 +292,23 @@ export default function Sandbox() {
                 type="button"
                 className="command-btn"
                 disabled={Boolean(startingCheckout)}
-                onClick={() => void startPaidCheckout("solo")}
+                onClick={() => void startPaidCheckout("solo", billingCycle)}
                 style={{ borderRadius: 12, padding: "14px 12px", border: "1px solid #cbd5e1", background: "#f8fafc" }}
               >
                 <span style={{ display: "block", fontWeight: 800, fontSize: 20, marginBottom: 4 }}>Solo</span>
-                <span style={{ color: "#64748b", fontSize: 13 }}>{startingCheckout === "solo" ? "Starting..." : "Single engineer workspace"}</span>
+                <span style={{ color: "#64748b", fontSize: 13 }}>
+                  {startingCheckout === "solo"
+                    ? "Starting..."
+                    : billingCycle === "monthly"
+                      ? "$97/month"
+                      : "$997/year · 2 months free"}
+                </span>
               </button>
               <button
                 type="button"
                 className="command-btn primary"
                 disabled={Boolean(startingCheckout)}
-                onClick={() => void startPaidCheckout("team")}
+                onClick={() => void startPaidCheckout("team", billingCycle)}
                 style={{
                   borderRadius: 12,
                   padding: "14px 12px",
@@ -290,7 +317,13 @@ export default function Sandbox() {
                 }}
               >
                 <span style={{ display: "block", fontWeight: 800, fontSize: 20, marginBottom: 4 }}>Teams</span>
-                <span style={{ color: "rgba(255,255,255,0.92)", fontSize: 13 }}>{startingCheckout === "team" ? "Starting..." : "Shared workspace + team seats"}</span>
+                <span style={{ color: "rgba(255,255,255,0.92)", fontSize: 13 }}>
+                  {startingCheckout === "team"
+                    ? "Starting..."
+                    : billingCycle === "monthly"
+                      ? "$297/month"
+                      : "$2,997/year · 2 months free"}
+                </span>
               </button>
             </div>
             {checkoutMessage ? <p style={{ marginTop: 12, color: "#b91c1c", fontWeight: 600 }}>{checkoutMessage}</p> : null}
