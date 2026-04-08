@@ -16,7 +16,8 @@ import type {
 import type { SimulationValidationPanelResponse } from "../services/panelContracts";
 import type { GeneratedLogicFile } from "../components/CodeExplorerPanel";
 
-export const SANDBOX_DEMO_PROJECT_ID = "sandbox-demo";
+/** Fixed UUID — must match backend `project_service.SANDBOX_DEMO_PROJECT_ID` and Postgres `projects.id`. */
+export const SANDBOX_DEMO_PROJECT_ID = "a1b2c3d4-e5f6-4789-a012-3456789abcde";
 export const SANDBOX_DEMO_PROJECT_VENDOR: PLCExportVendor = "generic_st";
 
 export const SANDBOX_DEMO_PROJECT: Project = {

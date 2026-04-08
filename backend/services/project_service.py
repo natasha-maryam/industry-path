@@ -12,6 +12,9 @@ from models.file import WorkspacePaths
 from models.project import Project, ProjectCreate, ProjectUpdate
 from services.access_control_service import access_control_service
 
+# Well-known sandbox project (frontend `SANDBOX_DEMO_PROJECT_ID`). Postgres `projects.id` is UUID.
+SANDBOX_DEMO_PROJECT_ID = "a1b2c3d4-e5f6-4789-a012-3456789abcde"
+
 
 class ProjectService:
     def __init__(self, workspace_root: Path | None = None) -> None:
@@ -247,5 +250,33 @@ class ProjectService:
         )
         for directory in subdirs:
             directory.mkdir(parents=True, exist_ok=True)
+
+    def ensure_sandbox_seed_project(self) -> None:
+        """Insert sandbox demo row if missing so uploads/pipeline use a valid UUID project id."""
+        row = postgres_client.fetch_one("SELECT id FROM projects WHERE id = %s", (SANDBOX_DEMO_PROJECT_ID,))
+        if row:
+            self._ensure_workspace(SANDBOX_DEMO_PROJECT_ID)
+            return
+        now = datetime.now(timezone.utc)
+        postgres_client.execute(
+            """
+            INSERT INTO projects (id, name, industry, description, plc_runtime, owner, status, active_version, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                SANDBOX_DEMO_PROJECT_ID,
+                "Sandbox Demo Project",
+                "industrial-automation",
+                "Preloaded demo project for sandbox mode.",
+                "beremiz",
+                "sandbox",
+                "active",
+                1,
+                now,
+                now,
+            ),
+        )
+        self._ensure_workspace(SANDBOX_DEMO_PROJECT_ID)
+
 
 project_service = ProjectService()

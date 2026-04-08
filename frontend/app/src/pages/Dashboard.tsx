@@ -1655,20 +1655,21 @@ export default function Dashboard({
 
   const disabledActions = useMemo<Partial<Record<ToolbarAction, boolean>>>(
     () => {
+      // Sandbox: full product workflow; only export is gated after 3 exports.
       if (isSandboxMode) {
         return {
-          upload_documents: true,
-          parse_plant_model: true,
-          detect_control_loops: true,
-          generate_logic: true,
-          generate_io_mapping: true,
-          run_simulation: true,
+          upload_documents: !selectedProjectId,
+          parse_plant_model: !selectedProjectId,
+          detect_control_loops: !selectedProjectId,
+          generate_logic: !selectedProjectId,
+          generate_io_mapping: !selectedProjectId,
+          run_simulation: !selectedProjectId,
           export_logic: exportLimitReached,
-          deploy_runtime: true,
-          start_monitoring: true,
-          analyze_fault: true,
-          replay_event: true,
-          versions: true,
+          deploy_runtime: !selectedProjectId,
+          start_monitoring: !selectedProjectId,
+          analyze_fault: !selectedProjectId,
+          replay_event: !selectedProjectId,
+          versions: !selectedProjectId,
         };
       }
 
@@ -3193,7 +3194,7 @@ export default function Dashboard({
       return "Select a project to generate export.";
     }
     return null;
-  }, [exportSourceSelectionBlocked, isExportingLogic, selectedProjectId]);
+  }, [exportLimitReached, exportSourceSelectionBlocked, isExportingLogic, isSandboxMode, selectedProjectId]);
 
   const prepareHandoffDisabledReason = useMemo<string | null>(() => {
     if (exportDeploymentBusy) {
@@ -3289,9 +3290,6 @@ export default function Dashboard({
 
   useEffect(() => {
     if (!showExportDialog) {
-      return;
-    }
-    if (isSandboxMode) {
       return;
     }
     void refreshExportReadiness();
@@ -4394,7 +4392,6 @@ export default function Dashboard({
           seedRows={resolvedEngineeringRowsForWorkspace}
           loading={engineeringTableLoading}
           error={engineeringTableError}
-          sandboxMode={isSandboxMode}
           onRowSelect={handleEngineeringRowSelect}
           onOpenWhyTrace={handleEngineeringOpenWhyTrace}
           externalSelectedTag={selectedEngineeringTag ?? selectedControlLoop?.sensor_tag ?? selectedNode}
@@ -5021,12 +5018,9 @@ export default function Dashboard({
                 className={`command-btn ${exportReadinessLoading ? "is-loading" : ""}`}
                 type="button"
                 onClick={() => {
-                  if (isSandboxMode) {
-                    return;
-                  }
                   void refreshExportReadiness();
                 }}
-                disabled={exportReadinessLoading || isSandboxMode}
+                disabled={exportReadinessLoading}
               >
                 {exportReadinessLoading ? (
                   <>

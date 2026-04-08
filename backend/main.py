@@ -40,6 +40,7 @@ from api.routes.uploads import router as uploads_router
 from api.routes.versions import router as versions_router
 from core.metrics import RequestMetricsMiddleware
 from db.postgres import postgres_client
+from services.project_service import project_service
 from services.deterministic_behavior_service import deterministic_behavior_service
 from services.plant_genie_plant_data_runtime import plant_genie_plant_data_runtime
 
@@ -105,6 +106,11 @@ def startup() -> None:
         postgres_client.init_schema()
     except Exception as exc:
         logger.exception("postgres init_schema failed: %s", exc)
+        raise
+    try:
+        project_service.ensure_sandbox_seed_project()
+    except Exception as exc:
+        logger.exception("sandbox seed project failed: %s", exc)
         raise
     logger.info("backend startup complete")
     logger.info("system router registered prefix=/api")
