@@ -148,7 +148,13 @@ def checkout_start(payload: dict[str, Any]) -> dict[str, Any]:
             return is_recurring if expect_recurring else not is_recurring
 
         def resolve_active_price(
-            explicit_price_id: str, *, lookup_key: str, expect_recurring: bool | None, keyword_hint: str
+            explicit_price_id: str,
+            *,
+            lookup_key: str,
+            expect_recurring: bool | None,
+            keyword_hint: str,
+            target_interval: str | None = None,
+            target_unit_amount: int | None = None,
         ) -> str:
             candidate = (explicit_price_id or "").strip()
             if candidate:
@@ -176,14 +182,26 @@ def checkout_start(payload: dict[str, Any]) -> dict[str, Any]:
                 for item in catalog.data:
                     if not _matches_mode(item, expect_recurring=expect_recurring):
                         continue
+                    if target_interval:
+                        recurring = getattr(item, "recurring", None)
+                        if recurring is None or getattr(recurring, "interval", None) != target_interval:
+                            continue
+                    if target_unit_amount is not None and getattr(item, "unit_amount", None) != target_unit_amount:
+                        continue
                     parts = [str(getattr(item, "lookup_key", "") or ""), str(getattr(item, "nickname", "") or "")]
                     product = getattr(item, "product", None)
+                    product_name = str(getattr(product, "name", "") or "").lower()
                     if hasattr(product, "get"):
                         parts.append(str(product.get("name", "") or ""))
                         metadata = product.get("metadata", {}) or {}
                         parts.append(" ".join(f"{k}:{v}" for k, v in metadata.items()))
+                    elif product_name:
+                        parts.append(product_name)
                     haystack = " ".join(parts).lower()
                     if hint and hint in haystack:
+                        return str(item.id)
+                    if target_unit_amount is not None and target_interval:
+                        # Last resort: amount + interval already match expected monthly/yearly SKU.
                         return str(item.id)
             except Exception:
                 logger.exception("stripe catalog fallback lookup failed")
@@ -194,6 +212,8 @@ def checkout_start(payload: dict[str, Any]) -> dict[str, Any]:
             lookup_key=os.getenv(lookup_license_env_key, "").strip() or license_lookup_default,
             expect_recurring=None,
             keyword_hint=f"{plan} license {billing_cycle}",
+            target_interval="month" if billing_cycle == "monthly" else "year",
+            target_unit_amount=29700 if plan == "team" and billing_cycle == "monthly" else 9700 if plan == "solo" and billing_cycle == "monthly" else 299700 if plan == "team" else 99700,
         )
         maintenance_price_id = resolve_active_price(
             os.getenv(maintenance_env_key, ""),
